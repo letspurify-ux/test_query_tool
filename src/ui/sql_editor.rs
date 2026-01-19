@@ -37,37 +37,27 @@ impl SqlEditorWidget {
         button_pack.set_type(PackType::Horizontal);
         button_pack.set_spacing(5);
 
-        let mut execute_btn = Button::default()
-            .with_size(80, 25)
-            .with_label("Execute");
+        let mut execute_btn = Button::default().with_size(80, 25).with_label("Execute");
         execute_btn.set_color(Color::from_rgb(0, 122, 204));
         execute_btn.set_label_color(Color::White);
         execute_btn.set_frame(FrameType::FlatBox);
 
-        let mut explain_btn = Button::default()
-            .with_size(80, 25)
-            .with_label("Explain");
+        let mut explain_btn = Button::default().with_size(80, 25).with_label("Explain");
         explain_btn.set_color(Color::from_rgb(104, 33, 122));
         explain_btn.set_label_color(Color::White);
         explain_btn.set_frame(FrameType::FlatBox);
 
-        let mut clear_btn = Button::default()
-            .with_size(80, 25)
-            .with_label("Clear");
+        let mut clear_btn = Button::default().with_size(80, 25).with_label("Clear");
         clear_btn.set_color(Color::from_rgb(100, 100, 100));
         clear_btn.set_label_color(Color::White);
         clear_btn.set_frame(FrameType::FlatBox);
 
-        let mut commit_btn = Button::default()
-            .with_size(80, 25)
-            .with_label("Commit");
+        let mut commit_btn = Button::default().with_size(80, 25).with_label("Commit");
         commit_btn.set_color(Color::from_rgb(0, 150, 0));
         commit_btn.set_label_color(Color::White);
         commit_btn.set_frame(FrameType::FlatBox);
 
-        let mut rollback_btn = Button::default()
-            .with_size(80, 25)
-            .with_label("Rollback");
+        let mut rollback_btn = Button::default().with_size(80, 25).with_label("Rollback");
         rollback_btn.set_color(Color::from_rgb(200, 50, 50));
         rollback_btn.set_label_color(Color::White);
         rollback_btn.set_frame(FrameType::FlatBox);
@@ -115,7 +105,13 @@ impl SqlEditorWidget {
             highlighter,
         };
 
-        widget.setup_button_callbacks(execute_btn, explain_btn, clear_btn, commit_btn, rollback_btn);
+        widget.setup_button_callbacks(
+            execute_btn,
+            explain_btn,
+            clear_btn,
+            commit_btn,
+            rollback_btn,
+        );
         widget.setup_intellisense();
         widget.setup_syntax_highlighting();
 
@@ -316,110 +312,29 @@ impl SqlEditorWidget {
         mut commit_btn: Button,
         mut rollback_btn: Button,
     ) {
-        // Execute button callback
-        let connection = self.connection.clone();
-        let buffer = self.buffer.clone();
-        let callback = self.execute_callback.clone();
-
+        let widget = self.clone();
         execute_btn.set_callback(move |_| {
-            let sql = buffer.text();
-            if sql.trim().is_empty() {
-                return;
-            }
-
-            let conn_guard = connection.lock().unwrap();
-            if !conn_guard.is_connected() {
-                fltk::dialog::alert_default("Not connected to database");
-                return;
-            }
-
-            if let Some(db_conn) = conn_guard.get_connection() {
-                let result = match QueryExecutor::execute(db_conn, &sql) {
-                    Ok(result) => result,
-                    Err(e) => QueryResult::new_error(&e.to_string()),
-                };
-
-                if let Some(ref mut cb) = *callback.borrow_mut() {
-                    cb(result);
-                }
-            }
+            widget.execute_current();
         });
 
-        // Explain button callback
-        let connection = self.connection.clone();
-        let buffer = self.buffer.clone();
-
+        let widget = self.clone();
         explain_btn.set_callback(move |_| {
-            let sql = buffer.text();
-            if sql.trim().is_empty() {
-                return;
-            }
-
-            let conn_guard = connection.lock().unwrap();
-            if !conn_guard.is_connected() {
-                fltk::dialog::alert_default("Not connected to database");
-                return;
-            }
-
-            if let Some(db_conn) = conn_guard.get_connection() {
-                match QueryExecutor::get_explain_plan(db_conn, &sql) {
-                    Ok(plan) => {
-                        let plan_text = plan.join("\n");
-                        fltk::dialog::message_default(&plan_text);
-                    }
-                    Err(e) => {
-                        fltk::dialog::alert_default(&format!("Explain failed: {}", e));
-                    }
-                }
-            }
+            widget.explain_current();
         });
 
-        // Clear button callback
-        let mut buffer = self.buffer.clone();
+        let widget = self.clone();
         clear_btn.set_callback(move |_| {
-            buffer.set_text("");
+            widget.clear();
         });
 
-        // Commit button callback
-        let connection = self.connection.clone();
+        let widget = self.clone();
         commit_btn.set_callback(move |_| {
-            let conn_guard = connection.lock().unwrap();
-            if !conn_guard.is_connected() {
-                fltk::dialog::alert_default("Not connected to database");
-                return;
-            }
-
-            if let Some(db_conn) = conn_guard.get_connection() {
-                match db_conn.commit() {
-                    Ok(_) => {
-                        fltk::dialog::message_default("Transaction committed successfully");
-                    }
-                    Err(e) => {
-                        fltk::dialog::alert_default(&format!("Commit failed: {}", e));
-                    }
-                }
-            }
+            widget.commit();
         });
 
-        // Rollback button callback
-        let connection = self.connection.clone();
+        let widget = self.clone();
         rollback_btn.set_callback(move |_| {
-            let conn_guard = connection.lock().unwrap();
-            if !conn_guard.is_connected() {
-                fltk::dialog::alert_default("Not connected to database");
-                return;
-            }
-
-            if let Some(db_conn) = conn_guard.get_connection() {
-                match db_conn.rollback() {
-                    Ok(_) => {
-                        fltk::dialog::message_default("Transaction rolled back successfully");
-                    }
-                    Err(e) => {
-                        fltk::dialog::alert_default(&format!("Rollback failed: {}", e));
-                    }
-                }
-            }
+            widget.rollback();
         });
     }
 
@@ -443,7 +358,9 @@ impl SqlEditorWidget {
         // Re-highlight current text
         let text = self.buffer.text();
         let mut style_buffer = self.style_buffer.clone();
-        self.highlighter.borrow().highlight(&text, &mut style_buffer);
+        self.highlighter
+            .borrow()
+            .highlight(&text, &mut style_buffer);
     }
 
     pub fn get_highlighter(&self) -> Rc<RefCell<SqlHighlighter>> {
@@ -483,6 +400,123 @@ impl SqlEditorWidget {
             self.buffer.set_text(text);
         } else {
             self.buffer.set_text(&format!("{}\n{}", current, text));
+        }
+    }
+
+    pub fn execute_current(&self) {
+        let sql = self.buffer.text();
+        if let Some(result) = self.run_query(&sql) {
+            self.notify_result(result);
+        }
+    }
+
+    pub fn execute_selected(&self) {
+        let selected_sql = self.buffer.selection_text();
+        let trimmed = selected_sql.trim();
+        if trimmed.is_empty() {
+            fltk::dialog::alert_default("No SQL selected");
+            return;
+        }
+
+        if let Some(result) = self.run_query(trimmed) {
+            self.notify_result(result);
+        }
+    }
+
+    pub fn explain_current(&self) {
+        let sql = self.buffer.text();
+        let trimmed = sql.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+
+        let conn_guard = self.connection.lock().unwrap();
+        if !conn_guard.is_connected() {
+            fltk::dialog::alert_default("Not connected to database");
+            return;
+        }
+
+        if let Some(db_conn) = conn_guard.get_connection() {
+            match QueryExecutor::get_explain_plan(db_conn, trimmed) {
+                Ok(plan) => {
+                    let plan_text = plan.join("\n");
+                    fltk::dialog::message_default(&plan_text);
+                }
+                Err(e) => {
+                    fltk::dialog::alert_default(&format!("Explain failed: {}", e));
+                }
+            }
+        }
+    }
+
+    pub fn clear(&self) {
+        self.buffer.set_text("");
+    }
+
+    pub fn commit(&self) {
+        let conn_guard = self.connection.lock().unwrap();
+        if !conn_guard.is_connected() {
+            fltk::dialog::alert_default("Not connected to database");
+            return;
+        }
+
+        if let Some(db_conn) = conn_guard.get_connection() {
+            match db_conn.commit() {
+                Ok(_) => {
+                    fltk::dialog::message_default("Transaction committed successfully");
+                }
+                Err(e) => {
+                    fltk::dialog::alert_default(&format!("Commit failed: {}", e));
+                }
+            }
+        }
+    }
+
+    pub fn rollback(&self) {
+        let conn_guard = self.connection.lock().unwrap();
+        if !conn_guard.is_connected() {
+            fltk::dialog::alert_default("Not connected to database");
+            return;
+        }
+
+        if let Some(db_conn) = conn_guard.get_connection() {
+            match db_conn.rollback() {
+                Ok(_) => {
+                    fltk::dialog::message_default("Transaction rolled back successfully");
+                }
+                Err(e) => {
+                    fltk::dialog::alert_default(&format!("Rollback failed: {}", e));
+                }
+            }
+        }
+    }
+
+    fn run_query(&self, sql: &str) -> Option<QueryResult> {
+        let trimmed = sql.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let conn_guard = self.connection.lock().unwrap();
+        if !conn_guard.is_connected() {
+            fltk::dialog::alert_default("Not connected to database");
+            return None;
+        }
+
+        if let Some(db_conn) = conn_guard.get_connection() {
+            let result = match QueryExecutor::execute(db_conn, trimmed) {
+                Ok(result) => result,
+                Err(e) => QueryResult::new_error(trimmed, &e.to_string()),
+            };
+            return Some(result);
+        }
+
+        None
+    }
+
+    fn notify_result(&self, result: QueryResult) {
+        if let Some(ref mut cb) = *self.execute_callback.borrow_mut() {
+            cb(result);
         }
     }
 }

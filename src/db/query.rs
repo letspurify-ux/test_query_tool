@@ -9,6 +9,7 @@ pub struct ColumnInfo {
 
 #[derive(Debug, Clone)]
 pub struct QueryResult {
+    pub sql: String,
     pub columns: Vec<ColumnInfo>,
     pub rows: Vec<Vec<String>>,
     pub row_count: usize,
@@ -19,12 +20,14 @@ pub struct QueryResult {
 
 impl QueryResult {
     pub fn new_select(
+        sql: &str,
         columns: Vec<ColumnInfo>,
         rows: Vec<Vec<String>>,
         execution_time: Duration,
     ) -> Self {
         let row_count = rows.len();
         Self {
+            sql: sql.to_string(),
             columns,
             rows,
             row_count,
@@ -34,8 +37,14 @@ impl QueryResult {
         }
     }
 
-    pub fn new_dml(affected_rows: u64, execution_time: Duration, statement_type: &str) -> Self {
+    pub fn new_dml(
+        sql: &str,
+        affected_rows: u64,
+        execution_time: Duration,
+        statement_type: &str,
+    ) -> Self {
         Self {
+            sql: sql.to_string(),
             columns: vec![],
             rows: vec![],
             row_count: affected_rows as usize,
@@ -45,8 +54,9 @@ impl QueryResult {
         }
     }
 
-    pub fn new_error(error: &str) -> Self {
+    pub fn new_error(sql: &str, error: &str) -> Self {
         Self {
+            sql: sql.to_string(),
             columns: vec![],
             rows: vec![],
             row_count: 0,
@@ -111,7 +121,12 @@ impl QueryExecutor {
         }
 
         let execution_time = start.elapsed();
-        Ok(QueryResult::new_select(column_info, rows, execution_time))
+        Ok(QueryResult::new_select(
+            sql,
+            column_info,
+            rows,
+            execution_time,
+        ))
     }
 
     fn execute_dml(
@@ -124,6 +139,7 @@ impl QueryExecutor {
         let affected_rows = stmt.row_count()?;
         let execution_time = start.elapsed();
         Ok(QueryResult::new_dml(
+            sql,
             affected_rows,
             execution_time,
             statement_type,
@@ -138,6 +154,7 @@ impl QueryExecutor {
         conn.execute(sql, &[])?;
         let execution_time = start.elapsed();
         Ok(QueryResult {
+            sql: sql.to_string(),
             columns: vec![],
             rows: vec![],
             row_count: 0,

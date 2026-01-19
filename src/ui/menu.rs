@@ -26,12 +26,7 @@ impl MenuBarBuilder {
             MenuFlag::Normal,
             |_| {},
         );
-        menu.add(
-            "&File/",
-            Shortcut::None,
-            MenuFlag::MenuDivider,
-            |_| {},
-        );
+        menu.add("&File/", Shortcut::None, MenuFlag::MenuDivider, |_| {});
         menu.add(
             "&File/&Open SQL File...\t",
             Shortcut::Ctrl | 'o',
@@ -44,12 +39,7 @@ impl MenuBarBuilder {
             MenuFlag::Normal,
             |_| {},
         );
-        menu.add(
-            "&File/",
-            Shortcut::None,
-            MenuFlag::MenuDivider,
-            |_| {},
-        );
+        menu.add("&File/", Shortcut::None, MenuFlag::MenuDivider, |_| {});
         menu.add(
             "&File/E&xit\t",
             Shortcut::Ctrl | 'q',
@@ -70,12 +60,7 @@ impl MenuBarBuilder {
             MenuFlag::Normal,
             |_| {},
         );
-        menu.add(
-            "&Edit/",
-            Shortcut::None,
-            MenuFlag::MenuDivider,
-            |_| {},
-        );
+        menu.add("&Edit/", Shortcut::None, MenuFlag::MenuDivider, |_| {});
         menu.add(
             "&Edit/Cu&t\t",
             Shortcut::Ctrl | 'x',
@@ -94,12 +79,7 @@ impl MenuBarBuilder {
             MenuFlag::Normal,
             |_| {},
         );
-        menu.add(
-            "&Edit/",
-            Shortcut::None,
-            MenuFlag::MenuDivider,
-            |_| {},
-        );
+        menu.add("&Edit/", Shortcut::None, MenuFlag::MenuDivider, |_| {});
         menu.add(
             "&Edit/Select &All\t",
             Shortcut::Ctrl | 'a',
@@ -120,24 +100,14 @@ impl MenuBarBuilder {
             MenuFlag::Normal,
             |_| {},
         );
-        menu.add(
-            "&Query/",
-            Shortcut::None,
-            MenuFlag::MenuDivider,
-            |_| {},
-        );
+        menu.add("&Query/", Shortcut::None, MenuFlag::MenuDivider, |_| {});
         menu.add(
             "&Query/E&xplain Plan\t",
             Shortcut::from_key(fltk::enums::Key::F6),
             MenuFlag::Normal,
             |_| {},
         );
-        menu.add(
-            "&Query/",
-            Shortcut::None,
-            MenuFlag::MenuDivider,
-            |_| {},
-        );
+        menu.add("&Query/", Shortcut::None, MenuFlag::MenuDivider, |_| {});
         menu.add(
             "&Query/&Commit\t",
             Shortcut::from_key(fltk::enums::Key::F7),
@@ -158,15 +128,16 @@ impl MenuBarBuilder {
             MenuFlag::Normal,
             |_| {},
         );
-        menu.add(
-            "&Tools/",
-            Shortcut::None,
-            MenuFlag::MenuDivider,
-            |_| {},
-        );
+        menu.add("&Tools/", Shortcut::None, MenuFlag::MenuDivider, |_| {});
         menu.add(
             "&Tools/&Export Results...\t",
             Shortcut::Ctrl | 'e',
+            MenuFlag::Normal,
+            |_| {},
+        );
+        menu.add(
+            "&Tools/&Query History...\t",
+            Shortcut::Ctrl | 'h',
             MenuFlag::Normal,
             |_| {},
         );
