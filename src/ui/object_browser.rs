@@ -1,5 +1,7 @@
 use fltk::{
     enums::{Color, Event, Key},
+    group::{Flex, FlexType},
+    input::Input,
     prelude::*,
     tree::{Tree, TreeItem, TreeSelect},
 };
@@ -11,18 +13,43 @@ use crate::db::{ObjectBrowser, SharedConnection};
 /// Callback type for executing SQL from object browser
 pub type SqlExecuteCallback = Rc<RefCell<Option<Box<dyn FnMut(String)>>>>;
 
+/// Stores original object lists for filtering
+#[derive(Clone, Default)]
+struct ObjectCache {
+    tables: Vec<String>,
+    views: Vec<String>,
+    procedures: Vec<String>,
+    functions: Vec<String>,
+    sequences: Vec<String>,
+}
+
 #[derive(Clone)]
 pub struct ObjectBrowserWidget {
     tree: Tree,
     connection: SharedConnection,
     sql_callback: SqlExecuteCallback,
+    filter_input: Input,
+    object_cache: Rc<RefCell<ObjectCache>>,
 }
 
 impl ObjectBrowserWidget {
     pub fn new(x: i32, y: i32, w: i32, h: i32, connection: SharedConnection) -> Self {
-        let mut tree = Tree::default()
+        // Create a flex container for the filter input and tree
+        let mut flex = Flex::default()
             .with_pos(x, y)
             .with_size(w, h);
+        flex.set_type(FlexType::Column);
+        flex.set_spacing(2);
+
+        // Filter input
+        let mut filter_input = Input::default();
+        filter_input.set_color(Color::from_rgb(60, 60, 63));
+        filter_input.set_text_color(Color::White);
+        filter_input.set_tooltip("Type to filter objects...");
+        flex.fixed(&filter_input, 25);
+
+        // Tree view
+        let mut tree = Tree::default();
 
         tree.set_color(Color::from_rgb(37, 37, 38));
         tree.set_selection_color(Color::from_rgb(38, 79, 120));
@@ -37,6 +64,8 @@ impl ObjectBrowserWidget {
         tree.add("Procedures");
         tree.add("Functions");
         tree.add("Sequences");
+
+        flex.end();
 
         // Close all items by default
         if let Some(mut item) = tree.find_item("Tables") {
@@ -56,14 +85,70 @@ impl ObjectBrowserWidget {
         }
 
         let sql_callback: SqlExecuteCallback = Rc::new(RefCell::new(None));
+        let object_cache = Rc::new(RefCell::new(ObjectCache::default()));
 
         let mut widget = Self {
             tree,
             connection,
+            filter_input,
+            object_cache,
             sql_callback,
         };
         widget.setup_callbacks();
+        widget.setup_filter_callback();
         widget
+    }
+
+    fn setup_filter_callback(&mut self) {
+        let mut tree = self.tree.clone();
+        let object_cache = self.object_cache.clone();
+
+        self.filter_input.set_callback(move |input| {
+            let filter_text = input.value().to_lowercase();
+            let cache = object_cache.borrow();
+
+            // Clear existing items
+            for category in &["Tables", "Views", "Procedures", "Functions", "Sequences"] {
+                if let Some(item) = tree.find_item(category) {
+                    while item.has_children() {
+                        if let Some(child) = item.child(0) {
+                            let _ = tree.remove(&child);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Re-add filtered items
+            for table in &cache.tables {
+                if filter_text.is_empty() || table.to_lowercase().contains(&filter_text) {
+                    tree.add(&format!("Tables/{}", table));
+                }
+            }
+            for view in &cache.views {
+                if filter_text.is_empty() || view.to_lowercase().contains(&filter_text) {
+                    tree.add(&format!("Views/{}", view));
+                }
+            }
+            for proc in &cache.procedures {
+                if filter_text.is_empty() || proc.to_lowercase().contains(&filter_text) {
+                    tree.add(&format!("Procedures/{}", proc));
+                }
+            }
+            for func in &cache.functions {
+                if filter_text.is_empty() || func.to_lowercase().contains(&filter_text) {
+                    tree.add(&format!("Functions/{}", func));
+                }
+            }
+            for seq in &cache.sequences {
+                if filter_text.is_empty() || seq.to_lowercase().contains(&filter_text) {
+                    tree.add(&format!("Sequences/{}", seq));
+                }
+            }
+
+            tree.redraw();
+        });
     }
 
     fn setup_callbacks(&mut self) {
@@ -371,51 +456,64 @@ impl ObjectBrowserWidget {
     }
 
     pub fn refresh(&mut self) {
-        // First clear items
+        // First clear items and filter
         self.clear_items();
+        self.filter_input.set_value("");
 
         let conn_guard = self.connection.lock().unwrap();
 
         if !conn_guard.is_connected() {
+            // Clear cache
+            *self.object_cache.borrow_mut() = ObjectCache::default();
             return;
         }
+
+        let mut cache = ObjectCache::default();
 
         if let Some(db_conn) = conn_guard.get_connection() {
             // Load tables
             if let Ok(tables) = ObjectBrowser::get_tables(db_conn) {
-                for table in tables {
+                for table in &tables {
                     self.tree.add(&format!("Tables/{}", table));
                 }
+                cache.tables = tables;
             }
 
             // Load views
             if let Ok(views) = ObjectBrowser::get_views(db_conn) {
-                for view in views {
+                for view in &views {
                     self.tree.add(&format!("Views/{}", view));
                 }
+                cache.views = views;
             }
 
             // Load procedures
             if let Ok(procedures) = ObjectBrowser::get_procedures(db_conn) {
-                for proc in procedures {
+                for proc in &procedures {
                     self.tree.add(&format!("Procedures/{}", proc));
                 }
+                cache.procedures = procedures;
             }
 
             // Load functions
             if let Ok(functions) = ObjectBrowser::get_functions(db_conn) {
-                for func in functions {
+                for func in &functions {
                     self.tree.add(&format!("Functions/{}", func));
                 }
+                cache.functions = functions;
             }
 
             // Load sequences
             if let Ok(sequences) = ObjectBrowser::get_sequences(db_conn) {
-                for seq in sequences {
+                for seq in &sequences {
                     self.tree.add(&format!("Sequences/{}", seq));
                 }
+                cache.sequences = sequences;
             }
         }
+
+        // Store cache for filtering
+        *self.object_cache.borrow_mut() = cache;
 
         drop(conn_guard);
         self.tree.redraw();

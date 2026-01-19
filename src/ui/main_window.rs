@@ -17,7 +17,7 @@ use std::rc::Rc;
 use crate::db::{create_shared_connection, ObjectBrowser, SharedConnection};
 use crate::ui::{
     ConnectionDialog, FindReplaceDialog, HighlightData, IntellisenseData, MenuBarBuilder,
-    ObjectBrowserWidget, ResultTableWidget, SqlEditorWidget,
+    ObjectBrowserWidget, QueryHistoryDialog, ResultTableWidget, SqlEditorWidget,
 };
 
 pub struct MainWindow {
@@ -392,6 +392,15 @@ impl MainWindow {
                         }
                         "&Edit/&Replace...\t" => {
                             FindReplaceDialog::show_replace(&mut editor, &mut editor_buffer);
+                        }
+                        "&Tools/Query &History...\t" => {
+                            if let Some(sql) = QueryHistoryDialog::show() {
+                                sql_buffer.set_text(&sql);
+                                // Refresh highlighting
+                                highlighter_for_file
+                                    .borrow()
+                                    .highlight(&sql, &mut style_buffer.clone());
+                            }
                         }
                         _ => {}
                     }

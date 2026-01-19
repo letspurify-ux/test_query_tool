@@ -194,6 +194,30 @@ impl MenuBarBuilder {
             MenuFlag::Normal,
             |_| {},
         );
+        menu.add(
+            "&Tools/",
+            Shortcut::None,
+            MenuFlag::MenuDivider,
+            |_| {},
+        );
+        menu.add(
+            "&Tools/Query &History...\t",
+            Shortcut::from_key(fltk::enums::Key::F9),
+            MenuFlag::Normal,
+            |_| {},
+        );
+        menu.add(
+            "&Tools/",
+            Shortcut::None,
+            MenuFlag::MenuDivider,
+            |_| {},
+        );
+        menu.add(
+            "&Tools/&Auto-Commit\t",
+            Shortcut::None,
+            MenuFlag::Toggle,
+            |_| {},
+        );
 
         // Help menu
         menu.add(
@@ -226,6 +250,7 @@ impl MenuBarBuilder {
                     F6 - Explain Plan\n\
                     F7 - Commit\n\
                     F8 - Rollback\n\
+                    F9 - Query History\n\
                     F4 - Refresh Objects\n\
                     Ctrl+Q - Exit",
                 );

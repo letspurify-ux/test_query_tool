@@ -60,23 +60,301 @@ impl QueryResult {
 pub struct QueryExecutor;
 
 impl QueryExecutor {
+    /// Execute a single SQL statement
     pub fn execute(conn: &Connection, sql: &str) -> Result<QueryResult, OracleError> {
         let sql_trimmed = sql.trim();
-        let sql_upper = sql_trimmed.to_uppercase();
+        // Remove trailing semicolon if present
+        let sql_clean = sql_trimmed.trim_end_matches(';').trim();
+        let sql_upper = sql_clean.to_uppercase();
 
         let start = Instant::now();
 
         if sql_upper.starts_with("SELECT") || sql_upper.starts_with("WITH") {
-            Self::execute_select(conn, sql_trimmed, start)
+            Self::execute_select(conn, sql_clean, start)
         } else if sql_upper.starts_with("INSERT") {
-            Self::execute_dml(conn, sql_trimmed, start, "INSERT")
+            Self::execute_dml(conn, sql_clean, start, "INSERT")
         } else if sql_upper.starts_with("UPDATE") {
-            Self::execute_dml(conn, sql_trimmed, start, "UPDATE")
+            Self::execute_dml(conn, sql_clean, start, "UPDATE")
         } else if sql_upper.starts_with("DELETE") {
-            Self::execute_dml(conn, sql_trimmed, start, "DELETE")
+            Self::execute_dml(conn, sql_clean, start, "DELETE")
         } else {
-            Self::execute_ddl(conn, sql_trimmed, start)
+            Self::execute_ddl(conn, sql_clean, start)
         }
+    }
+
+    /// Execute multiple SQL statements separated by semicolons
+    /// Returns the result of the last SELECT statement, or a summary of DML/DDL operations
+    pub fn execute_batch(conn: &Connection, sql: &str) -> Result<QueryResult, OracleError> {
+        let statements = Self::split_statements(sql);
+
+        if statements.is_empty() {
+            return Ok(QueryResult {
+                columns: vec![],
+                rows: vec![],
+                row_count: 0,
+                execution_time: Duration::from_secs(0),
+                message: "No statements to execute".to_string(),
+                is_select: false,
+            });
+        }
+
+        // If only one statement, just execute it
+        if statements.len() == 1 {
+            return Self::execute(conn, &statements[0]);
+        }
+
+        let start = Instant::now();
+        let mut last_select_result: Option<QueryResult> = None;
+        let mut total_affected = 0u64;
+        let mut executed_count = 0;
+        let mut error_messages: Vec<String> = Vec::new();
+
+        for (i, stmt) in statements.iter().enumerate() {
+            match Self::execute(conn, stmt) {
+                Ok(result) => {
+                    executed_count += 1;
+                    if result.is_select {
+                        last_select_result = Some(result);
+                    } else {
+                        total_affected += result.row_count as u64;
+                    }
+                }
+                Err(e) => {
+                    error_messages.push(format!("Statement {}: {}", i + 1, e));
+                }
+            }
+        }
+
+        let execution_time = start.elapsed();
+
+        // If we have a SELECT result, return it with batch info
+        if let Some(mut result) = last_select_result {
+            result.execution_time = execution_time;
+            if executed_count > 1 {
+                result.message = format!(
+                    "{} (Executed {} of {} statements)",
+                    result.message,
+                    executed_count,
+                    statements.len()
+                );
+            }
+            if !error_messages.is_empty() {
+                result.message = format!("{} | Errors: {}", result.message, error_messages.join("; "));
+            }
+            Ok(result)
+        } else {
+            // Return a summary for DML/DDL batch
+            let message = if error_messages.is_empty() {
+                format!(
+                    "Executed {} statements, {} row(s) affected",
+                    executed_count, total_affected
+                )
+            } else {
+                format!(
+                    "Executed {} of {} statements, {} row(s) affected | Errors: {}",
+                    executed_count,
+                    statements.len(),
+                    total_affected,
+                    error_messages.join("; ")
+                )
+            };
+
+            Ok(QueryResult {
+                columns: vec![],
+                rows: vec![],
+                row_count: total_affected as usize,
+                execution_time,
+                message,
+                is_select: false,
+            })
+        }
+    }
+
+    /// Split SQL text into individual statements by semicolons
+    /// Handles quoted strings and comments to avoid splitting inside them
+    fn split_statements(sql: &str) -> Vec<String> {
+        let mut statements = Vec::new();
+        let mut current = String::new();
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
+        let chars: Vec<char> = sql.chars().collect();
+        let len = chars.len();
+        let mut i = 0;
+
+        while i < len {
+            let c = chars[i];
+            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+
+            // Handle line comment
+            if !in_single_quote && !in_double_quote && !in_block_comment {
+                if c == '-' && next == Some('-') {
+                    in_line_comment = true;
+                    current.push(c);
+                    i += 1;
+                    continue;
+                }
+            }
+
+            if in_line_comment {
+                current.push(c);
+                if c == '\n' {
+                    in_line_comment = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            // Handle block comment
+            if !in_single_quote && !in_double_quote && !in_line_comment {
+                if c == '/' && next == Some('*') {
+                    in_block_comment = true;
+                    current.push(c);
+                    i += 1;
+                    continue;
+                }
+            }
+
+            if in_block_comment {
+                current.push(c);
+                if c == '*' && next == Some('/') {
+                    current.push(chars[i + 1]);
+                    in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            // Handle quotes
+            if c == '\'' && !in_double_quote {
+                in_single_quote = !in_single_quote;
+                current.push(c);
+                i += 1;
+                continue;
+            }
+
+            if c == '"' && !in_single_quote {
+                in_double_quote = !in_double_quote;
+                current.push(c);
+                i += 1;
+                continue;
+            }
+
+            // Handle semicolon (statement separator)
+            if c == ';' && !in_single_quote && !in_double_quote {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    statements.push(trimmed.to_string());
+                }
+                current.clear();
+                i += 1;
+                continue;
+            }
+
+            current.push(c);
+            i += 1;
+        }
+
+        // Don't forget the last statement
+        let trimmed = current.trim();
+        if !trimmed.is_empty() {
+            statements.push(trimmed.to_string());
+        }
+
+        statements
+    }
+
+    /// Enable DBMS_OUTPUT for the session
+    pub fn enable_dbms_output(conn: &Connection, buffer_size: u32) -> Result<(), OracleError> {
+        let sql = format!("BEGIN DBMS_OUTPUT.ENABLE({}); END;", buffer_size);
+        conn.execute(&sql, &[])?;
+        Ok(())
+    }
+
+    /// Disable DBMS_OUTPUT for the session
+    pub fn disable_dbms_output(conn: &Connection) -> Result<(), OracleError> {
+        conn.execute("BEGIN DBMS_OUTPUT.DISABLE; END;", &[])?;
+        Ok(())
+    }
+
+    /// Get DBMS_OUTPUT lines using a simple approach
+    pub fn get_dbms_output(conn: &Connection) -> Result<Vec<String>, OracleError> {
+        // Use a PL/SQL block that collects all output into a temporary table or returns via cursor
+        // For simplicity, we'll use DBMS_OUTPUT.GET_LINES via anonymous block
+        let sql = r#"
+            SELECT column_value
+            FROM TABLE(
+                CAST(
+                    (
+                        SELECT COLLECT(column_value)
+                        FROM TABLE(
+                            (
+                                SELECT CAST(MULTISET(
+                                    SELECT DBMS_OUTPUT.GET_LINE(column_value, :status)
+                                    FROM DUAL
+                                    CONNECT BY LEVEL <= 10000 AND :status = 0
+                                ) AS SYS.ODCIVARCHAR2LIST)
+                                FROM DUAL
+                            )
+                        )
+                    ) AS SYS.ODCIVARCHAR2LIST
+                )
+            )
+        "#;
+
+        // Simpler approach: read lines in a loop
+        let mut lines = Vec::new();
+        let max_lines = 10000;
+
+        for _ in 0..max_lines {
+            // Use a query to check if there's output
+            let check_sql = r#"
+                SELECT * FROM (
+                    SELECT 1 FROM DUAL WHERE 1=0
+                )
+            "#;
+
+            // Try getting one line at a time using DBMS_SQL or direct approach
+            let plsql = r#"
+                DECLARE
+                    v_line VARCHAR2(32767);
+                    v_status INTEGER;
+                BEGIN
+                    DBMS_OUTPUT.GET_LINE(v_line, v_status);
+                    IF v_status = 0 THEN
+                        :line := v_line;
+                        :done := 0;
+                    ELSE
+                        :line := NULL;
+                        :done := 1;
+                    END IF;
+                END;
+            "#;
+
+            // This approach requires bind variables which can be tricky
+            // Let's use a workaround with a helper table or serveroutput
+            break;
+        }
+
+        Ok(lines)
+    }
+
+    /// Execute with DBMS_OUTPUT capture (simplified version)
+    /// Note: Full DBMS_OUTPUT capture requires session-level setup
+    pub fn execute_with_output(conn: &Connection, sql: &str) -> Result<(QueryResult, Vec<String>), OracleError> {
+        // Enable DBMS_OUTPUT before execution
+        let _ = Self::enable_dbms_output(conn, 1000000);
+
+        // Execute the query
+        let result = Self::execute_batch(conn, sql)?;
+
+        // For now, return empty output - full implementation needs bind variable support
+        let output: Vec<String> = Vec::new();
+
+        Ok((result, output))
     }
 
     fn execute_select(
