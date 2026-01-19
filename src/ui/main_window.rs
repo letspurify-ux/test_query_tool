@@ -1,12 +1,18 @@
 use fltk::{
     app,
+    dialog::{FileDialog, FileDialogType},
     enums::{Color, Font, FrameType},
     frame::Frame,
     group::{Flex, FlexType, Pack, PackType, Tile},
     menu::MenuBar,
     prelude::*,
+    text::TextBuffer,
     window::Window,
 };
+use std::cell::RefCell;
+use std::fs;
+use std::path::PathBuf;
+use std::rc::Rc;
 
 use crate::db::{create_shared_connection, ObjectBrowser, SharedConnection};
 use crate::ui::{
@@ -18,9 +24,11 @@ pub struct MainWindow {
     window: Window,
     connection: SharedConnection,
     sql_editor: SqlEditorWidget,
+    sql_buffer: TextBuffer,
     result_table: ResultTableWidget,
     object_browser: ObjectBrowserWidget,
     status_bar: Frame,
+    current_file: Rc<RefCell<Option<PathBuf>>>,
 }
 
 impl MainWindow {
@@ -84,13 +92,18 @@ impl MainWindow {
 
         window.make_resizable(true);
 
+        let sql_buffer = sql_editor.get_buffer();
+        let current_file = Rc::new(RefCell::new(None));
+
         Self {
             window,
             connection,
             sql_editor,
+            sql_buffer,
             result_table,
             object_browser,
             status_bar,
+            current_file,
         }
     }
 
@@ -136,6 +149,11 @@ impl MainWindow {
         let mut object_browser = self.object_browser.clone();
         let intellisense_data = self.sql_editor.get_intellisense_data();
         let highlighter = self.sql_editor.get_highlighter();
+        let mut sql_buffer = self.sql_buffer.clone();
+        let current_file = self.current_file.clone();
+        let mut window = self.window.clone();
+        let style_buffer = self.sql_editor.get_style_buffer();
+        let highlighter_for_file = highlighter.clone();
 
         // Find menu bar and set callbacks
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
@@ -221,6 +239,95 @@ impl MainWindow {
                             highlighter
                                 .borrow_mut()
                                 .set_highlight_data(HighlightData::new());
+                        }
+                        "&File/&Open SQL File...\t" => {
+                            let mut dialog = FileDialog::new(FileDialogType::BrowseFile);
+                            dialog.set_title("Open SQL File");
+                            dialog.set_filter("SQL Files\t*.sql\nAll Files\t*");
+                            dialog.show();
+
+                            let filename = dialog.filename();
+                            if !filename.as_os_str().is_empty() {
+                                match fs::read_to_string(&filename) {
+                                    Ok(content) => {
+                                        sql_buffer.set_text(&content);
+                                        *current_file.borrow_mut() = Some(filename.clone());
+
+                                        // Update window title
+                                        let title = format!(
+                                            "Oracle Query Tool - {}",
+                                            filename.file_name().unwrap_or_default().to_string_lossy()
+                                        );
+                                        window.set_label(&title);
+
+                                        // Refresh highlighting
+                                        let text = sql_buffer.text();
+                                        highlighter_for_file
+                                            .borrow()
+                                            .highlight(&text, &mut style_buffer.clone());
+
+                                        status_bar.set_label(&format!(
+                                            "Opened: {}",
+                                            filename.display()
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        fltk::dialog::alert_default(&format!(
+                                            "Failed to open file: {}",
+                                            e
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        "&File/&Save SQL File...\t" => {
+                            let current = current_file.borrow().clone();
+                            let save_path = if let Some(path) = current {
+                                Some(path)
+                            } else {
+                                let mut dialog = FileDialog::new(FileDialogType::BrowseSaveFile);
+                                dialog.set_title("Save SQL File");
+                                dialog.set_filter("SQL Files\t*.sql\nAll Files\t*");
+                                dialog.set_preset_file("query.sql");
+                                dialog.show();
+
+                                let filename = dialog.filename();
+                                if !filename.as_os_str().is_empty() {
+                                    // Add .sql extension if not present
+                                    let path = if filename.extension().is_none() {
+                                        filename.with_extension("sql")
+                                    } else {
+                                        filename
+                                    };
+                                    Some(path)
+                                } else {
+                                    None
+                                }
+                            };
+
+                            if let Some(path) = save_path {
+                                let content = sql_buffer.text();
+                                match fs::write(&path, &content) {
+                                    Ok(_) => {
+                                        *current_file.borrow_mut() = Some(path.clone());
+
+                                        // Update window title
+                                        let title = format!(
+                                            "Oracle Query Tool - {}",
+                                            path.file_name().unwrap_or_default().to_string_lossy()
+                                        );
+                                        window.set_label(&title);
+
+                                        status_bar.set_label(&format!("Saved: {}", path.display()));
+                                    }
+                                    Err(e) => {
+                                        fltk::dialog::alert_default(&format!(
+                                            "Failed to save file: {}",
+                                            e
+                                        ));
+                                    }
+                                }
+                            }
                         }
                         "&File/E&xit\t" => {
                             app::quit();
