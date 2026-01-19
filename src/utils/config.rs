@@ -73,6 +73,14 @@ impl AppConfig {
     pub fn get_connection_by_name(&self, name: &str) -> Option<&ConnectionInfo> {
         self.recent_connections.iter().find(|c| c.name == name)
     }
+
+    pub fn remove_connection(&mut self, name: &str) {
+        self.recent_connections.retain(|c| c.name != name);
+    }
+
+    pub fn get_all_connections(&self) -> &Vec<ConnectionInfo> {
+        &self.recent_connections
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

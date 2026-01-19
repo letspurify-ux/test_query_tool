@@ -462,6 +462,21 @@ impl SqlEditorWidget {
         &self.group
     }
 
+    pub fn get_buffer(&self) -> TextBuffer {
+        self.buffer.clone()
+    }
+
+    pub fn get_style_buffer(&self) -> TextBuffer {
+        self.style_buffer.clone()
+    }
+
+    pub fn refresh_highlighting(&self) {
+        let text = self.buffer.text();
+        self.highlighter
+            .borrow()
+            .highlight(&text, &mut self.style_buffer.clone());
+    }
+
     pub fn append_text(&mut self, text: &str) {
         let current = self.buffer.text();
         if current.is_empty() {

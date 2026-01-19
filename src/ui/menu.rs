@@ -193,6 +193,7 @@ impl MenuBarBuilder {
                     Ctrl+D - Disconnect\n\
                     Ctrl+O - Open SQL File\n\
                     Ctrl+S - Save SQL File\n\
+                    Ctrl+Space - Intellisense\n\
                     F5 - Execute Query\n\
                     F6 - Explain Plan\n\
                     F7 - Commit\n\
