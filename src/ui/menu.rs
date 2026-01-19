@@ -106,6 +106,30 @@ impl MenuBarBuilder {
             MenuFlag::Normal,
             |_| {},
         );
+        menu.add(
+            "&Edit/",
+            Shortcut::None,
+            MenuFlag::MenuDivider,
+            |_| {},
+        );
+        menu.add(
+            "&Edit/&Find...\t",
+            Shortcut::Ctrl | 'f',
+            MenuFlag::Normal,
+            |_| {},
+        );
+        menu.add(
+            "&Edit/Find &Next\t",
+            Shortcut::from_key(fltk::enums::Key::F3),
+            MenuFlag::Normal,
+            |_| {},
+        );
+        menu.add(
+            "&Edit/&Replace...\t",
+            Shortcut::Ctrl | 'h',
+            MenuFlag::Normal,
+            |_| {},
+        );
 
         // Query menu
         menu.add(
@@ -193,7 +217,11 @@ impl MenuBarBuilder {
                     Ctrl+D - Disconnect\n\
                     Ctrl+O - Open SQL File\n\
                     Ctrl+S - Save SQL File\n\
+                    Ctrl+F - Find\n\
+                    Ctrl+H - Replace\n\
+                    F3 - Find Next\n\
                     Ctrl+Space - Intellisense\n\
+                    Ctrl+E - Export Results\n\
                     F5 - Execute Query\n\
                     F6 - Explain Plan\n\
                     F7 - Commit\n\

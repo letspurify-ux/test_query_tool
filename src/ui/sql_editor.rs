@@ -485,4 +485,8 @@ impl SqlEditorWidget {
             self.buffer.set_text(&format!("{}\n{}", current, text));
         }
     }
+
+    pub fn get_editor(&self) -> TextEditor {
+        self.editor.clone()
+    }
 }

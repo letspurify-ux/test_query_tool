@@ -232,6 +232,49 @@ impl ResultTableWidget {
             Some(result)
         }
     }
+
+    /// Export all data to CSV format
+    pub fn export_to_csv(&self) -> String {
+        let data = self.data.borrow();
+        let mut csv = String::new();
+
+        // Header row
+        let header_line: Vec<String> = data
+            .headers
+            .iter()
+            .map(|h| Self::escape_csv_field(h))
+            .collect();
+        csv.push_str(&header_line.join(","));
+        csv.push('\n');
+
+        // Data rows
+        for row in &data.rows {
+            let row_line: Vec<String> = row.iter().map(|c| Self::escape_csv_field(c)).collect();
+            csv.push_str(&row_line.join(","));
+            csv.push('\n');
+        }
+
+        csv
+    }
+
+    /// Escape a CSV field (add quotes if needed)
+    fn escape_csv_field(field: &str) -> String {
+        if field.contains(',') || field.contains('"') || field.contains('\n') {
+            format!("\"{}\"", field.replace('"', "\"\""))
+        } else {
+            field.to_string()
+        }
+    }
+
+    /// Get row count
+    pub fn row_count(&self) -> usize {
+        self.data.borrow().rows.len()
+    }
+
+    /// Check if there is data
+    pub fn has_data(&self) -> bool {
+        !self.data.borrow().rows.is_empty()
+    }
 }
 
 impl Default for ResultTableWidget {

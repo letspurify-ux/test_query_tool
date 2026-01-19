@@ -16,8 +16,8 @@ use std::rc::Rc;
 
 use crate::db::{create_shared_connection, ObjectBrowser, SharedConnection};
 use crate::ui::{
-    ConnectionDialog, HighlightData, IntellisenseData, MenuBarBuilder, ObjectBrowserWidget,
-    ResultTableWidget, SqlEditorWidget,
+    ConnectionDialog, FindReplaceDialog, HighlightData, IntellisenseData, MenuBarBuilder,
+    ObjectBrowserWidget, ResultTableWidget, SqlEditorWidget,
 };
 
 pub struct MainWindow {
@@ -139,6 +139,19 @@ impl MainWindow {
             status_bar.set_label(&status_text);
         });
 
+        // Setup object browser callback to set SQL in editor
+        let mut sql_buffer = self.sql_buffer.clone();
+        let highlighter = self.sql_editor.get_highlighter();
+        let style_buffer = self.sql_editor.get_style_buffer();
+
+        self.object_browser.set_sql_callback(move |sql| {
+            sql_buffer.set_text(&sql);
+            // Refresh highlighting
+            highlighter
+                .borrow()
+                .highlight(&sql, &mut style_buffer.clone());
+        });
+
         // Setup menu callbacks
         self.setup_menu_callbacks();
     }
@@ -154,6 +167,10 @@ impl MainWindow {
         let mut window = self.window.clone();
         let style_buffer = self.sql_editor.get_style_buffer();
         let highlighter_for_file = highlighter.clone();
+        let mut editor = self.sql_editor.get_editor();
+        let mut editor_buffer = self.sql_buffer.clone();
+        let result_table_export = self.result_table.clone();
+        let mut status_bar_export = self.status_bar.clone();
 
         // Find menu bar and set callbacks
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
@@ -331,6 +348,50 @@ impl MainWindow {
                         }
                         "&File/E&xit\t" => {
                             app::quit();
+                        }
+                        "&Tools/&Export Results...\t" => {
+                            if !result_table_export.has_data() {
+                                fltk::dialog::alert_default("No data to export");
+                                return;
+                            }
+
+                            let mut dialog = FileDialog::new(FileDialogType::BrowseSaveFile);
+                            dialog.set_title("Export Results to CSV");
+                            dialog.set_filter("CSV Files\t*.csv\nAll Files\t*");
+                            dialog.set_preset_file("results.csv");
+                            dialog.show();
+
+                            let filename = dialog.filename();
+                            if !filename.as_os_str().is_empty() {
+                                let path = if filename.extension().is_none() {
+                                    filename.with_extension("csv")
+                                } else {
+                                    filename
+                                };
+
+                                let csv_content = result_table_export.export_to_csv();
+                                match fs::write(&path, &csv_content) {
+                                    Ok(_) => {
+                                        status_bar_export.set_label(&format!(
+                                            "Exported {} rows to {}",
+                                            result_table_export.row_count(),
+                                            path.display()
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        fltk::dialog::alert_default(&format!(
+                                            "Failed to export: {}",
+                                            e
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        "&Edit/&Find...\t" => {
+                            FindReplaceDialog::show_find(&mut editor, &mut editor_buffer);
+                        }
+                        "&Edit/&Replace...\t" => {
+                            FindReplaceDialog::show_replace(&mut editor, &mut editor_buffer);
                         }
                         _ => {}
                     }
