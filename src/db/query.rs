@@ -229,4 +229,225 @@ impl ObjectBrowser {
 
         Ok(objects)
     }
+
+    /// Get detailed column info for a table
+    pub fn get_table_structure(
+        conn: &Connection,
+        table_name: &str,
+    ) -> Result<Vec<TableColumnDetail>, OracleError> {
+        let sql = r#"
+            SELECT
+                c.column_name,
+                c.data_type,
+                c.data_length,
+                c.data_precision,
+                c.data_scale,
+                c.nullable,
+                c.data_default,
+                (SELECT 'PK' FROM user_cons_columns cc
+                 JOIN user_constraints con ON cc.constraint_name = con.constraint_name
+                 WHERE con.constraint_type = 'P'
+                 AND cc.table_name = c.table_name
+                 AND cc.column_name = c.column_name
+                 AND ROWNUM = 1) as is_pk
+            FROM user_tab_columns c
+            WHERE c.table_name = :1
+            ORDER BY c.column_id
+        "#;
+
+        let mut stmt = conn.statement(sql).build()?;
+        let rows = stmt.query(&[&table_name.to_uppercase()])?;
+
+        let mut columns: Vec<TableColumnDetail> = Vec::new();
+        for row_result in rows {
+            let row: Row = row_result?;
+            columns.push(TableColumnDetail {
+                name: row.get(0)?,
+                data_type: row.get(1)?,
+                data_length: row.get::<_, Option<i32>>(2)?.unwrap_or(0),
+                data_precision: row.get::<_, Option<i32>>(3)?,
+                data_scale: row.get::<_, Option<i32>>(4)?,
+                nullable: row.get::<_, String>(5)? == "Y",
+                default_value: row.get(6)?,
+                is_primary_key: row.get::<_, Option<String>>(7)?.is_some(),
+            });
+        }
+
+        Ok(columns)
+    }
+
+    /// Get indexes for a table
+    pub fn get_table_indexes(
+        conn: &Connection,
+        table_name: &str,
+    ) -> Result<Vec<IndexInfo>, OracleError> {
+        let sql = r#"
+            SELECT
+                i.index_name,
+                i.uniqueness,
+                LISTAGG(ic.column_name, ', ') WITHIN GROUP (ORDER BY ic.column_position) as columns
+            FROM user_indexes i
+            JOIN user_ind_columns ic ON i.index_name = ic.index_name
+            WHERE i.table_name = :1
+            GROUP BY i.index_name, i.uniqueness
+            ORDER BY i.index_name
+        "#;
+
+        let mut stmt = conn.statement(sql).build()?;
+        let rows = stmt.query(&[&table_name.to_uppercase()])?;
+
+        let mut indexes: Vec<IndexInfo> = Vec::new();
+        for row_result in rows {
+            let row: Row = row_result?;
+            indexes.push(IndexInfo {
+                name: row.get(0)?,
+                is_unique: row.get::<_, String>(1)? == "UNIQUE",
+                columns: row.get(2)?,
+            });
+        }
+
+        Ok(indexes)
+    }
+
+    /// Get constraints for a table
+    pub fn get_table_constraints(
+        conn: &Connection,
+        table_name: &str,
+    ) -> Result<Vec<ConstraintInfo>, OracleError> {
+        let sql = r#"
+            SELECT
+                c.constraint_name,
+                c.constraint_type,
+                LISTAGG(cc.column_name, ', ') WITHIN GROUP (ORDER BY cc.position) as columns,
+                c.r_constraint_name,
+                (SELECT table_name FROM user_constraints WHERE constraint_name = c.r_constraint_name) as ref_table
+            FROM user_constraints c
+            LEFT JOIN user_cons_columns cc ON c.constraint_name = cc.constraint_name
+            WHERE c.table_name = :1
+            GROUP BY c.constraint_name, c.constraint_type, c.r_constraint_name
+            ORDER BY c.constraint_type, c.constraint_name
+        "#;
+
+        let mut stmt = conn.statement(sql).build()?;
+        let rows = stmt.query(&[&table_name.to_uppercase()])?;
+
+        let mut constraints: Vec<ConstraintInfo> = Vec::new();
+        for row_result in rows {
+            let row: Row = row_result?;
+            let constraint_type: String = row.get(1)?;
+            constraints.push(ConstraintInfo {
+                name: row.get(0)?,
+                constraint_type: match constraint_type.as_str() {
+                    "P" => "PRIMARY KEY".to_string(),
+                    "R" => "FOREIGN KEY".to_string(),
+                    "U" => "UNIQUE".to_string(),
+                    "C" => "CHECK".to_string(),
+                    _ => constraint_type,
+                },
+                columns: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                ref_table: row.get(4)?,
+            });
+        }
+
+        Ok(constraints)
+    }
+
+    /// Generate DDL for a table
+    pub fn get_table_ddl(conn: &Connection, table_name: &str) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('TABLE', :1) FROM DUAL";
+        let mut stmt = conn.statement(sql).build()?;
+        let row = stmt.query_row(&[&table_name.to_uppercase()])?;
+        let ddl: String = row.get(0)?;
+        Ok(ddl)
+    }
+
+    /// Generate DDL for a view
+    pub fn get_view_ddl(conn: &Connection, view_name: &str) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('VIEW', :1) FROM DUAL";
+        let mut stmt = conn.statement(sql).build()?;
+        let row = stmt.query_row(&[&view_name.to_uppercase()])?;
+        let ddl: String = row.get(0)?;
+        Ok(ddl)
+    }
+
+    /// Generate DDL for a procedure
+    pub fn get_procedure_ddl(conn: &Connection, proc_name: &str) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('PROCEDURE', :1) FROM DUAL";
+        let mut stmt = conn.statement(sql).build()?;
+        let row = stmt.query_row(&[&proc_name.to_uppercase()])?;
+        let ddl: String = row.get(0)?;
+        Ok(ddl)
+    }
+
+    /// Generate DDL for a function
+    pub fn get_function_ddl(conn: &Connection, func_name: &str) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('FUNCTION', :1) FROM DUAL";
+        let mut stmt = conn.statement(sql).build()?;
+        let row = stmt.query_row(&[&func_name.to_uppercase()])?;
+        let ddl: String = row.get(0)?;
+        Ok(ddl)
+    }
+
+    /// Generate DDL for a sequence
+    pub fn get_sequence_ddl(conn: &Connection, seq_name: &str) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('SEQUENCE', :1) FROM DUAL";
+        let mut stmt = conn.statement(sql).build()?;
+        let row = stmt.query_row(&[&seq_name.to_uppercase()])?;
+        let ddl: String = row.get(0)?;
+        Ok(ddl)
+    }
+}
+
+/// Detailed column information for table structure
+#[derive(Debug, Clone)]
+pub struct TableColumnDetail {
+    pub name: String,
+    pub data_type: String,
+    pub data_length: i32,
+    pub data_precision: Option<i32>,
+    pub data_scale: Option<i32>,
+    pub nullable: bool,
+    pub default_value: Option<String>,
+    pub is_primary_key: bool,
+}
+
+impl TableColumnDetail {
+    pub fn get_type_display(&self) -> String {
+        match self.data_type.as_str() {
+            "NUMBER" => {
+                if let (Some(p), Some(s)) = (self.data_precision, self.data_scale) {
+                    if s > 0 {
+                        format!("NUMBER({},{})", p, s)
+                    } else {
+                        format!("NUMBER({})", p)
+                    }
+                } else if let Some(p) = self.data_precision {
+                    format!("NUMBER({})", p)
+                } else {
+                    "NUMBER".to_string()
+                }
+            }
+            "VARCHAR2" | "CHAR" | "NVARCHAR2" | "NCHAR" => {
+                format!("{}({})", self.data_type, self.data_length)
+            }
+            _ => self.data_type.clone(),
+        }
+    }
+}
+
+/// Index information
+#[derive(Debug, Clone)]
+pub struct IndexInfo {
+    pub name: String,
+    pub is_unique: bool,
+    pub columns: String,
+}
+
+/// Constraint information
+#[derive(Debug, Clone)]
+pub struct ConstraintInfo {
+    pub name: String,
+    pub constraint_type: String,
+    pub columns: String,
+    pub ref_table: Option<String>,
 }
