@@ -1,0 +1,122 @@
+use oracle::{Connection, Error as OracleError};
+use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConnectionInfo {
+    pub name: String,
+    pub username: String,
+    pub password: String,
+    pub host: String,
+    pub port: u16,
+    pub service_name: String,
+}
+
+impl ConnectionInfo {
+    pub fn new(
+        name: &str,
+        username: &str,
+        password: &str,
+        host: &str,
+        port: u16,
+        service_name: &str,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            username: username.to_string(),
+            password: password.to_string(),
+            host: host.to_string(),
+            port,
+            service_name: service_name.to_string(),
+        }
+    }
+
+    pub fn connection_string(&self) -> String {
+        format!(
+            "//{}:{}/{}",
+            self.host, self.port, self.service_name
+        )
+    }
+
+    pub fn display_string(&self) -> String {
+        format!(
+            "{}@{}:{}/{}",
+            self.username, self.host, self.port, self.service_name
+        )
+    }
+}
+
+impl Default for ConnectionInfo {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            username: String::new(),
+            password: String::new(),
+            host: "localhost".to_string(),
+            port: 1521,
+            service_name: "ORCL".to_string(),
+        }
+    }
+}
+
+pub struct DatabaseConnection {
+    connection: Option<Connection>,
+    info: ConnectionInfo,
+    connected: bool,
+}
+
+impl DatabaseConnection {
+    pub fn new() -> Self {
+        Self {
+            connection: None,
+            info: ConnectionInfo::default(),
+            connected: false,
+        }
+    }
+
+    pub fn connect(&mut self, info: ConnectionInfo) -> Result<(), OracleError> {
+        let conn_str = info.connection_string();
+        let connection = Connection::connect(&info.username, &info.password, &conn_str)?;
+
+        self.connection = Some(connection);
+        self.info = info;
+        self.connected = true;
+
+        Ok(())
+    }
+
+    pub fn disconnect(&mut self) {
+        self.connection = None;
+        self.connected = false;
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.connected
+    }
+
+    pub fn get_connection(&self) -> Option<&Connection> {
+        self.connection.as_ref()
+    }
+
+    pub fn get_info(&self) -> &ConnectionInfo {
+        &self.info
+    }
+
+    pub fn test_connection(info: &ConnectionInfo) -> Result<(), OracleError> {
+        let conn_str = info.connection_string();
+        let _connection = Connection::connect(&info.username, &info.password, &conn_str)?;
+        Ok(())
+    }
+}
+
+impl Default for DatabaseConnection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub type SharedConnection = Arc<Mutex<DatabaseConnection>>;
+
+pub fn create_shared_connection() -> SharedConnection {
+    Arc::new(Mutex::new(DatabaseConnection::new()))
+}
