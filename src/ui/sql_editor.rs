@@ -10,16 +10,19 @@ use std::rc::Rc;
 
 use crate::db::{QueryExecutor, QueryResult, SharedConnection};
 use crate::ui::intellisense::{get_word_at_cursor, IntellisenseData, IntellisensePopup};
+use crate::ui::syntax_highlight::{create_style_table, HighlightData, SqlHighlighter};
 
 #[derive(Clone)]
 pub struct SqlEditorWidget {
     group: Flex,
     editor: TextEditor,
     buffer: TextBuffer,
+    style_buffer: TextBuffer,
     connection: SharedConnection,
     execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>>,
     intellisense_data: Rc<RefCell<IntellisenseData>>,
     intellisense_popup: Rc<RefCell<IntellisensePopup>>,
+    highlighter: Rc<RefCell<SqlHighlighter>>,
 }
 
 impl SqlEditorWidget {
@@ -74,6 +77,7 @@ impl SqlEditorWidget {
 
         // SQL Editor
         let buffer = TextBuffer::default();
+        let style_buffer = TextBuffer::default();
         let mut editor = TextEditor::default();
         editor.set_buffer(buffer.clone());
         editor.set_color(Color::from_rgb(30, 30, 30));
@@ -86,6 +90,10 @@ impl SqlEditorWidget {
         // Set selection color
         editor.set_selection_color(Color::from_rgb(38, 79, 120));
 
+        // Setup syntax highlighting
+        let style_table = create_style_table();
+        editor.set_highlight_data(style_buffer.clone(), style_table);
+
         group.end();
 
         let execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>> =
@@ -93,21 +101,32 @@ impl SqlEditorWidget {
 
         let intellisense_data = Rc::new(RefCell::new(IntellisenseData::new()));
         let intellisense_popup = Rc::new(RefCell::new(IntellisensePopup::new()));
+        let highlighter = Rc::new(RefCell::new(SqlHighlighter::new()));
 
         let mut widget = Self {
             group,
             editor,
             buffer,
+            style_buffer,
             connection,
             execute_callback,
             intellisense_data,
             intellisense_popup,
+            highlighter,
         };
 
         widget.setup_button_callbacks(execute_btn, explain_btn, clear_btn, commit_btn, rollback_btn);
         widget.setup_intellisense();
+        widget.setup_syntax_highlighting();
 
         widget
+    }
+
+    fn setup_syntax_highlighting(&self) {
+        // Initial highlighting (empty)
+        self.highlighter
+            .borrow()
+            .highlight("", &mut self.style_buffer.clone());
     }
 
     fn setup_intellisense(&mut self) {
@@ -115,6 +134,8 @@ impl SqlEditorWidget {
         let mut editor = self.editor.clone();
         let intellisense_data = self.intellisense_data.clone();
         let intellisense_popup = self.intellisense_popup.clone();
+        let highlighter = self.highlighter.clone();
+        let style_buffer = self.style_buffer.clone();
 
         // Setup callback for inserting selected text
         let mut buffer_for_insert = buffer.clone();
@@ -138,14 +159,22 @@ impl SqlEditorWidget {
             });
         }
 
-        // Handle keyboard events for triggering intellisense
+        // Handle keyboard events for triggering intellisense and syntax highlighting
         let mut buffer_for_handle = buffer.clone();
         let intellisense_data_for_handle = intellisense_data.clone();
         let intellisense_popup_for_handle = intellisense_popup.clone();
+        let highlighter_for_handle = highlighter.clone();
+        let mut style_buffer_for_handle = style_buffer.clone();
 
         editor.handle(move |ed, ev| {
             match ev {
                 Event::KeyUp => {
+                    // Update syntax highlighting
+                    let text = buffer_for_handle.text();
+                    highlighter_for_handle
+                        .borrow()
+                        .highlight(&text, &mut style_buffer_for_handle);
+
                     let key = fltk::app::event_key();
 
                     // Check for Ctrl+Space to trigger intellisense
@@ -165,7 +194,6 @@ impl SqlEditorWidget {
                     if let Some(ch) = fltk::app::event_text().chars().next() {
                         if ch.is_alphanumeric() || ch == '_' {
                             let cursor_pos = ed.insert_position() as usize;
-                            let text = buffer_for_handle.text();
                             let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
 
                             // Only show suggestions if word is at least 2 characters
@@ -228,6 +256,14 @@ impl SqlEditorWidget {
                         }
                     }
 
+                    false
+                }
+                Event::Paste => {
+                    // Update syntax highlighting after paste
+                    let text = buffer_for_handle.text();
+                    highlighter_for_handle
+                        .borrow()
+                        .highlight(&text, &mut style_buffer_for_handle);
                     false
                 }
                 _ => false,
@@ -400,6 +436,18 @@ impl SqlEditorWidget {
 
     pub fn get_intellisense_data(&self) -> Rc<RefCell<IntellisenseData>> {
         self.intellisense_data.clone()
+    }
+
+    pub fn update_highlight_data(&mut self, data: HighlightData) {
+        self.highlighter.borrow_mut().set_highlight_data(data);
+        // Re-highlight current text
+        let text = self.buffer.text();
+        let mut style_buffer = self.style_buffer.clone();
+        self.highlighter.borrow().highlight(&text, &mut style_buffer);
+    }
+
+    pub fn get_highlighter(&self) -> Rc<RefCell<SqlHighlighter>> {
+        self.highlighter.clone()
     }
 
     pub fn get_text(&self) -> String {

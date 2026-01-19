@@ -10,8 +10,8 @@ use fltk::{
 
 use crate::db::{create_shared_connection, ObjectBrowser, SharedConnection};
 use crate::ui::{
-    ConnectionDialog, IntellisenseData, MenuBarBuilder, ObjectBrowserWidget, ResultTableWidget,
-    SqlEditorWidget,
+    ConnectionDialog, HighlightData, IntellisenseData, MenuBarBuilder, ObjectBrowserWidget,
+    ResultTableWidget, SqlEditorWidget,
 };
 
 pub struct MainWindow {
@@ -135,6 +135,7 @@ impl MainWindow {
         let mut status_bar = self.status_bar.clone();
         let mut object_browser = self.object_browser.clone();
         let intellisense_data = self.sql_editor.get_intellisense_data();
+        let highlighter = self.sql_editor.get_highlighter();
 
         // Find menu bar and set callbacks
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
@@ -151,17 +152,20 @@ impl MainWindow {
                                             info.display_string()
                                         ));
 
-                                        // Update intellisense data
+                                        // Update intellisense and highlight data
                                         if let Some(conn) = db_conn.get_connection() {
                                             let mut data = IntellisenseData::new();
+                                            let mut highlight_data = HighlightData::new();
 
                                             // Load tables
                                             if let Ok(tables) = ObjectBrowser::get_tables(conn) {
+                                                highlight_data.tables = tables.clone();
                                                 data.tables = tables;
                                             }
 
                                             // Load views
                                             if let Ok(views) = ObjectBrowser::get_views(conn) {
+                                                highlight_data.views = views.clone();
                                                 data.views = views;
                                             }
 
@@ -182,11 +186,17 @@ impl MainWindow {
                                                 {
                                                     let col_names: Vec<String> =
                                                         cols.into_iter().map(|c| c.name).collect();
+                                                    highlight_data
+                                                        .columns
+                                                        .extend(col_names.clone());
                                                     data.columns.push((table.clone(), col_names));
                                                 }
                                             }
 
                                             *intellisense_data.borrow_mut() = data;
+                                            highlighter
+                                                .borrow_mut()
+                                                .set_highlight_data(highlight_data);
                                         }
 
                                         drop(db_conn);
@@ -206,8 +216,11 @@ impl MainWindow {
                             db_conn.disconnect();
                             status_bar.set_label("Disconnected | Ctrl+Space for autocomplete");
 
-                            // Clear intellisense data
+                            // Clear intellisense and highlight data
                             *intellisense_data.borrow_mut() = IntellisenseData::new();
+                            highlighter
+                                .borrow_mut()
+                                .set_highlight_data(HighlightData::new());
                         }
                         "&File/E&xit\t" => {
                             app::quit();
