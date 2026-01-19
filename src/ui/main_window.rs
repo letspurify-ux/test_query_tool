@@ -8,9 +8,10 @@ use fltk::{
     window::Window,
 };
 
-use crate::db::{create_shared_connection, SharedConnection};
+use crate::db::{create_shared_connection, ObjectBrowser, SharedConnection};
 use crate::ui::{
-    ConnectionDialog, MenuBarBuilder, ObjectBrowserWidget, ResultTableWidget, SqlEditorWidget,
+    ConnectionDialog, IntellisenseData, MenuBarBuilder, ObjectBrowserWidget, ResultTableWidget,
+    SqlEditorWidget,
 };
 
 pub struct MainWindow {
@@ -70,7 +71,7 @@ impl MainWindow {
 
         // Status bar
         let mut status_bar = Frame::default()
-            .with_label("Not connected");
+            .with_label("Not connected | Ctrl+Space for autocomplete");
         status_bar.set_frame(FrameType::FlatBox);
         status_bar.set_color(Color::from_rgb(0, 122, 204));
         status_bar.set_label_color(Color::White);
@@ -133,6 +134,7 @@ impl MainWindow {
         let connection = self.connection.clone();
         let mut status_bar = self.status_bar.clone();
         let mut object_browser = self.object_browser.clone();
+        let intellisense_data = self.sql_editor.get_intellisense_data();
 
         // Find menu bar and set callbacks
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
@@ -144,7 +146,49 @@ impl MainWindow {
                                 let mut db_conn = connection.lock().unwrap();
                                 match db_conn.connect(info.clone()) {
                                     Ok(_) => {
-                                        status_bar.set_label(&format!("Connected: {}", info.display_string()));
+                                        status_bar.set_label(&format!(
+                                            "Connected: {} | Ctrl+Space for autocomplete",
+                                            info.display_string()
+                                        ));
+
+                                        // Update intellisense data
+                                        if let Some(conn) = db_conn.get_connection() {
+                                            let mut data = IntellisenseData::new();
+
+                                            // Load tables
+                                            if let Ok(tables) = ObjectBrowser::get_tables(conn) {
+                                                data.tables = tables;
+                                            }
+
+                                            // Load views
+                                            if let Ok(views) = ObjectBrowser::get_views(conn) {
+                                                data.views = views;
+                                            }
+
+                                            // Load procedures
+                                            if let Ok(procs) = ObjectBrowser::get_procedures(conn) {
+                                                data.procedures = procs;
+                                            }
+
+                                            // Load functions
+                                            if let Ok(funcs) = ObjectBrowser::get_functions(conn) {
+                                                data.functions = funcs;
+                                            }
+
+                                            // Load columns for each table
+                                            for table in &data.tables.clone() {
+                                                if let Ok(cols) =
+                                                    ObjectBrowser::get_table_columns(conn, table)
+                                                {
+                                                    let col_names: Vec<String> =
+                                                        cols.into_iter().map(|c| c.name).collect();
+                                                    data.columns.push((table.clone(), col_names));
+                                                }
+                                            }
+
+                                            *intellisense_data.borrow_mut() = data;
+                                        }
+
                                         drop(db_conn);
                                         object_browser.refresh();
                                     }
@@ -160,7 +204,10 @@ impl MainWindow {
                         "&File/&Disconnect\t" => {
                             let mut db_conn = connection.lock().unwrap();
                             db_conn.disconnect();
-                            status_bar.set_label("Disconnected");
+                            status_bar.set_label("Disconnected | Ctrl+Space for autocomplete");
+
+                            // Clear intellisense data
+                            *intellisense_data.borrow_mut() = IntellisenseData::new();
                         }
                         "&File/E&xit\t" => {
                             app::quit();

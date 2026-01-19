@@ -1,6 +1,6 @@
 use fltk::{
     button::Button,
-    enums::{Color, Font, FrameType},
+    enums::{Color, Event, Font, FrameType, Key},
     group::{Flex, FlexType, Pack, PackType},
     prelude::*,
     text::{TextBuffer, TextEditor, WrapMode},
@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::db::{QueryExecutor, QueryResult, SharedConnection};
+use crate::ui::intellisense::{get_word_at_cursor, IntellisenseData, IntellisensePopup};
 
 #[derive(Clone)]
 pub struct SqlEditorWidget {
@@ -17,6 +18,8 @@ pub struct SqlEditorWidget {
     buffer: TextBuffer,
     connection: SharedConnection,
     execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>>,
+    intellisense_data: Rc<RefCell<IntellisenseData>>,
+    intellisense_popup: Rc<RefCell<IntellisensePopup>>,
 }
 
 impl SqlEditorWidget {
@@ -88,17 +91,185 @@ impl SqlEditorWidget {
         let execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>> =
             Rc::new(RefCell::new(None));
 
+        let intellisense_data = Rc::new(RefCell::new(IntellisenseData::new()));
+        let intellisense_popup = Rc::new(RefCell::new(IntellisensePopup::new()));
+
         let mut widget = Self {
             group,
             editor,
             buffer,
             connection,
             execute_callback,
+            intellisense_data,
+            intellisense_popup,
         };
 
         widget.setup_button_callbacks(execute_btn, explain_btn, clear_btn, commit_btn, rollback_btn);
+        widget.setup_intellisense();
 
         widget
+    }
+
+    fn setup_intellisense(&mut self) {
+        let buffer = self.buffer.clone();
+        let mut editor = self.editor.clone();
+        let intellisense_data = self.intellisense_data.clone();
+        let intellisense_popup = self.intellisense_popup.clone();
+
+        // Setup callback for inserting selected text
+        let mut buffer_for_insert = buffer.clone();
+        let mut editor_for_insert = editor.clone();
+        {
+            let mut popup = intellisense_popup.borrow_mut();
+            popup.set_selected_callback(move |selected| {
+                // Get current word position
+                let cursor_pos = editor_for_insert.insert_position() as usize;
+                let text = buffer_for_insert.text();
+                let (word, start, _end) = get_word_at_cursor(&text, cursor_pos);
+
+                // Replace the word with selected suggestion
+                if !word.is_empty() {
+                    buffer_for_insert.replace(start as i32, cursor_pos as i32, &selected);
+                    editor_for_insert.set_insert_position((start + selected.len()) as i32);
+                } else {
+                    buffer_for_insert.insert(cursor_pos as i32, &selected);
+                    editor_for_insert.set_insert_position((cursor_pos + selected.len()) as i32);
+                }
+            });
+        }
+
+        // Handle keyboard events for triggering intellisense
+        let mut buffer_for_handle = buffer.clone();
+        let intellisense_data_for_handle = intellisense_data.clone();
+        let intellisense_popup_for_handle = intellisense_popup.clone();
+
+        editor.handle(move |ed, ev| {
+            match ev {
+                Event::KeyUp => {
+                    let key = fltk::app::event_key();
+
+                    // Check for Ctrl+Space to trigger intellisense
+                    if fltk::app::event_state().contains(fltk::enums::Shortcut::Ctrl)
+                        && key == Key::from_char(' ')
+                    {
+                        Self::trigger_intellisense(
+                            ed,
+                            &buffer_for_handle,
+                            &intellisense_data_for_handle,
+                            &intellisense_popup_for_handle,
+                        );
+                        return true;
+                    }
+
+                    // Auto-trigger on typing alphanumeric characters
+                    if let Some(ch) = fltk::app::event_text().chars().next() {
+                        if ch.is_alphanumeric() || ch == '_' {
+                            let cursor_pos = ed.insert_position() as usize;
+                            let text = buffer_for_handle.text();
+                            let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
+
+                            // Only show suggestions if word is at least 2 characters
+                            if word.len() >= 2 {
+                                Self::trigger_intellisense(
+                                    ed,
+                                    &buffer_for_handle,
+                                    &intellisense_data_for_handle,
+                                    &intellisense_popup_for_handle,
+                                );
+                            }
+                        }
+                    }
+
+                    false
+                }
+                Event::KeyDown => {
+                    let key = fltk::app::event_key();
+                    let mut popup = intellisense_popup_for_handle.borrow_mut();
+
+                    if popup.is_visible() {
+                        match key {
+                            Key::Escape => {
+                                popup.hide();
+                                return true;
+                            }
+                            Key::Up => {
+                                popup.select_prev();
+                                return true;
+                            }
+                            Key::Down => {
+                                popup.select_next();
+                                return true;
+                            }
+                            Key::Enter | Key::Tab => {
+                                if let Some(selected) = popup.get_selected() {
+                                    // Insert selected suggestion
+                                    let cursor_pos = ed.insert_position() as usize;
+                                    let text = buffer_for_handle.text();
+                                    let (word, start, _) = get_word_at_cursor(&text, cursor_pos);
+
+                                    if !word.is_empty() {
+                                        buffer_for_handle.replace(
+                                            start as i32,
+                                            cursor_pos as i32,
+                                            &selected,
+                                        );
+                                        ed.set_insert_position((start + selected.len()) as i32);
+                                    } else {
+                                        buffer_for_handle.insert(cursor_pos as i32, &selected);
+                                        ed.set_insert_position(
+                                            (cursor_pos + selected.len()) as i32,
+                                        );
+                                    }
+                                }
+                                popup.hide();
+                                return true;
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    false
+                }
+                _ => false,
+            }
+        });
+    }
+
+    fn trigger_intellisense(
+        editor: &TextEditor,
+        buffer: &TextBuffer,
+        intellisense_data: &Rc<RefCell<IntellisenseData>>,
+        intellisense_popup: &Rc<RefCell<IntellisensePopup>>,
+    ) {
+        let cursor_pos = editor.insert_position() as usize;
+        let text = buffer.text();
+        let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
+
+        if word.is_empty() {
+            return;
+        }
+
+        let data = intellisense_data.borrow();
+        let suggestions = data.get_all_suggestions(&word);
+
+        if suggestions.is_empty() {
+            intellisense_popup.borrow_mut().hide();
+            return;
+        }
+
+        // Calculate popup position based on cursor
+        let (x, y) = editor.position_to_xy(editor.insert_position());
+
+        // Get editor's absolute position
+        let editor_x = editor.x();
+        let editor_y = editor.y();
+
+        let popup_x = editor_x + x;
+        let popup_y = editor_y + y + 20; // 20 pixels below cursor
+
+        intellisense_popup
+            .borrow_mut()
+            .show_suggestions(suggestions, popup_x, popup_y);
     }
 
     fn setup_button_callbacks(
@@ -221,6 +392,14 @@ impl SqlEditorWidget {
         F: FnMut(QueryResult) + 'static,
     {
         *self.execute_callback.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn update_intellisense_data(&mut self, data: IntellisenseData) {
+        *self.intellisense_data.borrow_mut() = data;
+    }
+
+    pub fn get_intellisense_data(&self) -> Rc<RefCell<IntellisenseData>> {
+        self.intellisense_data.clone()
     }
 
     pub fn get_text(&self) -> String {
