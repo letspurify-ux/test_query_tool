@@ -252,34 +252,25 @@ impl ResultTableWidget {
                 }
                 Event::Drag => {
                     // Mouse drag - extend selection
-                    let state = drag_state_for_handle.borrow();
-                    if state.is_dragging {
-                        let (mut row, mut col) = Self::get_cell_at_mouse(t);
-                        if row < 0 {
-                            row = state.last_row;
-                        }
-                        if col < 0 {
-                            col = state.last_col;
-                        }
+                    let is_dragging = drag_state_for_handle.borrow().is_dragging;
+                    if is_dragging {
+                        let (row, col) = Self::get_cell_at_mouse(t);
+                        // get_cell_at_mouse returns (-1, -1) only when table is empty
                         if row >= 0 && col >= 0 {
-                            drop(state);
                             let mut state = drag_state_for_handle.borrow_mut();
                             state.last_row = row;
                             state.last_col = col;
-                            let (r1, r2) = if state.start_row <= row {
-                                (state.start_row, row)
-                            } else {
-                                (row, state.start_row)
-                            };
-                            let (c1, c2) = if state.start_col <= col {
-                                (state.start_col, col)
-                            } else {
-                                (col, state.start_col)
-                            };
+
+                            // Calculate selection rectangle from start to current
+                            let r1 = state.start_row.min(row);
+                            let r2 = state.start_row.max(row);
+                            let c1 = state.start_col.min(col);
+                            let c2 = state.start_col.max(col);
+
                             t.set_selection(r1, c1, r2, c2);
                             t.redraw();
-                            return true;
                         }
+                        return true;
                     }
                     false
                 }
@@ -331,26 +322,62 @@ impl ResultTableWidget {
         Self { table, data, drag_state }
     }
 
-    /// Get cell row/col at current mouse position
+    /// Get cell row/col at current mouse position for drag selection.
+    /// Returns boundary cells when mouse is outside the table data area.
     fn get_cell_at_mouse(table: &Table) -> (i32, i32) {
-        let mouse_x = app::event_x();
-        let mouse_y = app::event_y();
+        let rows = table.rows();
+        let cols = table.cols();
 
-        if table.rows() <= 0 || table.cols() <= 0 {
+        if rows <= 0 || cols <= 0 {
             return (-1, -1);
         }
 
+        let mouse_x = app::event_x();
+        let mouse_y = app::event_y();
+
+        // Try direct cell lookup first
         if let Some((row, col)) = Self::cell_at_point(table, mouse_x, mouse_y) {
             return (row, col);
         }
 
-        let row = Self::row_at_y(table, mouse_y);
-        let col = Self::col_at_x(table, mouse_x);
+        // Calculate table's data area bounds (excluding headers)
+        let table_x = table.x();
+        let table_y = table.y();
+        let table_w = table.w();
+        let table_h = table.h();
+        let row_header_w = table.row_header_width();
+        let col_header_h = table.col_header_height();
 
-        match (row, col) {
-            (Some(r), Some(c)) => (r, c),
-            _ => (-1, -1),
-        }
+        let data_left = table_x + row_header_w;
+        let data_top = table_y + col_header_h;
+        let data_right = table_x + table_w;
+        let data_bottom = table_y + table_h;
+
+        // Determine row based on mouse Y position
+        let row = if mouse_y < data_top {
+            // Mouse above data area - select first visible row
+            0
+        } else if mouse_y >= data_bottom {
+            // Mouse below data area - select last row
+            rows - 1
+        } else {
+            // Mouse within vertical bounds - find the row
+            Self::row_at_y(table, mouse_y).unwrap_or(rows - 1)
+        };
+
+        // Determine col based on mouse X position
+        let col = if mouse_x < data_left {
+            // Mouse left of data area - select first column
+            0
+        } else if mouse_x >= data_right {
+            // Mouse right of data area - select last column
+            cols - 1
+        } else {
+            // Mouse within horizontal bounds - find the column
+            Self::col_at_x(table, mouse_x).unwrap_or(cols - 1)
+        };
+
+        (row, col)
     }
 
     fn show_context_menu(table: &Table, data: &Rc<RefCell<TableData>>) {
@@ -358,11 +385,21 @@ impl ResultTableWidget {
         let mouse_x = app::event_x();
         let mouse_y = app::event_y();
 
-        // Create menu at mouse position with explicit size
+        // Temporarily suspend current group to prevent menu widget from being
+        // added to the parent container (which causes it to appear on resize)
+        let current_group = fltk::group::Group::current();
+        fltk::group::Group::set_current::<fltk::group::Group>(None);
+
+        // Create menu (now orphaned, not added to any parent)
         let mut menu = MenuButton::new(mouse_x, mouse_y, 0, 0, None);
         menu.set_color(Color::from_rgb(45, 45, 48));
         menu.set_text_color(Color::White);
         menu.add_choice("Copy|Copy with Headers|Copy Cell|Copy All");
+
+        // Restore current group
+        if let Some(ref group) = current_group {
+            fltk::group::Group::set_current(Some(group));
+        }
 
         if let Some(choice) = menu.popup() {
             let choice_label = choice.label().unwrap_or_default();
@@ -382,6 +419,9 @@ impl ResultTableWidget {
                 _ => {}
             }
         }
+
+        // Ensure menu is hidden after use
+        menu.hide();
     }
 
     fn cell_at_point(table: &Table, x: i32, y: i32) -> Option<(i32, i32)> {

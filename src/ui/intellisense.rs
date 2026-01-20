@@ -1,6 +1,6 @@
 use fltk::{
     browser::HoldBrowser,
-    enums::{Color, Event, Key},
+    enums::Color,
     prelude::*,
     window::Window,
 };
@@ -194,6 +194,7 @@ impl IntellisensePopup {
     }
 
     fn setup_callbacks(&mut self) {
+        // Browser click callback - handle mouse selection
         let suggestions = self.suggestions.clone();
         let callback = self.selected_callback.clone();
         let mut window = self.window.clone();
@@ -213,64 +214,9 @@ impl IntellisensePopup {
             }
         });
 
-        // Handle keyboard events
-        let suggestions = self.suggestions.clone();
-        let callback = self.selected_callback.clone();
-        let mut window = self.window.clone();
-        let mut browser = self.browser.clone();
-        let visible = self.visible.clone();
-
-        self.window.handle(move |_, ev| {
-            match ev {
-                Event::KeyDown => {
-                    let key = fltk::app::event_key();
-                    match key {
-                        Key::Escape => {
-                            window.hide();
-                            *visible.borrow_mut() = false;
-                            true
-                        }
-                        Key::Enter => {
-                            let selected = browser.value();
-                            if selected > 0 {
-                                let suggestions = suggestions.borrow();
-                                if let Some(text) = suggestions.get((selected - 1) as usize) {
-                                    if let Some(ref mut cb) = *callback.borrow_mut() {
-                                        cb(text.clone());
-                                    }
-                                }
-                            }
-                            window.hide();
-                            *visible.borrow_mut() = false;
-                            true
-                        }
-                        Key::Up => {
-                            let current = browser.value();
-                            if current > 1 {
-                                browser.select(current - 1);
-                            }
-                            true
-                        }
-                        Key::Down => {
-                            let current = browser.value();
-                            let count = browser.size();
-                            if current < count {
-                                browser.select(current + 1);
-                            }
-                            true
-                        }
-                        _ => false,
-                    }
-                }
-                Event::Unfocus => {
-                    // Hide when losing focus
-                    window.hide();
-                    *visible.borrow_mut() = false;
-                    true
-                }
-                _ => false,
-            }
-        });
+        // Note: Keyboard events are handled by the editor, not by this popup window.
+        // This is because the editor retains focus while the popup is visible,
+        // so key events go to the editor's handle(), not the popup's handle().
     }
 
     pub fn show_suggestions(&mut self, suggestions: Vec<String>, x: i32, y: i32) {
