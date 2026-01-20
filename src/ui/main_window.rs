@@ -14,11 +14,13 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::db::{create_shared_connection, ObjectBrowser, SharedConnection};
+use crate::db::{create_shared_connection, ObjectBrowser, QueryResult, SharedConnection};
 use crate::ui::{
     ConnectionDialog, FindReplaceDialog, HighlightData, IntellisenseData, MenuBarBuilder,
     ObjectBrowserWidget, QueryHistoryDialog, ResultTableWidget, SqlEditorWidget,
 };
+use crate::utils::{QueryHistory, QueryHistoryEntry};
+use chrono::Local;
 
 pub struct MainWindow {
     window: Window,
@@ -29,6 +31,8 @@ pub struct MainWindow {
     object_browser: ObjectBrowserWidget,
     status_bar: Frame,
     current_file: Rc<RefCell<Option<PathBuf>>>,
+    last_result: Rc<RefCell<Option<QueryResult>>>,
+    query_history: Rc<RefCell<QueryHistory>>,
 }
 
 impl MainWindow {
@@ -60,9 +64,7 @@ impl MainWindow {
         let object_browser = ObjectBrowserWidget::new(0, 0, 200, 600, connection.clone());
 
         // Right panel - Editor and Results
-        let mut right_flex = Flex::default()
-            .with_pos(200, 0)
-            .with_size(1000, 600);
+        let mut right_flex = Flex::default().with_pos(200, 0).with_size(1000, 600);
         right_flex.set_type(FlexType::Column);
         right_flex.set_margin(5);
 
@@ -78,8 +80,8 @@ impl MainWindow {
         content_tile.end();
 
         // Status bar
-        let mut status_bar = Frame::default()
-            .with_label("Not connected | Ctrl+Space for autocomplete");
+        let mut status_bar =
+            Frame::default().with_label("Not connected | Ctrl+Space for autocomplete");
         status_bar.set_frame(FrameType::FlatBox);
         status_bar.set_color(Color::from_rgb(0, 122, 204));
         status_bar.set_label_color(Color::White);
@@ -94,6 +96,8 @@ impl MainWindow {
 
         let sql_buffer = sql_editor.get_buffer();
         let current_file = Rc::new(RefCell::new(None));
+        let last_result = Rc::new(RefCell::new(None));
+        let query_history = Rc::new(RefCell::new(QueryHistory::load()));
 
         Self {
             window,
@@ -104,12 +108,13 @@ impl MainWindow {
             object_browser,
             status_bar,
             current_file,
+            last_result,
+            query_history,
         }
     }
 
     fn create_toolbar() -> Pack {
-        let mut toolbar = Pack::default()
-            .with_size(0, 35);
+        let mut toolbar = Pack::default().with_size(0, 35);
         toolbar.set_type(PackType::Horizontal);
         toolbar.set_spacing(5);
         toolbar.set_color(Color::from_rgb(60, 60, 63));
@@ -126,10 +131,14 @@ impl MainWindow {
     pub fn setup_callbacks(&mut self) {
         let mut status_bar = self.status_bar.clone();
         let mut result_table = self.result_table.clone();
+        let last_result = self.last_result.clone();
+        let query_history = self.query_history.clone();
+        let connection = self.connection.clone();
 
         // Setup SQL editor execute callback
         self.sql_editor.set_execute_callback(move |query_result| {
             result_table.display_result(&query_result);
+            *last_result.borrow_mut() = Some(query_result.clone());
 
             let status_text = format!(
                 "{} | Time: {:.3}s",
@@ -137,6 +146,34 @@ impl MainWindow {
                 query_result.execution_time.as_secs_f64()
             );
             status_bar.set_label(&status_text);
+
+            let connection_name = {
+                let conn_guard = connection.lock().unwrap();
+                if conn_guard.is_connected() {
+                    let info = conn_guard.get_info();
+                    if info.name.is_empty() {
+                        info.display_string()
+                    } else {
+                        info.name.clone()
+                    }
+                } else {
+                    "Disconnected".to_string()
+                }
+            };
+
+            let entry = QueryHistoryEntry {
+                sql: query_result.sql.clone(),
+                timestamp: Local::now().to_rfc3339(),
+                execution_time_ms: query_result.execution_time.as_millis() as u64,
+                row_count: query_result.row_count,
+                connection_name,
+            };
+
+            let mut history = query_history.borrow_mut();
+            history.add_entry(entry);
+            if let Err(err) = history.save() {
+                fltk::dialog::alert_default(&format!("Failed to save query history: {}", err));
+            }
         });
 
         // Setup object browser callback to set SQL in editor
@@ -162,6 +199,7 @@ impl MainWindow {
         let mut object_browser = self.object_browser.clone();
         let intellisense_data = self.sql_editor.get_intellisense_data();
         let highlighter = self.sql_editor.get_highlighter();
+        let sql_editor = self.sql_editor.clone();
         let mut sql_buffer = self.sql_buffer.clone();
         let current_file = self.current_file.clone();
         let mut window = self.window.clone();
@@ -273,7 +311,10 @@ impl MainWindow {
                                         // Update window title
                                         let title = format!(
                                             "Oracle Query Tool - {}",
-                                            filename.file_name().unwrap_or_default().to_string_lossy()
+                                            filename
+                                                .file_name()
+                                                .unwrap_or_default()
+                                                .to_string_lossy()
                                         );
                                         window.set_label(&title);
 
@@ -283,10 +324,8 @@ impl MainWindow {
                                             .borrow()
                                             .highlight(&text, &mut style_buffer.clone());
 
-                                        status_bar.set_label(&format!(
-                                            "Opened: {}",
-                                            filename.display()
-                                        ));
+                                        status_bar
+                                            .set_label(&format!("Opened: {}", filename.display()));
                                     }
                                     Err(e) => {
                                         fltk::dialog::alert_default(&format!(
@@ -425,6 +464,59 @@ impl MainWindow {
         main_window.show();
 
         app.run().unwrap();
+    }
+
+    fn export_results_csv(
+        path: &PathBuf,
+        result: &QueryResult,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut output = String::new();
+
+        let headers: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
+        output.push_str(&Self::csv_row(&headers));
+        output.push('\n');
+
+        for row in &result.rows {
+            output.push_str(&Self::csv_row(row));
+            output.push('\n');
+        }
+
+        fs::write(path, output)?;
+        Ok(())
+    }
+
+    fn csv_row(values: &[String]) -> String {
+        values
+            .iter()
+            .map(|value| Self::csv_escape(value))
+            .collect::<Vec<String>>()
+            .join(",")
+    }
+
+    fn csv_escape(value: &str) -> String {
+        if value.contains(',') || value.contains('"') || value.contains('\n') {
+            format!("\"{}\"", value.replace('"', "\"\""))
+        } else {
+            value.to_string()
+        }
+    }
+
+    fn format_query_history(history: &QueryHistory) -> String {
+        if history.queries.is_empty() {
+            return "No query history yet.".to_string();
+        }
+
+        let mut lines = vec!["Recent Queries (latest first):".to_string()];
+        for entry in history.queries.iter().take(20) {
+            lines.push(format!(
+                "[{}] {} | {} ms | {} rows",
+                entry.timestamp, entry.connection_name, entry.execution_time_ms, entry.row_count
+            ));
+            lines.push(entry.sql.trim().to_string());
+            lines.push(String::new());
+        }
+
+        lines.join("\n")
     }
 }
 
