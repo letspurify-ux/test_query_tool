@@ -50,7 +50,7 @@ impl SqlEditorWidget {
     pub fn new(connection: SharedConnection) -> Self {
         let mut group = Flex::default();
         group.set_type(FlexType::Column);
-        group.set_margin(5);
+        group.set_margin(0);
         group.set_color(Color::from_rgb(30, 30, 30));
 
         // Button toolbar
