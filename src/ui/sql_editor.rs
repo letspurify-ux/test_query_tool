@@ -426,14 +426,21 @@ impl SqlEditorWidget {
             return;
         }
 
-        // Position popup relative to the editor cursor within the window
+        // Get cursor position in editor's local coordinates
         let (cursor_x, cursor_y) = editor.position_to_xy(editor.insert_position());
+
+        // Get editor's position within the window
+        let (editor_x, editor_y) = Self::widget_origin_in_window(editor);
+
+        // Get window's screen coordinates
         let (win_x, win_y) = editor
             .window()
             .map(|win| (win.x_root(), win.y_root()))
             .unwrap_or((0, 0));
-        let popup_x = win_x + cursor_x;
-        let popup_y = win_y + cursor_y + 20;
+
+        // Calculate absolute screen position
+        let popup_x = win_x + editor_x + cursor_x;
+        let popup_y = win_y + editor_y + cursor_y + 20;
 
         intellisense_popup
             .borrow_mut()
