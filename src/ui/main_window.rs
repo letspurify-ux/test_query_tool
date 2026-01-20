@@ -3,7 +3,7 @@ use fltk::{
     dialog::{FileDialog, FileDialogType},
     enums::{Color, Font, FrameType},
     frame::Frame,
-    group::{Flex, FlexType, Pack, PackType},
+    group::{Flex, FlexType},
     menu::MenuBar,
     prelude::*,
     text::TextBuffer,
@@ -52,10 +52,6 @@ impl MainWindow {
         // Menu bar
         let menu_bar = MenuBarBuilder::build();
         main_flex.fixed(&menu_bar, 30);
-
-        // Toolbar
-        let toolbar = Self::create_toolbar();
-        main_flex.fixed(&toolbar, 35);
 
         // Main content area with horizontal flex for panels
         let mut content_flex = Flex::default();
@@ -121,21 +117,6 @@ impl MainWindow {
             last_result,
             query_history,
         }
-    }
-
-    fn create_toolbar() -> Pack {
-        let mut toolbar = Pack::default().with_size(0, 35);
-        toolbar.set_type(PackType::Horizontal);
-        toolbar.set_spacing(5);
-        toolbar.set_color(Color::from_rgb(60, 60, 63));
-
-        // Spacer
-        let mut spacer = Frame::default().with_size(10, 35);
-        spacer.set_frame(FrameType::FlatBox);
-        spacer.set_color(Color::from_rgb(60, 60, 63));
-
-        toolbar.end();
-        toolbar
     }
 
     pub fn setup_callbacks(&mut self) {
