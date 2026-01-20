@@ -440,6 +440,18 @@ impl SqlEditorWidget {
             .show_suggestions(suggestions, popup_x, popup_y);
     }
 
+    fn widget_origin_in_window<W: WidgetExt>(widget: &W) -> (i32, i32) {
+        let mut x = widget.x();
+        let mut y = widget.y();
+        let mut parent = widget.parent();
+        while let Some(group) = parent {
+            x += group.x();
+            y += group.y();
+            parent = group.parent();
+        }
+        (x, y)
+    }
+
     /// Show quick describe dialog for a table (F4 functionality)
     fn show_quick_describe(conn: &oracle::Connection, object_name: &str) {
         use crate::db::ObjectBrowser;
