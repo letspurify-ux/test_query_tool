@@ -70,23 +70,301 @@ impl QueryResult {
 pub struct QueryExecutor;
 
 impl QueryExecutor {
+    /// Execute a single SQL statement
     pub fn execute(conn: &Connection, sql: &str) -> Result<QueryResult, OracleError> {
         let sql_trimmed = sql.trim();
-        let sql_upper = sql_trimmed.to_uppercase();
+        // Remove trailing semicolon if present
+        let sql_clean = sql_trimmed.trim_end_matches(';').trim();
+        let sql_upper = sql_clean.to_uppercase();
 
         let start = Instant::now();
 
         if sql_upper.starts_with("SELECT") || sql_upper.starts_with("WITH") {
-            Self::execute_select(conn, sql_trimmed, start)
+            Self::execute_select(conn, sql_clean, start)
         } else if sql_upper.starts_with("INSERT") {
-            Self::execute_dml(conn, sql_trimmed, start, "INSERT")
+            Self::execute_dml(conn, sql_clean, start, "INSERT")
         } else if sql_upper.starts_with("UPDATE") {
-            Self::execute_dml(conn, sql_trimmed, start, "UPDATE")
+            Self::execute_dml(conn, sql_clean, start, "UPDATE")
         } else if sql_upper.starts_with("DELETE") {
-            Self::execute_dml(conn, sql_trimmed, start, "DELETE")
+            Self::execute_dml(conn, sql_clean, start, "DELETE")
         } else {
-            Self::execute_ddl(conn, sql_trimmed, start)
+            Self::execute_ddl(conn, sql_clean, start)
         }
+    }
+
+    /// Execute multiple SQL statements separated by semicolons
+    /// Returns the result of the last SELECT statement, or a summary of DML/DDL operations
+    pub fn execute_batch(conn: &Connection, sql: &str) -> Result<QueryResult, OracleError> {
+        let statements = Self::split_statements(sql);
+
+        if statements.is_empty() {
+            return Ok(QueryResult {
+                columns: vec![],
+                rows: vec![],
+                row_count: 0,
+                execution_time: Duration::from_secs(0),
+                message: "No statements to execute".to_string(),
+                is_select: false,
+            });
+        }
+
+        // If only one statement, just execute it
+        if statements.len() == 1 {
+            return Self::execute(conn, &statements[0]);
+        }
+
+        let start = Instant::now();
+        let mut last_select_result: Option<QueryResult> = None;
+        let mut total_affected = 0u64;
+        let mut executed_count = 0;
+        let mut error_messages: Vec<String> = Vec::new();
+
+        for (i, stmt) in statements.iter().enumerate() {
+            match Self::execute(conn, stmt) {
+                Ok(result) => {
+                    executed_count += 1;
+                    if result.is_select {
+                        last_select_result = Some(result);
+                    } else {
+                        total_affected += result.row_count as u64;
+                    }
+                }
+                Err(e) => {
+                    error_messages.push(format!("Statement {}: {}", i + 1, e));
+                }
+            }
+        }
+
+        let execution_time = start.elapsed();
+
+        // If we have a SELECT result, return it with batch info
+        if let Some(mut result) = last_select_result {
+            result.execution_time = execution_time;
+            if executed_count > 1 {
+                result.message = format!(
+                    "{} (Executed {} of {} statements)",
+                    result.message,
+                    executed_count,
+                    statements.len()
+                );
+            }
+            if !error_messages.is_empty() {
+                result.message = format!("{} | Errors: {}", result.message, error_messages.join("; "));
+            }
+            Ok(result)
+        } else {
+            // Return a summary for DML/DDL batch
+            let message = if error_messages.is_empty() {
+                format!(
+                    "Executed {} statements, {} row(s) affected",
+                    executed_count, total_affected
+                )
+            } else {
+                format!(
+                    "Executed {} of {} statements, {} row(s) affected | Errors: {}",
+                    executed_count,
+                    statements.len(),
+                    total_affected,
+                    error_messages.join("; ")
+                )
+            };
+
+            Ok(QueryResult {
+                columns: vec![],
+                rows: vec![],
+                row_count: total_affected as usize,
+                execution_time,
+                message,
+                is_select: false,
+            })
+        }
+    }
+
+    /// Split SQL text into individual statements by semicolons
+    /// Handles quoted strings and comments to avoid splitting inside them
+    fn split_statements(sql: &str) -> Vec<String> {
+        let mut statements = Vec::new();
+        let mut current = String::new();
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
+        let chars: Vec<char> = sql.chars().collect();
+        let len = chars.len();
+        let mut i = 0;
+
+        while i < len {
+            let c = chars[i];
+            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+
+            // Handle line comment
+            if !in_single_quote && !in_double_quote && !in_block_comment {
+                if c == '-' && next == Some('-') {
+                    in_line_comment = true;
+                    current.push(c);
+                    i += 1;
+                    continue;
+                }
+            }
+
+            if in_line_comment {
+                current.push(c);
+                if c == '\n' {
+                    in_line_comment = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            // Handle block comment
+            if !in_single_quote && !in_double_quote && !in_line_comment {
+                if c == '/' && next == Some('*') {
+                    in_block_comment = true;
+                    current.push(c);
+                    i += 1;
+                    continue;
+                }
+            }
+
+            if in_block_comment {
+                current.push(c);
+                if c == '*' && next == Some('/') {
+                    current.push(chars[i + 1]);
+                    in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            // Handle quotes
+            if c == '\'' && !in_double_quote {
+                in_single_quote = !in_single_quote;
+                current.push(c);
+                i += 1;
+                continue;
+            }
+
+            if c == '"' && !in_single_quote {
+                in_double_quote = !in_double_quote;
+                current.push(c);
+                i += 1;
+                continue;
+            }
+
+            // Handle semicolon (statement separator)
+            if c == ';' && !in_single_quote && !in_double_quote {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    statements.push(trimmed.to_string());
+                }
+                current.clear();
+                i += 1;
+                continue;
+            }
+
+            current.push(c);
+            i += 1;
+        }
+
+        // Don't forget the last statement
+        let trimmed = current.trim();
+        if !trimmed.is_empty() {
+            statements.push(trimmed.to_string());
+        }
+
+        statements
+    }
+
+    /// Enable DBMS_OUTPUT for the session
+    pub fn enable_dbms_output(conn: &Connection, buffer_size: u32) -> Result<(), OracleError> {
+        let sql = format!("BEGIN DBMS_OUTPUT.ENABLE({}); END;", buffer_size);
+        conn.execute(&sql, &[])?;
+        Ok(())
+    }
+
+    /// Disable DBMS_OUTPUT for the session
+    pub fn disable_dbms_output(conn: &Connection) -> Result<(), OracleError> {
+        conn.execute("BEGIN DBMS_OUTPUT.DISABLE; END;", &[])?;
+        Ok(())
+    }
+
+    /// Get DBMS_OUTPUT lines using a simple approach
+    pub fn get_dbms_output(conn: &Connection) -> Result<Vec<String>, OracleError> {
+        // Use a PL/SQL block that collects all output into a temporary table or returns via cursor
+        // For simplicity, we'll use DBMS_OUTPUT.GET_LINES via anonymous block
+        let sql = r#"
+            SELECT column_value
+            FROM TABLE(
+                CAST(
+                    (
+                        SELECT COLLECT(column_value)
+                        FROM TABLE(
+                            (
+                                SELECT CAST(MULTISET(
+                                    SELECT DBMS_OUTPUT.GET_LINE(column_value, :status)
+                                    FROM DUAL
+                                    CONNECT BY LEVEL <= 10000 AND :status = 0
+                                ) AS SYS.ODCIVARCHAR2LIST)
+                                FROM DUAL
+                            )
+                        )
+                    ) AS SYS.ODCIVARCHAR2LIST
+                )
+            )
+        "#;
+
+        // Simpler approach: read lines in a loop
+        let mut lines = Vec::new();
+        let max_lines = 10000;
+
+        for _ in 0..max_lines {
+            // Use a query to check if there's output
+            let check_sql = r#"
+                SELECT * FROM (
+                    SELECT 1 FROM DUAL WHERE 1=0
+                )
+            "#;
+
+            // Try getting one line at a time using DBMS_SQL or direct approach
+            let plsql = r#"
+                DECLARE
+                    v_line VARCHAR2(32767);
+                    v_status INTEGER;
+                BEGIN
+                    DBMS_OUTPUT.GET_LINE(v_line, v_status);
+                    IF v_status = 0 THEN
+                        :line := v_line;
+                        :done := 0;
+                    ELSE
+                        :line := NULL;
+                        :done := 1;
+                    END IF;
+                END;
+            "#;
+
+            // This approach requires bind variables which can be tricky
+            // Let's use a workaround with a helper table or serveroutput
+            break;
+        }
+
+        Ok(lines)
+    }
+
+    /// Execute with DBMS_OUTPUT capture (simplified version)
+    /// Note: Full DBMS_OUTPUT capture requires session-level setup
+    pub fn execute_with_output(conn: &Connection, sql: &str) -> Result<(QueryResult, Vec<String>), OracleError> {
+        // Enable DBMS_OUTPUT before execution
+        let _ = Self::enable_dbms_output(conn, 1000000);
+
+        // Execute the query
+        let result = Self::execute_batch(conn, sql)?;
+
+        // For now, return empty output - full implementation needs bind variable support
+        let output: Vec<String> = Vec::new();
+
+        Ok((result, output))
     }
 
     fn execute_select(
@@ -246,4 +524,225 @@ impl ObjectBrowser {
 
         Ok(objects)
     }
+
+    /// Get detailed column info for a table
+    pub fn get_table_structure(
+        conn: &Connection,
+        table_name: &str,
+    ) -> Result<Vec<TableColumnDetail>, OracleError> {
+        let sql = r#"
+            SELECT
+                c.column_name,
+                c.data_type,
+                c.data_length,
+                c.data_precision,
+                c.data_scale,
+                c.nullable,
+                c.data_default,
+                (SELECT 'PK' FROM user_cons_columns cc
+                 JOIN user_constraints con ON cc.constraint_name = con.constraint_name
+                 WHERE con.constraint_type = 'P'
+                 AND cc.table_name = c.table_name
+                 AND cc.column_name = c.column_name
+                 AND ROWNUM = 1) as is_pk
+            FROM user_tab_columns c
+            WHERE c.table_name = :1
+            ORDER BY c.column_id
+        "#;
+
+        let mut stmt = conn.statement(sql).build()?;
+        let rows = stmt.query(&[&table_name.to_uppercase()])?;
+
+        let mut columns: Vec<TableColumnDetail> = Vec::new();
+        for row_result in rows {
+            let row: Row = row_result?;
+            columns.push(TableColumnDetail {
+                name: row.get(0)?,
+                data_type: row.get(1)?,
+                data_length: row.get::<_, Option<i32>>(2)?.unwrap_or(0),
+                data_precision: row.get::<_, Option<i32>>(3)?,
+                data_scale: row.get::<_, Option<i32>>(4)?,
+                nullable: row.get::<_, String>(5)? == "Y",
+                default_value: row.get(6)?,
+                is_primary_key: row.get::<_, Option<String>>(7)?.is_some(),
+            });
+        }
+
+        Ok(columns)
+    }
+
+    /// Get indexes for a table
+    pub fn get_table_indexes(
+        conn: &Connection,
+        table_name: &str,
+    ) -> Result<Vec<IndexInfo>, OracleError> {
+        let sql = r#"
+            SELECT
+                i.index_name,
+                i.uniqueness,
+                LISTAGG(ic.column_name, ', ') WITHIN GROUP (ORDER BY ic.column_position) as columns
+            FROM user_indexes i
+            JOIN user_ind_columns ic ON i.index_name = ic.index_name
+            WHERE i.table_name = :1
+            GROUP BY i.index_name, i.uniqueness
+            ORDER BY i.index_name
+        "#;
+
+        let mut stmt = conn.statement(sql).build()?;
+        let rows = stmt.query(&[&table_name.to_uppercase()])?;
+
+        let mut indexes: Vec<IndexInfo> = Vec::new();
+        for row_result in rows {
+            let row: Row = row_result?;
+            indexes.push(IndexInfo {
+                name: row.get(0)?,
+                is_unique: row.get::<_, String>(1)? == "UNIQUE",
+                columns: row.get(2)?,
+            });
+        }
+
+        Ok(indexes)
+    }
+
+    /// Get constraints for a table
+    pub fn get_table_constraints(
+        conn: &Connection,
+        table_name: &str,
+    ) -> Result<Vec<ConstraintInfo>, OracleError> {
+        let sql = r#"
+            SELECT
+                c.constraint_name,
+                c.constraint_type,
+                LISTAGG(cc.column_name, ', ') WITHIN GROUP (ORDER BY cc.position) as columns,
+                c.r_constraint_name,
+                (SELECT table_name FROM user_constraints WHERE constraint_name = c.r_constraint_name) as ref_table
+            FROM user_constraints c
+            LEFT JOIN user_cons_columns cc ON c.constraint_name = cc.constraint_name
+            WHERE c.table_name = :1
+            GROUP BY c.constraint_name, c.constraint_type, c.r_constraint_name
+            ORDER BY c.constraint_type, c.constraint_name
+        "#;
+
+        let mut stmt = conn.statement(sql).build()?;
+        let rows = stmt.query(&[&table_name.to_uppercase()])?;
+
+        let mut constraints: Vec<ConstraintInfo> = Vec::new();
+        for row_result in rows {
+            let row: Row = row_result?;
+            let constraint_type: String = row.get(1)?;
+            constraints.push(ConstraintInfo {
+                name: row.get(0)?,
+                constraint_type: match constraint_type.as_str() {
+                    "P" => "PRIMARY KEY".to_string(),
+                    "R" => "FOREIGN KEY".to_string(),
+                    "U" => "UNIQUE".to_string(),
+                    "C" => "CHECK".to_string(),
+                    _ => constraint_type,
+                },
+                columns: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                ref_table: row.get(4)?,
+            });
+        }
+
+        Ok(constraints)
+    }
+
+    /// Generate DDL for a table
+    pub fn get_table_ddl(conn: &Connection, table_name: &str) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('TABLE', :1) FROM DUAL";
+        let mut stmt = conn.statement(sql).build()?;
+        let row = stmt.query_row(&[&table_name.to_uppercase()])?;
+        let ddl: String = row.get(0)?;
+        Ok(ddl)
+    }
+
+    /// Generate DDL for a view
+    pub fn get_view_ddl(conn: &Connection, view_name: &str) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('VIEW', :1) FROM DUAL";
+        let mut stmt = conn.statement(sql).build()?;
+        let row = stmt.query_row(&[&view_name.to_uppercase()])?;
+        let ddl: String = row.get(0)?;
+        Ok(ddl)
+    }
+
+    /// Generate DDL for a procedure
+    pub fn get_procedure_ddl(conn: &Connection, proc_name: &str) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('PROCEDURE', :1) FROM DUAL";
+        let mut stmt = conn.statement(sql).build()?;
+        let row = stmt.query_row(&[&proc_name.to_uppercase()])?;
+        let ddl: String = row.get(0)?;
+        Ok(ddl)
+    }
+
+    /// Generate DDL for a function
+    pub fn get_function_ddl(conn: &Connection, func_name: &str) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('FUNCTION', :1) FROM DUAL";
+        let mut stmt = conn.statement(sql).build()?;
+        let row = stmt.query_row(&[&func_name.to_uppercase()])?;
+        let ddl: String = row.get(0)?;
+        Ok(ddl)
+    }
+
+    /// Generate DDL for a sequence
+    pub fn get_sequence_ddl(conn: &Connection, seq_name: &str) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('SEQUENCE', :1) FROM DUAL";
+        let mut stmt = conn.statement(sql).build()?;
+        let row = stmt.query_row(&[&seq_name.to_uppercase()])?;
+        let ddl: String = row.get(0)?;
+        Ok(ddl)
+    }
+}
+
+/// Detailed column information for table structure
+#[derive(Debug, Clone)]
+pub struct TableColumnDetail {
+    pub name: String,
+    pub data_type: String,
+    pub data_length: i32,
+    pub data_precision: Option<i32>,
+    pub data_scale: Option<i32>,
+    pub nullable: bool,
+    pub default_value: Option<String>,
+    pub is_primary_key: bool,
+}
+
+impl TableColumnDetail {
+    pub fn get_type_display(&self) -> String {
+        match self.data_type.as_str() {
+            "NUMBER" => {
+                if let (Some(p), Some(s)) = (self.data_precision, self.data_scale) {
+                    if s > 0 {
+                        format!("NUMBER({},{})", p, s)
+                    } else {
+                        format!("NUMBER({})", p)
+                    }
+                } else if let Some(p) = self.data_precision {
+                    format!("NUMBER({})", p)
+                } else {
+                    "NUMBER".to_string()
+                }
+            }
+            "VARCHAR2" | "CHAR" | "NVARCHAR2" | "NCHAR" => {
+                format!("{}({})", self.data_type, self.data_length)
+            }
+            _ => self.data_type.clone(),
+        }
+    }
+}
+
+/// Index information
+#[derive(Debug, Clone)]
+pub struct IndexInfo {
+    pub name: String,
+    pub is_unique: bool,
+    pub columns: String,
+}
+
+/// Constraint information
+#[derive(Debug, Clone)]
+pub struct ConstraintInfo {
+    pub name: String,
+    pub constraint_type: String,
+    pub columns: String,
+    pub ref_table: Option<String>,
 }

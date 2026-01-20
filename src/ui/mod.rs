@@ -6,6 +6,8 @@ pub mod object_browser;
 pub mod menu;
 pub mod intellisense;
 pub mod syntax_highlight;
+pub mod find_replace;
+pub mod query_history;
 
 pub use main_window::*;
 pub use sql_editor::*;
@@ -15,3 +17,5 @@ pub use object_browser::*;
 pub use menu::*;
 pub use intellisense::*;
 pub use syntax_highlight::*;
+pub use find_replace::*;
+pub use query_history::*;

@@ -16,8 +16,8 @@ use std::rc::Rc;
 
 use crate::db::{create_shared_connection, ObjectBrowser, QueryResult, SharedConnection};
 use crate::ui::{
-    ConnectionDialog, HighlightData, IntellisenseData, MenuBarBuilder, ObjectBrowserWidget,
-    ResultTableWidget, SqlEditorWidget,
+    ConnectionDialog, FindReplaceDialog, HighlightData, IntellisenseData, MenuBarBuilder,
+    ObjectBrowserWidget, QueryHistoryDialog, ResultTableWidget, SqlEditorWidget,
 };
 use crate::utils::{QueryHistory, QueryHistoryEntry};
 use chrono::Local;
@@ -176,6 +176,19 @@ impl MainWindow {
             }
         });
 
+        // Setup object browser callback to set SQL in editor
+        let mut sql_buffer = self.sql_buffer.clone();
+        let highlighter = self.sql_editor.get_highlighter();
+        let style_buffer = self.sql_editor.get_style_buffer();
+
+        self.object_browser.set_sql_callback(move |sql| {
+            sql_buffer.set_text(&sql);
+            // Refresh highlighting
+            highlighter
+                .borrow()
+                .highlight(&sql, &mut style_buffer.clone());
+        });
+
         // Setup menu callbacks
         self.setup_menu_callbacks();
     }
@@ -192,8 +205,10 @@ impl MainWindow {
         let mut window = self.window.clone();
         let style_buffer = self.sql_editor.get_style_buffer();
         let highlighter_for_file = highlighter.clone();
-        let last_result = self.last_result.clone();
-        let query_history = self.query_history.clone();
+        let mut editor = self.sql_editor.get_editor();
+        let mut editor_buffer = self.sql_buffer.clone();
+        let result_table_export = self.result_table.clone();
+        let mut status_bar_export = self.status_bar.clone();
 
         // Find menu bar and set callbacks
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
@@ -373,68 +388,58 @@ impl MainWindow {
                         "&File/E&xit\t" => {
                             app::quit();
                         }
-                        "&Query/&Execute\t" => {
-                            sql_editor.execute_current();
-                        }
-                        "&Query/Execute &Selected\t" => {
-                            sql_editor.execute_selected();
-                        }
-                        "&Query/E&xplain Plan\t" => {
-                            sql_editor.explain_current();
-                        }
-                        "&Query/&Commit\t" => {
-                            sql_editor.commit();
-                        }
-                        "&Query/&Rollback\t" => {
-                            sql_editor.rollback();
-                        }
-                        "&Tools/&Refresh Objects\t" => {
-                            object_browser.refresh();
-                        }
                         "&Tools/&Export Results...\t" => {
-                            let result = last_result.borrow();
-                            if let Some(result) = result.as_ref() {
-                                if !result.is_select {
-                                    fltk::dialog::alert_default(
-                                        "No query results to export (last query was not a SELECT).",
-                                    );
-                                    return;
-                                }
+                            if !result_table_export.has_data() {
+                                fltk::dialog::alert_default("No data to export");
+                                return;
+                            }
 
-                                let mut dialog = FileDialog::new(FileDialogType::BrowseSaveFile);
-                                dialog.set_title("Export Results to CSV");
-                                dialog.set_filter("CSV Files\t*.csv\nAll Files\t*");
-                                dialog.set_preset_file("results.csv");
-                                dialog.show();
+                            let mut dialog = FileDialog::new(FileDialogType::BrowseSaveFile);
+                            dialog.set_title("Export Results to CSV");
+                            dialog.set_filter("CSV Files\t*.csv\nAll Files\t*");
+                            dialog.set_preset_file("results.csv");
+                            dialog.show();
 
-                                let filename = dialog.filename();
-                                if !filename.as_os_str().is_empty() {
-                                    let path = if filename.extension().is_none() {
-                                        filename.with_extension("csv")
-                                    } else {
-                                        filename
-                                    };
+                            let filename = dialog.filename();
+                            if !filename.as_os_str().is_empty() {
+                                let path = if filename.extension().is_none() {
+                                    filename.with_extension("csv")
+                                } else {
+                                    filename
+                                };
 
-                                    if let Err(err) = Self::export_results_csv(&path, result) {
-                                        fltk::dialog::alert_default(&format!(
-                                            "Failed to export results: {}",
-                                            err
-                                        ));
-                                    } else {
-                                        fltk::dialog::message_default(&format!(
-                                            "Exported results to {}",
+                                let csv_content = result_table_export.export_to_csv();
+                                match fs::write(&path, &csv_content) {
+                                    Ok(_) => {
+                                        status_bar_export.set_label(&format!(
+                                            "Exported {} rows to {}",
+                                            result_table_export.row_count(),
                                             path.display()
                                         ));
                                     }
+                                    Err(e) => {
+                                        fltk::dialog::alert_default(&format!(
+                                            "Failed to export: {}",
+                                            e
+                                        ));
+                                    }
                                 }
-                            } else {
-                                fltk::dialog::alert_default("No query results to export.");
                             }
                         }
-                        "&Tools/&Query History...\t" => {
-                            let history = query_history.borrow();
-                            let formatted = Self::format_query_history(&history);
-                            fltk::dialog::message_default(&formatted);
+                        "&Edit/&Find...\t" => {
+                            FindReplaceDialog::show_find(&mut editor, &mut editor_buffer);
+                        }
+                        "&Edit/&Replace...\t" => {
+                            FindReplaceDialog::show_replace(&mut editor, &mut editor_buffer);
+                        }
+                        "&Tools/Query &History...\t" => {
+                            if let Some(sql) = QueryHistoryDialog::show() {
+                                sql_buffer.set_text(&sql);
+                                // Refresh highlighting
+                                highlighter_for_file
+                                    .borrow()
+                                    .highlight(&sql, &mut style_buffer.clone());
+                            }
                         }
                         _ => {}
                     }
