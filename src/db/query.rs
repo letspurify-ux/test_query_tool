@@ -10,6 +10,7 @@ pub struct ColumnInfo {
 
 #[derive(Debug, Clone)]
 pub struct QueryResult {
+    #[allow(dead_code)]
     pub sql: String,
     pub columns: Vec<ColumnInfo>,
     pub rows: Vec<Vec<String>>,
@@ -96,7 +97,7 @@ impl QueryExecutor {
     /// Execute multiple SQL statements separated by semicolons
     /// Returns the result of the last SELECT statement, or a summary of DML/DDL operations
     pub fn execute_batch(conn: &Connection, sql: &str) -> Result<QueryResult, OracleError> {
-        let statements = Self::split_statements(sql);
+        let statements = Self::split_statements_with_blocks(sql);
 
         if statements.is_empty() {
             return Ok(QueryResult {
@@ -184,6 +185,7 @@ impl QueryExecutor {
         }
     }
 
+    #[allow(dead_code)]
     pub fn execute_batch_streaming<F, G>(
         conn: &Connection,
         sql: &str,
@@ -194,7 +196,7 @@ impl QueryExecutor {
         F: FnMut(&[ColumnInfo]),
         G: FnMut(Vec<String>),
     {
-        let statements = Self::split_statements(sql);
+        let statements = Self::split_statements_with_blocks(sql);
 
         if statements.is_empty() {
             return Ok(QueryResult {
@@ -211,13 +213,11 @@ impl QueryExecutor {
         if statements.len() == 1 {
             let statement = statements[0].trim();
             let sql_upper = statement.to_uppercase();
-            let start = Instant::now();
 
             if sql_upper.starts_with("SELECT") || sql_upper.starts_with("WITH") {
                 return Self::execute_select_streaming(
                     conn,
                     statement,
-                    start,
                     &mut on_select_start,
                     &mut on_row,
                 );
@@ -229,18 +229,33 @@ impl QueryExecutor {
         Self::execute_batch(conn, sql)
     }
 
-    /// Split SQL text into individual statements by semicolons
-    /// Handles quoted strings and comments to avoid splitting inside them
-    fn split_statements(sql: &str) -> Vec<String> {
+    /// Split SQL text into individual statements by semicolons.
+    /// Handles quoted strings, comments, and PL/SQL blocks (BEGIN/END, DECLARE).
+    pub fn split_statements_with_blocks(sql: &str) -> Vec<String> {
         let mut statements = Vec::new();
         let mut current = String::new();
         let mut in_single_quote = false;
         let mut in_double_quote = false;
         let mut in_line_comment = false;
         let mut in_block_comment = false;
+        let mut block_depth = 0usize;
+        let mut token = String::new();
         let chars: Vec<char> = sql.chars().collect();
         let len = chars.len();
         let mut i = 0;
+
+        let flush_token = |token: &mut String, block_depth: &mut usize| {
+            if token.is_empty() {
+                return;
+            }
+            let upper = token.to_uppercase();
+            if upper == "BEGIN" || upper == "DECLARE" {
+                *block_depth += 1;
+            } else if upper == "END" && *block_depth > 0 {
+                *block_depth -= 1;
+            }
+            token.clear();
+        };
 
         while i < len {
             let c = chars[i];
@@ -268,6 +283,19 @@ impl QueryExecutor {
                 i += 1;
                 continue;
             }
+
+            if !in_single_quote
+                && !in_double_quote
+                && !in_block_comment
+                && (c.is_alphanumeric() || c == '_')
+            {
+                token.push(c);
+                current.push(c);
+                i += 1;
+                continue;
+            }
+
+            flush_token(&mut token, &mut block_depth);
 
             // Handle block comment
             if !in_single_quote && !in_double_quote && !in_line_comment {
@@ -307,7 +335,7 @@ impl QueryExecutor {
             }
 
             // Handle semicolon (statement separator)
-            if c == ';' && !in_single_quote && !in_double_quote {
+            if c == ';' && !in_single_quote && !in_double_quote && block_depth == 0 {
                 let trimmed = current.trim();
                 if !trimmed.is_empty() {
                     statements.push(trimmed.to_string());
@@ -320,6 +348,8 @@ impl QueryExecutor {
             current.push(c);
             i += 1;
         }
+
+        flush_token(&mut token, &mut block_depth);
 
         // Don't forget the last statement
         let trimmed = current.trim();
@@ -467,10 +497,9 @@ impl QueryExecutor {
         ))
     }
 
-    fn execute_select_streaming<F, G>(
+    pub fn execute_select_streaming<F, G>(
         conn: &Connection,
         sql: &str,
-        start: Instant,
         on_select_start: &mut F,
         on_row: &mut G,
     ) -> Result<QueryResult, OracleError>
@@ -478,6 +507,7 @@ impl QueryExecutor {
         F: FnMut(&[ColumnInfo]),
         G: FnMut(Vec<String>),
     {
+        let start = Instant::now();
         let mut stmt = conn.statement(sql).build()?;
         let result_set = stmt.query(&[])?;
 
@@ -631,6 +661,7 @@ impl ObjectBrowser {
         Ok(procedures)
     }
 
+    #[allow(dead_code)]
     pub fn get_table_columns(
         conn: &Connection,
         table_name: &str,

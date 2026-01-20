@@ -17,7 +17,7 @@ use std::rc::Rc;
 use crate::db::{create_shared_connection, ObjectBrowser, QueryResult, SharedConnection};
 use crate::ui::{
     ConnectionDialog, FeatureCatalogDialog, FindReplaceDialog, HighlightData, IntellisenseData,
-    MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, QueryProgress, ResultTableWidget,
+    MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, QueryProgress, ResultTabsWidget,
     SqlAction, SqlEditorWidget,
 };
 use crate::utils::QueryHistory;
@@ -27,7 +27,7 @@ pub struct MainWindow {
     connection: SharedConnection,
     sql_editor: SqlEditorWidget,
     sql_buffer: TextBuffer,
-    result_table: ResultTableWidget,
+    result_tabs: ResultTabsWidget,
     object_browser: ObjectBrowserWidget,
     status_bar: Frame,
     current_file: Rc<RefCell<Option<PathBuf>>>,
@@ -79,9 +79,9 @@ impl MainWindow {
         let sql_group = sql_editor.get_group().clone();
         right_flex.fixed(&sql_group, 250);
 
-        // Result Table
-        let result_table = ResultTableWidget::new();
-        let result_widget = result_table.get_widget();
+        // Result Tabs
+        let result_tabs = ResultTabsWidget::new();
+        let result_widget = result_tabs.get_widget();
         right_flex.add(&result_widget);
 
         right_flex.end();
@@ -112,7 +112,7 @@ impl MainWindow {
             connection,
             sql_editor,
             sql_buffer,
-            result_table,
+            result_tabs,
             object_browser,
             status_bar,
             current_file,
@@ -138,15 +138,10 @@ impl MainWindow {
 
     pub fn setup_callbacks(&mut self) {
         let mut status_bar = self.status_bar.clone();
-        let mut result_table = self.result_table.clone();
         let last_result = self.last_result.clone();
 
         // Setup SQL editor execute callback
         self.sql_editor.set_execute_callback(move |query_result| {
-            // Update result table for non-select results
-            if !query_result.is_select {
-                result_table.display_result(&query_result);
-            }
             *last_result.borrow_mut() = Some(query_result.clone());
 
             // Update status bar
@@ -184,15 +179,26 @@ impl MainWindow {
             }
         });
 
-        let mut result_table_stream = self.result_table.clone();
+        let mut result_tabs_stream = self.result_tabs.clone();
         self.sql_editor.set_progress_callback(move |progress| match progress {
-            QueryProgress::StartSelect { columns } => {
-                result_table_stream.start_streaming(&columns);
+            QueryProgress::BatchStart => {
+                result_tabs_stream.clear();
             }
-            QueryProgress::Row { values } => {
-                result_table_stream.append_row(values);
+            QueryProgress::StatementStart { index } => {
+                result_tabs_stream.start_statement(index, &format!("Result {}", index + 1));
             }
-            QueryProgress::Finished { .. } => {}
+            QueryProgress::SelectStart { index, columns } => {
+                result_tabs_stream.start_streaming(index, &columns);
+            }
+            QueryProgress::Rows { index, rows } => {
+                result_tabs_stream.append_rows(index, rows);
+            }
+            QueryProgress::StatementFinished { index, result } => {
+                if !result.is_select {
+                    result_tabs_stream.display_result(index, &result);
+                }
+            }
+            QueryProgress::BatchFinished => {}
         });
 
         // Setup menu callbacks
@@ -213,7 +219,7 @@ impl MainWindow {
         let mut editor = self.sql_editor.get_editor();
         let mut editor_buffer = self.sql_buffer.clone();
         let mut sql_editor = self.sql_editor.clone();
-        let result_table_export = self.result_table.clone();
+        let result_table_export = self.result_tabs.clone();
         let mut status_bar_export = self.status_bar.clone();
 
         // Find menu bar and set callbacks

@@ -21,9 +21,12 @@ use crate::ui::syntax_highlight::{create_style_table, HighlightData, SqlHighligh
 
 #[derive(Clone)]
 pub enum QueryProgress {
-    StartSelect { columns: Vec<String> },
-    Row { values: Vec<String> },
-    Finished { result: QueryResult },
+    BatchStart,
+    StatementStart { index: usize },
+    SelectStart { index: usize, columns: Vec<String> },
+    Rows { index: usize, rows: Vec<Vec<String>> },
+    StatementFinished { index: usize, result: QueryResult },
+    BatchFinished,
 }
 
 #[derive(Clone)]
@@ -167,18 +170,23 @@ impl SqlEditorWidget {
         query_running: Rc<RefCell<bool>>,
     ) {
         let execute_callback = self.execute_callback.clone();
-        app::add_idle(move || {
+        app::add_idle3(move |_| {
             while let Some(message) = progress_receiver.recv() {
                 if let Some(ref mut cb) = *progress_callback.borrow_mut() {
                     cb(message.clone());
                 }
 
-                if let QueryProgress::Finished { result } = message {
-                    *query_running.borrow_mut() = false;
-                    set_cursor(Cursor::Default);
-                    if let Some(ref mut cb) = *execute_callback.borrow_mut() {
-                        cb(result);
+                match message {
+                    QueryProgress::StatementFinished { result, .. } => {
+                        if let Some(ref mut cb) = *execute_callback.borrow_mut() {
+                            cb(result);
+                        }
                     }
+                    QueryProgress::BatchFinished => {
+                        *query_running.borrow_mut() = false;
+                        set_cursor(Cursor::Default);
+                    }
+                    _ => {}
                 }
             }
         });
@@ -510,7 +518,12 @@ impl SqlEditorWidget {
     }
 
     pub fn explain_current(&self) {
-        let sql = self.buffer.text();
+        let buffer = self.buffer.clone();
+        let sql = if buffer.selected() {
+            buffer.selection_text()
+        } else {
+            buffer.text()
+        };
         if sql.trim().is_empty() {
             fltk::dialog::alert_default("No SQL to explain");
             return;
@@ -759,58 +772,96 @@ impl SqlEditorWidget {
             app::flush();
 
             thread::spawn(move || {
+                let statements = QueryExecutor::split_statements_with_blocks(&sql_text);
+                if statements.is_empty() {
+                    let _ = sender.send(QueryProgress::BatchFinished);
+                    return;
+                }
+
+                let _ = sender.send(QueryProgress::BatchStart);
+
                 let previous_timeout = conn.call_timeout().unwrap_or(None);
                 if let Err(err) = conn.set_call_timeout(query_timeout) {
-                    let _ = sender.send(QueryProgress::Finished {
+                    let _ = sender.send(QueryProgress::StatementFinished {
+                        index: 0,
                         result: QueryResult::new_error(&sql_text, &err.to_string()),
                     });
+                    let _ = sender.send(QueryProgress::BatchFinished);
                     let _ = conn.set_call_timeout(previous_timeout);
                     return;
                 }
 
-                let result = match QueryExecutor::execute_batch_streaming(
-                    conn.as_ref(),
-                    &sql_text,
-                    |columns| {
-                        let names = columns
-                            .iter()
-                            .map(|col| col.name.clone())
-                            .collect::<Vec<String>>();
-                        let _ = sender.send(QueryProgress::StartSelect { columns: names });
-                    },
-                    |row| {
-                        let _ = sender.send(QueryProgress::Row { values: row });
-                    },
-                ) {
-                    Ok(result) => result,
-                    Err(e) => QueryResult::new_error(&sql_text, &e.to_string()),
-                };
-
-                let _ = conn.set_call_timeout(previous_timeout);
-
-                let mut final_result = result;
-                if auto_commit && !final_result.is_select {
-                    if let Err(err) = conn.commit() {
-                        final_result = QueryResult::new_error(
-                            &sql_text,
-                            &format!("Auto-commit failed: {}", err),
-                        );
-                    } else {
-                        final_result.message =
-                            format!("{} | Auto-commit applied", final_result.message);
+                for (index, statement) in statements.iter().enumerate() {
+                    let trimmed = statement.trim();
+                    if trimmed.is_empty() {
+                        continue;
                     }
+
+                    let sql_upper = trimmed.to_uppercase();
+                    let is_select = sql_upper.starts_with("SELECT") || sql_upper.starts_with("WITH");
+
+                    let _ = sender.send(QueryProgress::StatementStart { index });
+
+                    let mut buffered_rows: Vec<Vec<String>> = Vec::new();
+                    let mut last_flush = std::time::Instant::now();
+
+                    let mut result = if is_select {
+                        QueryExecutor::execute_select_streaming(
+                            conn.as_ref(),
+                            trimmed,
+                            &mut |columns| {
+                                let names = columns
+                                    .iter()
+                                    .map(|col| col.name.clone())
+                                    .collect::<Vec<String>>();
+                                let _ = sender.send(QueryProgress::SelectStart {
+                                    index,
+                                    columns: names,
+                                });
+                            },
+                            &mut |row| {
+                                buffered_rows.push(row);
+                                if last_flush.elapsed() >= Duration::from_secs(1) {
+                                    let rows = std::mem::take(&mut buffered_rows);
+                                    let _ = sender.send(QueryProgress::Rows { index, rows });
+                                    last_flush = std::time::Instant::now();
+                                }
+                            },
+                        )
+                        .unwrap_or_else(|e| QueryResult::new_error(trimmed, &e.to_string()))
+                    } else {
+                        QueryExecutor::execute(conn.as_ref(), trimmed)
+                            .unwrap_or_else(|e| QueryResult::new_error(trimmed, &e.to_string()))
+                    };
+
+                    if !buffered_rows.is_empty() {
+                        let rows = std::mem::take(&mut buffered_rows);
+                        let _ = sender.send(QueryProgress::Rows { index, rows });
+                    }
+
+                    if auto_commit && !result.is_select {
+                        if let Err(err) = conn.commit() {
+                            result = QueryResult::new_error(
+                                trimmed,
+                                &format!("Auto-commit failed: {}", err),
+                            );
+                        } else {
+                            result.message = format!("{} | Auto-commit applied", result.message);
+                        }
+                    }
+
+                    QueryHistoryDialog::add_to_history(
+                        trimmed,
+                        result.execution_time.as_millis() as u64,
+                        result.row_count,
+                        &conn_name,
+                    );
+
+                    let _ = sender.send(QueryProgress::StatementFinished { index, result });
                 }
 
-                QueryHistoryDialog::add_to_history(
-                    &sql_text,
-                    final_result.execution_time.as_millis() as u64,
-                    final_result.row_count,
-                    &conn_name,
-                );
-
-                let _ = sender.send(QueryProgress::Finished {
-                    result: final_result,
-                });
+                let _ = conn.set_call_timeout(previous_timeout);
+                let _ = sender.send(QueryProgress::BatchFinished);
             });
         }
     }
@@ -836,15 +887,4 @@ impl SqlEditorWidget {
         *self.progress_callback.borrow_mut() = Some(Box::new(callback));
     }
 
-    pub fn insert_text(&self, text: &str) {
-        let mut editor = self.editor.clone();
-        let mut buffer = self.buffer.clone();
-        let insert_pos = editor.insert_position();
-        buffer.insert(insert_pos, text);
-        editor.set_insert_position(insert_pos + text.len() as i32);
-
-        self.highlighter
-            .borrow()
-            .highlight(&buffer.text(), &mut self.style_buffer.clone());
-    }
 }
