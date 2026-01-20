@@ -18,7 +18,7 @@ pub struct QueryHistoryDialog;
 impl QueryHistoryDialog {
     /// Show the query history dialog and return selected SQL if any
     pub fn show() -> Option<String> {
-        let mut history = QueryHistory::load();
+        let history = QueryHistory::load();
 
         let mut dialog = Window::default()
             .with_size(800, 500)
@@ -52,7 +52,7 @@ impl QueryHistoryDialog {
         browser.set_selection_color(Color::from_rgb(0, 122, 204));
 
         // Populate browser with history entries
-        for (i, entry) in history.queries.iter().enumerate() {
+        for entry in history.queries.iter() {
             let display = format!(
                 "{} | {} | {}ms | {} rows",
                 entry.timestamp,
@@ -76,7 +76,7 @@ impl QueryHistoryDialog {
         preview_label.set_label_color(Color::White);
         preview_flex.fixed(&preview_label, 20);
 
-        let mut preview_buffer = TextBuffer::default();
+        let preview_buffer = TextBuffer::default();
         let mut preview_display = TextDisplay::default();
         preview_display.set_buffer(preview_buffer.clone());
         preview_display.set_color(Color::from_rgb(30, 30, 30));
@@ -175,7 +175,7 @@ impl QueryHistoryDialog {
             );
             if choice == Some(1) {
                 // Clear history
-                let mut new_history = QueryHistory::new();
+                let new_history = QueryHistory::new();
                 let _ = new_history.save();
                 queries_for_clear.borrow_mut().clear();
                 browser_for_clear.clear();

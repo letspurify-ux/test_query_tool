@@ -284,6 +284,7 @@ impl FindReplaceDialog {
     }
 
     /// Find next occurrence (for F3 shortcut)
+    #[allow(dead_code)]
     pub fn find_next(
         editor: &mut TextEditor,
         buffer: &mut TextBuffer,
