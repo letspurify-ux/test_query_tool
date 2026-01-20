@@ -62,6 +62,31 @@ impl TableData {
 
         self.col_widths = widths;
     }
+
+    fn start_streaming(&mut self, headers: &[String]) {
+        self.clear();
+        self.headers = headers.to_vec();
+        self.col_widths = self
+            .headers
+            .iter()
+            .map(|h| (h.len() * 10).max(80) as i32)
+            .collect();
+    }
+
+    fn append_row(&mut self, row: Vec<String>) {
+        if self.headers.is_empty() {
+            return;
+        }
+
+        for (i, cell) in row.iter().enumerate() {
+            if i < self.col_widths.len() {
+                let cell_width = (cell.len() * 8).max(80).min(300) as i32;
+                self.col_widths[i] = self.col_widths[i].max(cell_width);
+            }
+        }
+
+        self.rows.push(row);
+    }
 }
 
 impl ResultTableWidget {
@@ -363,6 +388,37 @@ impl ResultTableWidget {
         }
 
         self.table.redraw();
+    }
+
+    pub fn start_streaming(&mut self, headers: &[String]) {
+        let col_widths = {
+            let mut data = self.data.borrow_mut();
+            data.start_streaming(headers);
+            data.col_widths.clone()
+        };
+
+        self.table.set_rows(0);
+        self.table.set_cols(headers.len() as i32);
+        for (i, width) in col_widths.iter().enumerate() {
+            self.table.set_col_width(i as i32, *width);
+        }
+        self.table.redraw();
+        app::flush();
+    }
+
+    pub fn append_row(&mut self, row: Vec<String>) {
+        let (row_count, col_widths) = {
+            let mut data = self.data.borrow_mut();
+            data.append_row(row);
+            (data.rows.len(), data.col_widths.clone())
+        };
+
+        self.table.set_rows(row_count as i32);
+        for (i, width) in col_widths.iter().enumerate() {
+            self.table.set_col_width(i as i32, *width);
+        }
+        self.table.redraw();
+        app::flush();
     }
 
     #[allow(dead_code)]
