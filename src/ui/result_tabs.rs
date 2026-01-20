@@ -70,7 +70,7 @@ impl ResultTabsWidget {
         }
 
         self.tabs.begin();
-        let mut group = Group::default().with_label(label);
+        let mut group = Group::default_fill().with_label(label);
         group.set_color(Color::from_rgb(30, 30, 30));
 
         group.begin();
