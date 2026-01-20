@@ -163,6 +163,11 @@ pub struct IntellisensePopup {
 
 impl IntellisensePopup {
     pub fn new() -> Self {
+        // Temporarily suspend current group to prevent popup window from being
+        // added to the parent container (which causes layout issues)
+        let current_group = fltk::group::Group::current();
+        fltk::group::Group::set_current::<fltk::group::Group>(None);
+
         let mut window = Window::default()
             .with_size(320, 200);
         window.set_border(false);
@@ -175,6 +180,11 @@ impl IntellisensePopup {
         browser.set_selection_color(Color::from_rgb(0, 120, 212)); // Modern accent
 
         window.end();
+
+        // Restore current group
+        if let Some(ref group) = current_group {
+            fltk::group::Group::set_current(Some(group));
+        }
 
         let suggestions = Rc::new(RefCell::new(Vec::new()));
         let selected_callback: Rc<RefCell<Option<Box<dyn FnMut(String)>>>> =
