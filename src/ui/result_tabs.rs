@@ -22,8 +22,10 @@ struct ResultTab {
 }
 
 impl ResultTabsWidget {
-    pub fn new() -> Self {
-        let mut tabs = Tabs::default_fill();
+    pub fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
+        // Use explicit dimensions to avoid "center of requires the size of the
+        // widget to be known" panic that occurs with default_fill()
+        let mut tabs = Tabs::new(x, y, w, h, None);
         tabs.set_color(Color::from_rgb(30, 30, 30));
         tabs.set_label_color(Color::White);
         tabs.handle_overflow(TabsOverflow::Compress);
@@ -148,6 +150,6 @@ impl ResultTabsWidget {
 
 impl Default for ResultTabsWidget {
     fn default() -> Self {
-        Self::new()
+        Self::new(0, 0, 100, 100)
     }
 }
