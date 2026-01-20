@@ -385,6 +385,12 @@ impl SqlEditorWidget {
 
                     false
                 }
+                Event::Shortcut => {
+                    if ed.has_focus() {
+                        return true;
+                    }
+                    false
+                }
                 Event::Paste => {
                     // Update syntax highlighting after paste
                     let text = buffer_for_handle.text();
@@ -420,21 +426,14 @@ impl SqlEditorWidget {
             return;
         }
 
-        // Calculate popup position based on cursor
-        // position_to_xy returns cursor position relative to the editor widget
+        // Position popup relative to the editor cursor within the window
         let (cursor_x, cursor_y) = editor.position_to_xy(editor.insert_position());
-
-        // Get absolute screen coordinates by getting window position
-        // and adding widget's relative position within the window
-        let (popup_x, popup_y) = if let Some(win) = fltk::app::first_window() {
-            // Window position on screen + editor position in window + cursor position in editor
-            let abs_x = win.x() + editor.x() + cursor_x;
-            let abs_y = win.y() + editor.y() + cursor_y + 20; // 20 pixels below cursor
-            (abs_x, abs_y)
-        } else {
-            // Fallback: use relative position (may not be accurate)
-            (editor.x() + cursor_x, editor.y() + cursor_y + 20)
-        };
+        let (win_x, win_y) = editor
+            .window()
+            .map(|win| (win.x_root(), win.y_root()))
+            .unwrap_or((0, 0));
+        let popup_x = win_x + cursor_x;
+        let popup_y = win_y + cursor_y + 20;
 
         intellisense_popup
             .borrow_mut()
