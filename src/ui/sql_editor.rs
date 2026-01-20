@@ -9,6 +9,7 @@ use fltk::{
     prelude::*,
     text::{TextBuffer, TextEditor, WrapMode},
 };
+use oracle::Error as OracleError;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::thread;
@@ -51,6 +52,7 @@ impl SqlEditorWidget {
         let mut group = Flex::default();
         group.set_type(FlexType::Column);
         group.set_margin(0);
+        group.set_spacing(0);
         group.set_color(Color::from_rgb(30, 30, 30));
 
         // Button toolbar
@@ -804,9 +806,10 @@ impl SqlEditorWidget {
 
                     let mut buffered_rows: Vec<Vec<String>> = Vec::new();
                     let mut last_flush = std::time::Instant::now();
+                    let mut timed_out = false;
 
                     let mut result = if is_select {
-                        QueryExecutor::execute_select_streaming(
+                        match QueryExecutor::execute_select_streaming(
                             conn.as_ref(),
                             trimmed,
                             &mut |columns| {
@@ -827,11 +830,31 @@ impl SqlEditorWidget {
                                     last_flush = std::time::Instant::now();
                                 }
                             },
-                        )
-                        .unwrap_or_else(|e| QueryResult::new_error(trimmed, &e.to_string()))
+                        ) {
+                            Ok(result) => result,
+                            Err(err) => {
+                                timed_out = Self::is_timeout_error(&err);
+                                let message = if timed_out {
+                                    Self::timeout_message(query_timeout)
+                                } else {
+                                    err.to_string()
+                                };
+                                QueryResult::new_error(trimmed, &message)
+                            }
+                        }
                     } else {
-                        QueryExecutor::execute(conn.as_ref(), trimmed)
-                            .unwrap_or_else(|e| QueryResult::new_error(trimmed, &e.to_string()))
+                        match QueryExecutor::execute(conn.as_ref(), trimmed) {
+                            Ok(result) => result,
+                            Err(err) => {
+                                timed_out = Self::is_timeout_error(&err);
+                                let message = if timed_out {
+                                    Self::timeout_message(query_timeout)
+                                } else {
+                                    err.to_string()
+                                };
+                                QueryResult::new_error(trimmed, &message)
+                            }
+                        }
                     };
 
                     if !buffered_rows.is_empty() {
@@ -858,11 +881,29 @@ impl SqlEditorWidget {
                     );
 
                     let _ = sender.send(QueryProgress::StatementFinished { index, result });
+
+                    if timed_out {
+                        let _ = conn.set_call_timeout(previous_timeout);
+                        let _ = sender.send(QueryProgress::BatchFinished);
+                        return;
+                    }
                 }
 
                 let _ = conn.set_call_timeout(previous_timeout);
                 let _ = sender.send(QueryProgress::BatchFinished);
             });
+        }
+    }
+
+    fn is_timeout_error(err: &OracleError) -> bool {
+        let message = err.to_string();
+        message.contains("DPI-1067") || message.contains("ORA-01013")
+    }
+
+    fn timeout_message(timeout: Option<Duration>) -> String {
+        match timeout {
+            Some(duration) => format!("Query timed out after {} seconds", duration.as_secs()),
+            None => "Query timed out".to_string(),
         }
     }
 

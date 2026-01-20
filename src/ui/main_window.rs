@@ -72,6 +72,7 @@ impl MainWindow {
         let mut right_flex = Flex::default();
         right_flex.set_type(FlexType::Column);
         right_flex.set_margin(0);
+        right_flex.set_pad(0);
         right_flex.set_spacing(0);
 
         // SQL Editor
