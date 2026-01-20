@@ -48,18 +48,22 @@ pub fn load_feature_catalog() -> FeatureCatalog {
     }
 }
 
+#[allow(dead_code)]
 pub fn list_features() -> Vec<FeatureDefinition> {
     load_feature_catalog().features
 }
 
+#[allow(dead_code)]
 pub fn total_count() -> usize {
     load_feature_catalog().total_count
 }
 
+#[allow(dead_code)]
 pub fn implemented_count() -> usize {
     load_feature_catalog().implemented_count
 }
 
+#[allow(dead_code)]
 pub fn build_catalog_text() -> String {
     let catalog = load_feature_catalog();
     build_catalog_text_filtered(&catalog, "", true, true)

@@ -580,6 +580,7 @@ impl SqlEditorWidget {
         *self.execute_callback.borrow_mut() = Some(Box::new(callback));
     }
 
+    #[allow(dead_code)]
     pub fn update_intellisense_data(&mut self, data: IntellisenseData) {
         *self.intellisense_data.borrow_mut() = data;
     }
@@ -588,6 +589,7 @@ impl SqlEditorWidget {
         self.intellisense_data.clone()
     }
 
+    #[allow(dead_code)]
     pub fn update_highlight_data(&mut self, data: HighlightData) {
         self.highlighter.borrow_mut().set_highlight_data(data);
         // Re-highlight current text
@@ -602,10 +604,12 @@ impl SqlEditorWidget {
         self.highlighter.clone()
     }
 
+    #[allow(dead_code)]
     pub fn get_text(&self) -> String {
         self.buffer.text()
     }
 
+    #[allow(dead_code)]
     pub fn set_text(&mut self, text: &str) {
         self.buffer.set_text(text);
     }
@@ -622,6 +626,7 @@ impl SqlEditorWidget {
         self.style_buffer.clone()
     }
 
+    #[allow(dead_code)]
     pub fn refresh_highlighting(&self) {
         let text = self.buffer.text();
         self.highlighter
@@ -629,6 +634,7 @@ impl SqlEditorWidget {
             .highlight(&text, &mut self.style_buffer.clone());
     }
 
+    #[allow(dead_code)]
     pub fn append_text(&mut self, text: &str) {
         let current = self.buffer.text();
         if current.is_empty() {

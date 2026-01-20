@@ -97,9 +97,9 @@ impl FeatureCatalogDialog {
         dialog.end();
 
         let update_display = {
-            let mut filter_input = filter_input.clone();
-            let mut show_implemented = show_implemented.clone();
-            let mut show_planned = show_planned.clone();
+            let filter_input = filter_input.clone();
+            let show_implemented = show_implemented.clone();
+            let show_planned = show_planned.clone();
             let mut display_buffer = display_buffer.clone();
             let catalog = catalog.clone();
 

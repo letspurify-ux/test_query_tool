@@ -171,7 +171,6 @@ impl ResultTableWidget {
 
         // Setup right-click context menu for copy
         let data_for_handle = data.clone();
-        let mut table_for_handle = table.clone();
         table.handle(move |t, ev| {
             match ev {
                 Event::Push => {
@@ -355,6 +354,7 @@ impl ResultTableWidget {
         self.table.redraw();
     }
 
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.data.borrow_mut().clear();
         self.table.set_rows(0);
@@ -362,6 +362,7 @@ impl ResultTableWidget {
         self.table.redraw();
     }
 
+    #[allow(dead_code)]
     pub fn get_selected_data(&self) -> Option<String> {
         let (row_top, row_bot, col_left, col_right) = self.table.get_selection();
 
