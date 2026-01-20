@@ -73,6 +73,7 @@ impl ResultTabsWidget {
         let mut group = Group::default().with_label(label);
         group.set_color(Color::from_rgb(30, 30, 30));
 
+        group.begin();
         let table = ResultTableWidget::new();
         let widget = table.get_widget();
         group.resizable(&widget);

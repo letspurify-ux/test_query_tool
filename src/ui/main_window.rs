@@ -71,8 +71,8 @@ impl MainWindow {
         // Right panel - Editor and Results
         let mut right_flex = Flex::default();
         right_flex.set_type(FlexType::Column);
-        right_flex.set_margin(5);
-        right_flex.set_spacing(5);
+        right_flex.set_margin(0);
+        right_flex.set_spacing(0);
 
         // SQL Editor
         let sql_editor = SqlEditorWidget::new(connection.clone());
@@ -83,6 +83,7 @@ impl MainWindow {
         let result_tabs = ResultTabsWidget::new();
         let result_widget = result_tabs.get_widget();
         right_flex.add(&result_widget);
+        right_flex.resizable(&result_widget);
 
         right_flex.end();
         content_flex.end();
