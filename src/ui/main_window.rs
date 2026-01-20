@@ -184,7 +184,10 @@ impl MainWindow {
                 result_tabs_stream.append_rows(index, rows);
             }
             QueryProgress::StatementFinished { index, result } => {
-                if !result.is_select {
+                if result.is_select {
+                    // Flush any remaining buffered rows for SELECT queries
+                    result_tabs_stream.finish_streaming(index);
+                } else {
                     result_tabs_stream.display_result(index, &result);
                 }
             }
