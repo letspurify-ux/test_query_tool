@@ -322,41 +322,21 @@ impl ResultTableWidget {
         let mouse_x = app::event_x();
         let mouse_y = app::event_y();
 
-        let (origin_x, origin_y) = Self::table_origin_in_window(table);
-        // Get table area (excluding headers)
-        let table_x = origin_x + table.row_header_width();
-        let table_y = origin_y + table.col_header_height();
-
-        // Check if mouse is in the cell area
-        if mouse_x < table_x || mouse_y < table_y {
+        if table.rows() <= 0 || table.cols() <= 0 {
             return (-1, -1);
         }
 
-        // Calculate row
-        let mut row = -1i32;
-        let mut y_pos = table_y - table.row_position();
-        for r in 0..table.rows() {
-            let row_h = table.row_height(r);
-            if mouse_y >= y_pos && mouse_y < y_pos + row_h {
-                row = r;
-                break;
-            }
-            y_pos += row_h;
+        if let Some((row, col)) = Self::cell_at_point(table, mouse_x, mouse_y) {
+            return (row, col);
         }
 
-        // Calculate col
-        let mut col = -1i32;
-        let mut x_pos = table_x - table.col_position();
-        for c in 0..table.cols() {
-            let col_w = table.col_width(c);
-            if mouse_x >= x_pos && mouse_x < x_pos + col_w {
-                col = c;
-                break;
-            }
-            x_pos += col_w;
-        }
+        let row = Self::row_at_y(table, mouse_y);
+        let col = Self::col_at_x(table, mouse_x);
 
-        (row, col)
+        match (row, col) {
+            (Some(r), Some(c)) => (r, c),
+            _ => (-1, -1),
+        }
     }
 
     fn show_context_menu(table: &Table, data: &Rc<RefCell<TableData>>) {
@@ -390,16 +370,69 @@ impl ResultTableWidget {
         }
     }
 
-    fn table_origin_in_window(table: &Table) -> (i32, i32) {
-        let mut x = table.x();
-        let mut y = table.y();
-        let mut parent = table.parent();
-        while let Some(group) = parent {
-            x += group.x();
-            y += group.y();
-            parent = group.parent();
+    fn cell_at_point(table: &Table, x: i32, y: i32) -> Option<(i32, i32)> {
+        for row in 0..table.rows() {
+            for col in 0..table.cols() {
+                if let Some((cell_x, cell_y, cell_w, cell_h)) =
+                    table.find_cell(TableContext::Cell, row, col)
+                {
+                    if x >= cell_x
+                        && x < cell_x + cell_w
+                        && y >= cell_y
+                        && y < cell_y + cell_h
+                    {
+                        return Some((row, col));
+                    }
+                }
+            }
         }
-        (x, y)
+        None
+    }
+
+    fn row_at_y(table: &Table, y: i32) -> Option<i32> {
+        let mut last_row: Option<i32> = None;
+        let mut last_y_end: Option<i32> = None;
+        for row in 0..table.rows() {
+            if let Some((_, cell_y, _, cell_h)) = table.find_cell(TableContext::Cell, row, 0) {
+                last_row = Some(row);
+                last_y_end = Some(cell_y + cell_h);
+                if y < cell_y {
+                    return Some(row);
+                }
+                if y >= cell_y && y < cell_y + cell_h {
+                    return Some(row);
+                }
+            }
+        }
+        if let (Some(row), Some(end)) = (last_row, last_y_end) {
+            if y >= end {
+                return Some(row);
+            }
+        }
+        None
+    }
+
+    fn col_at_x(table: &Table, x: i32) -> Option<i32> {
+        let mut last_col: Option<i32> = None;
+        let mut last_x_end: Option<i32> = None;
+        for col in 0..table.cols() {
+            if let Some((cell_x, _, cell_w, _)) = table.find_cell(TableContext::Cell, 0, col) {
+                last_col = Some(col);
+                last_x_end = Some(cell_x + cell_w);
+                if x < cell_x {
+                    return Some(col);
+                }
+                if x >= cell_x && x < cell_x + cell_w {
+                    return Some(col);
+                }
+            }
+        }
+        if let (Some(col), Some(end)) = (last_col, last_x_end) {
+            if x >= end {
+                return Some(col);
+            }
+        }
+        None
     }
 
     fn copy_selected_to_clipboard(table: &Table, data: &Rc<RefCell<TableData>>) {
