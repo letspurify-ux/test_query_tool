@@ -235,7 +235,12 @@ impl ResultTableWidget {
     }
 
     fn show_context_menu(table: &Table, data: &Rc<RefCell<TableData>>) {
-        let mut menu = MenuButton::default();
+        // Get mouse position for proper popup placement
+        let mouse_x = app::event_x_root();
+        let mouse_y = app::event_y_root();
+
+        // Create menu at mouse position with explicit size
+        let mut menu = MenuButton::new(mouse_x, mouse_y, 0, 0, None);
         menu.set_color(Color::from_rgb(45, 45, 48));
         menu.set_text_color(Color::White);
         menu.add_choice("Copy|Copy with Headers|Copy Cell|Copy All");

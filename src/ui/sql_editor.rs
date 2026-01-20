@@ -53,6 +53,7 @@ impl SqlEditorWidget {
         group.set_type(FlexType::Column);
         group.set_margin(0);
         group.set_spacing(0);
+        group.set_frame(FrameType::FlatBox);
         group.set_color(Color::from_rgb(30, 30, 30));
 
         // Button toolbar
@@ -282,9 +283,20 @@ impl SqlEditorWidget {
                         return true;
                     }
 
-                    // Auto-trigger on typing alphanumeric characters
+                    // Hide intellisense on navigation keys or when word becomes invalid
+                    let hide_keys = matches!(
+                        key,
+                        Key::Left | Key::Right | Key::Home | Key::End | Key::PageUp | Key::PageDown
+                    );
+                    if hide_keys {
+                        intellisense_popup_for_handle.borrow_mut().hide();
+                        return false;
+                    }
+
+                    // Check current character to decide whether to show/hide intellisense
                     if let Some(ch) = fltk::app::event_text().chars().next() {
                         if ch.is_alphanumeric() || ch == '_' {
+                            // Auto-trigger on typing alphanumeric characters
                             let cursor_pos = ed.insert_position() as usize;
                             let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
 
@@ -296,7 +308,28 @@ impl SqlEditorWidget {
                                     &intellisense_data_for_handle,
                                     &intellisense_popup_for_handle,
                                 );
+                            } else {
+                                // Word too short, hide popup
+                                intellisense_popup_for_handle.borrow_mut().hide();
                             }
+                        } else {
+                            // Non-identifier character typed (space, punctuation, etc.)
+                            // Hide the intellisense popup
+                            intellisense_popup_for_handle.borrow_mut().hide();
+                        }
+                    } else if key == Key::BackSpace || key == Key::Delete {
+                        // On backspace/delete, check if we still have a valid word
+                        let cursor_pos = ed.insert_position() as usize;
+                        let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
+                        if word.len() >= 2 {
+                            Self::trigger_intellisense(
+                                ed,
+                                &buffer_for_handle,
+                                &intellisense_data_for_handle,
+                                &intellisense_popup_for_handle,
+                            );
+                        } else {
+                            intellisense_popup_for_handle.borrow_mut().hide();
                         }
                     }
 
