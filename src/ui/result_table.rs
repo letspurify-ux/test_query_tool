@@ -98,9 +98,13 @@ impl TableData {
 
 impl ResultTableWidget {
     pub fn new() -> Self {
+        Self::with_size(0, 0, 100, 100)
+    }
+
+    pub fn with_size(x: i32, y: i32, w: i32, h: i32) -> Self {
         let data = Rc::new(RefCell::new(TableData::new()));
 
-        let mut table = Table::default_fill();
+        let mut table = Table::new(x, y, w, h, None);
         table.set_rows(0);
         table.set_cols(0);
         table.set_row_header(true);
