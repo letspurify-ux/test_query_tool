@@ -1,6 +1,6 @@
 use fltk::{
     app,
-    enums::{Align, Color, Event, Font, FrameType},
+    enums::{Align, Color, Event, Font, FrameType, Key},
     menu::MenuButton,
     prelude::*,
     table::{Table, TableContext},
@@ -15,12 +15,20 @@ use crate::db::QueryResult;
 pub struct ResultTableWidget {
     table: Table,
     data: Rc<RefCell<TableData>>,
+    drag_state: Rc<RefCell<DragState>>,
 }
 
 struct TableData {
     headers: Vec<String>,
     rows: Vec<Vec<String>>,
     col_widths: Vec<i32>,
+}
+
+#[derive(Default)]
+struct DragState {
+    is_dragging: bool,
+    start_row: i32,
+    start_col: i32,
 }
 
 impl TableData {
@@ -103,16 +111,17 @@ impl ResultTableWidget {
 
     pub fn with_size(x: i32, y: i32, w: i32, h: i32) -> Self {
         let data = Rc::new(RefCell::new(TableData::new()));
+        let drag_state = Rc::new(RefCell::new(DragState::default()));
 
         let mut table = Table::new(x, y, w, h, None);
         table.set_rows(0);
         table.set_cols(0);
         table.set_row_header(true);
-        table.set_row_header_width(60);
+        table.set_row_header_width(55);
         table.set_col_header(true);
-        table.set_col_header_height(25);
-        table.set_row_height_all(25);
-        table.set_color(Color::from_rgb(30, 30, 30));
+        table.set_col_header_height(28);
+        table.set_row_height_all(26);
+        table.set_color(Color::from_rgb(30, 30, 30)); // Modern dark background
         table.set_selection_color(Color::from_rgb(38, 79, 120));
 
         let data_clone = data.clone();
@@ -121,19 +130,24 @@ impl ResultTableWidget {
 
             match ctx {
                 TableContext::StartPage => {
-                    draw::set_font(Font::Helvetica, 14);
+                    draw::set_font(Font::Helvetica, 13);
                 }
                 TableContext::ColHeader => {
                     draw::push_clip(x, y, w, h);
+                    // Modern header with subtle gradient effect
                     draw::draw_box(
                         FrameType::FlatBox,
                         x,
                         y,
                         w,
                         h,
-                        Color::from_rgb(60, 60, 63),
+                        Color::from_rgb(45, 45, 48), // Modern header background
                     );
-                    draw::set_draw_color(Color::White);
+                    // Bottom border for header
+                    draw::set_draw_color(Color::from_rgb(0, 120, 212)); // Accent line
+                    draw::draw_line(x, y + h - 1, x + w, y + h - 1);
+
+                    draw::set_draw_color(Color::from_rgb(220, 220, 220));
                     draw::set_font(Font::HelveticaBold, 12);
 
                     if let Some(header) = data.headers.get(col as usize) {
@@ -149,21 +163,21 @@ impl ResultTableWidget {
                         y,
                         w,
                         h,
-                        Color::from_rgb(60, 60, 63),
+                        Color::from_rgb(45, 45, 48), // Modern row header
                     );
-                    draw::set_draw_color(Color::White);
-                    draw::set_font(Font::Helvetica, 12);
+                    draw::set_draw_color(Color::from_rgb(140, 140, 140)); // Subtle text
+                    draw::set_font(Font::Helvetica, 11);
                     draw::draw_text2(&format!("{}", row + 1), x, y, w, h, Align::Center);
                     draw::pop_clip();
                 }
                 TableContext::Cell => {
                     draw::push_clip(x, y, w, h);
 
-                    // Alternate row colors
+                    // Modern alternating row colors
                     let bg_color = if row % 2 == 0 {
-                        Color::from_rgb(30, 30, 30)
+                        Color::from_rgb(30, 30, 30) // Even row
                     } else {
-                        Color::from_rgb(40, 40, 43)
+                        Color::from_rgb(37, 37, 38) // Odd row - subtle difference
                     };
 
                     // Check if cell is selected
@@ -174,19 +188,20 @@ impl ResultTableWidget {
                         && col <= col_right;
 
                     let bg = if is_selected {
-                        Color::from_rgb(38, 79, 120)
+                        Color::from_rgb(38, 79, 120) // Selection color
                     } else {
                         bg_color
                     };
 
                     draw::draw_box(FrameType::FlatBox, x, y, w, h, bg);
 
-                    // Draw cell border
-                    draw::set_draw_color(Color::from_rgb(60, 60, 63));
-                    draw::draw_rect(x, y, w, h);
+                    // Subtle cell border
+                    draw::set_draw_color(Color::from_rgb(50, 50, 52));
+                    draw::draw_line(x + w - 1, y, x + w - 1, y + h); // Vertical
+                    draw::draw_line(x, y + h - 1, x + w, y + h - 1); // Horizontal
 
-                    // Draw cell text
-                    draw::set_draw_color(Color::from_rgb(220, 220, 220));
+                    // Cell text
+                    draw::set_draw_color(Color::from_rgb(212, 212, 212));
                     draw::set_font(Font::Courier, 12);
 
                     if let Some(row_data) = data.rows.get(row as usize) {
@@ -196,7 +211,7 @@ impl ResultTableWidget {
                             } else {
                                 cell.clone()
                             };
-                            draw::draw_text2(&display_text, x + 5, y, w - 10, h, Align::Left);
+                            draw::draw_text2(&display_text, x + 6, y, w - 12, h, Align::Left);
                         }
                     }
                     draw::pop_clip();
@@ -205,8 +220,9 @@ impl ResultTableWidget {
             }
         });
 
-        // Setup right-click context menu for copy
+        // Setup event handler for mouse selection and keyboard shortcuts
         let data_for_handle = data.clone();
+        let drag_state_for_handle = drag_state.clone();
         table.handle(move |t, ev| {
             match ev {
                 Event::Push => {
@@ -214,15 +230,80 @@ impl ResultTableWidget {
                         Self::show_context_menu(t, &data_for_handle);
                         return true;
                     }
+                    // Left click - start drag selection
+                    if app::event_mouse_button() == app::MouseButton::Left {
+                        let (row, col) = Self::get_cell_at_mouse(t);
+                        if row >= 0 && col >= 0 {
+                            let mut state = drag_state_for_handle.borrow_mut();
+                            state.is_dragging = true;
+                            state.start_row = row;
+                            state.start_col = col;
+                            t.set_selection(row, col, row, col);
+                            t.redraw();
+                            return true;
+                        }
+                    }
+                    false
+                }
+                Event::Drag => {
+                    // Mouse drag - extend selection
+                    let state = drag_state_for_handle.borrow();
+                    if state.is_dragging {
+                        let (row, col) = Self::get_cell_at_mouse(t);
+                        if row >= 0 && col >= 0 {
+                            let (r1, r2) = if state.start_row <= row {
+                                (state.start_row, row)
+                            } else {
+                                (row, state.start_row)
+                            };
+                            let (c1, c2) = if state.start_col <= col {
+                                (state.start_col, col)
+                            } else {
+                                (col, state.start_col)
+                            };
+                            t.set_selection(r1, c1, r2, c2);
+                            t.redraw();
+                            return true;
+                        }
+                    }
+                    false
+                }
+                Event::Released => {
+                    // End drag selection
+                    let mut state = drag_state_for_handle.borrow_mut();
+                    if state.is_dragging {
+                        state.is_dragging = false;
+                        return true;
+                    }
                     false
                 }
                 Event::KeyDown => {
-                    // Ctrl+C to copy
-                    if app::event_state().contains(fltk::enums::Shortcut::Ctrl) {
-                        let key = app::event_key();
-                        if key == fltk::enums::Key::from_char('c') {
-                            Self::copy_selected_to_clipboard(t, &data_for_handle);
-                            return true;
+                    let key = app::event_key();
+                    let ctrl = app::event_state().contains(fltk::enums::Shortcut::Ctrl);
+
+                    if ctrl {
+                        match key {
+                            // Ctrl+A - Select all
+                            k if k == Key::from_char('a') => {
+                                let rows = t.rows();
+                                let cols = t.cols();
+                                if rows > 0 && cols > 0 {
+                                    t.set_selection(0, 0, rows - 1, cols - 1);
+                                    t.redraw();
+                                }
+                                return true;
+                            }
+                            // Ctrl+C - Copy selected cells
+                            k if k == Key::from_char('c') => {
+                                Self::copy_selected_to_clipboard(t, &data_for_handle);
+                                return true;
+                            }
+                            // Ctrl+H - Copy with headers
+                            k if k == Key::from_char('h') => {
+                                Self::copy_selected_with_headers(t, &data_for_handle);
+                                return true;
+                            }
+                            _ => {}
                         }
                     }
                     false
@@ -231,7 +312,48 @@ impl ResultTableWidget {
             }
         });
 
-        Self { table, data }
+        Self { table, data, drag_state }
+    }
+
+    /// Get cell row/col at current mouse position
+    fn get_cell_at_mouse(table: &Table) -> (i32, i32) {
+        let mouse_x = app::event_x();
+        let mouse_y = app::event_y();
+
+        // Get table area (excluding headers)
+        let table_x = table.x() + table.row_header_width();
+        let table_y = table.y() + table.col_header_height();
+
+        // Check if mouse is in the cell area
+        if mouse_x < table_x || mouse_y < table_y {
+            return (-1, -1);
+        }
+
+        // Calculate row
+        let mut row = -1i32;
+        let mut y_pos = table_y - table.row_position();
+        for r in 0..table.rows() {
+            let row_h = table.row_height(r);
+            if mouse_y >= y_pos && mouse_y < y_pos + row_h {
+                row = r;
+                break;
+            }
+            y_pos += row_h;
+        }
+
+        // Calculate col
+        let mut col = -1i32;
+        let mut x_pos = table_x - table.col_position();
+        for c in 0..table.cols() {
+            let col_w = table.col_width(c);
+            if mouse_x >= x_pos && mouse_x < x_pos + col_w {
+                col = c;
+                break;
+            }
+            x_pos += col_w;
+        }
+
+        (row, col)
     }
 
     fn show_context_menu(table: &Table, data: &Rc<RefCell<TableData>>) {

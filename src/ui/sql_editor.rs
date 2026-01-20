@@ -54,74 +54,76 @@ impl SqlEditorWidget {
         group.set_margin(0);
         group.set_spacing(0);
         group.set_frame(FrameType::FlatBox);
-        group.set_color(Color::from_rgb(30, 30, 30));
+        group.set_color(Color::from_rgb(37, 37, 38)); // Modern panel background
 
-        // Button toolbar
+        // Button toolbar with modern styling
         let mut button_pack = Pack::default();
         button_pack.set_type(PackType::Horizontal);
-        button_pack.set_spacing(5);
+        button_pack.set_spacing(6);
 
-        let mut execute_btn = Button::default().with_size(80, 25).with_label("Execute");
-        execute_btn.set_color(Color::from_rgb(0, 122, 204));
+        let mut execute_btn = Button::default().with_size(90, 28).with_label("@> Execute");
+        execute_btn.set_color(Color::from_rgb(0, 120, 212)); // Modern blue
         execute_btn.set_label_color(Color::White);
-        execute_btn.set_frame(FrameType::FlatBox);
+        execute_btn.set_frame(FrameType::RFlatBox);
 
-        let mut cancel_btn = Button::default().with_size(80, 25).with_label("Cancel");
-        cancel_btn.set_color(Color::from_rgb(160, 80, 0));
+        let mut cancel_btn = Button::default().with_size(80, 28).with_label("Cancel");
+        cancel_btn.set_color(Color::from_rgb(196, 107, 34)); // Modern orange
         cancel_btn.set_label_color(Color::White);
-        cancel_btn.set_frame(FrameType::FlatBox);
+        cancel_btn.set_frame(FrameType::RFlatBox);
 
-        let mut explain_btn = Button::default().with_size(80, 25).with_label("Explain");
-        explain_btn.set_color(Color::from_rgb(104, 33, 122));
+        let mut explain_btn = Button::default().with_size(80, 28).with_label("Explain");
+        explain_btn.set_color(Color::from_rgb(130, 80, 150)); // Modern purple
         explain_btn.set_label_color(Color::White);
-        explain_btn.set_frame(FrameType::FlatBox);
+        explain_btn.set_frame(FrameType::RFlatBox);
 
-        let mut clear_btn = Button::default().with_size(80, 25).with_label("Clear");
-        clear_btn.set_color(Color::from_rgb(100, 100, 100));
-        clear_btn.set_label_color(Color::White);
-        clear_btn.set_frame(FrameType::FlatBox);
+        let mut clear_btn = Button::default().with_size(70, 28).with_label("Clear");
+        clear_btn.set_color(Color::from_rgb(55, 55, 58)); // Subtle gray
+        clear_btn.set_label_color(Color::from_rgb(180, 180, 180));
+        clear_btn.set_frame(FrameType::RFlatBox);
 
-        let mut commit_btn = Button::default().with_size(80, 25).with_label("Commit");
-        commit_btn.set_color(Color::from_rgb(0, 150, 0));
+        let mut commit_btn = Button::default().with_size(80, 28).with_label("Commit");
+        commit_btn.set_color(Color::from_rgb(34, 139, 34)); // Modern green
         commit_btn.set_label_color(Color::White);
-        commit_btn.set_frame(FrameType::FlatBox);
+        commit_btn.set_frame(FrameType::RFlatBox);
 
-        let mut rollback_btn = Button::default().with_size(80, 25).with_label("Rollback");
-        rollback_btn.set_color(Color::from_rgb(200, 50, 50));
+        let mut rollback_btn = Button::default().with_size(80, 28).with_label("Rollback");
+        rollback_btn.set_color(Color::from_rgb(200, 60, 60)); // Modern red
         rollback_btn.set_label_color(Color::White);
-        rollback_btn.set_frame(FrameType::FlatBox);
+        rollback_btn.set_frame(FrameType::RFlatBox);
 
-        let mut timeout_label = Frame::default().with_size(90, 25);
+        let mut timeout_label = Frame::default().with_size(85, 28);
         timeout_label.set_label("Timeout(s)");
-        timeout_label.set_label_color(Color::from_rgb(220, 220, 220));
+        timeout_label.set_label_color(Color::from_rgb(160, 160, 160));
 
-        let mut timeout_input = IntInput::default().with_size(60, 25);
-        timeout_input.set_color(Color::from_rgb(60, 60, 63));
-        timeout_input.set_text_color(Color::White);
+        let mut timeout_input = IntInput::default().with_size(55, 28);
+        timeout_input.set_color(Color::from_rgb(45, 45, 48)); // Input background
+        timeout_input.set_text_color(Color::from_rgb(212, 212, 212));
         timeout_input.set_tooltip("Call timeout in seconds (empty = no timeout)");
 
         button_pack.end();
-        group.fixed(&button_pack, 30);
+        group.fixed(&button_pack, 34);
 
-        // SQL Editor
+        // SQL Editor with modern styling
         let buffer = TextBuffer::default();
         let style_buffer = TextBuffer::default();
         let mut editor = TextEditor::default();
         editor.set_buffer(buffer.clone());
-        editor.set_color(Color::from_rgb(30, 30, 30));
-        editor.set_text_color(Color::from_rgb(220, 220, 220));
+        editor.set_color(Color::from_rgb(30, 30, 30)); // Editor background
+        editor.set_text_color(Color::from_rgb(212, 212, 212)); // Modern text
         editor.set_text_font(Font::Courier);
         editor.set_text_size(14);
-        editor.set_cursor_color(Color::White);
+        editor.set_cursor_color(Color::from_rgb(220, 220, 220));
         editor.wrap_mode(WrapMode::AtBounds, 0);
 
-        // Set selection color
+        // Modern selection color
         editor.set_selection_color(Color::from_rgb(38, 79, 120));
 
         // Setup syntax highlighting
         let style_table = create_style_table();
         editor.set_highlight_data(style_buffer.clone(), style_table);
 
+        // Add editor to flex and make it resizable (takes remaining space)
+        group.resizable(&editor);
         group.end();
 
         let execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>> =

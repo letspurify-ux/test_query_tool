@@ -3,7 +3,7 @@ use fltk::{
     dialog::{FileDialog, FileDialogType},
     enums::{Color, Font, FrameType},
     frame::Frame,
-    group::{Flex, FlexType, Pack, PackType},
+    group::{Flex, FlexType},
     menu::MenuBar,
     prelude::*,
     text::TextBuffer,
@@ -43,7 +43,8 @@ impl MainWindow {
         let mut window = Window::default()
             .with_size(1200, 800)
             .with_label("Oracle Query Tool - Rust Edition");
-        window.set_color(Color::from_rgb(45, 45, 48));
+        // Modern dark theme - primary background
+        window.set_color(Color::from_rgb(30, 30, 30));
 
         let mut main_flex = Flex::default_fill();
         main_flex.set_type(FlexType::Column);
@@ -52,10 +53,6 @@ impl MainWindow {
         // Menu bar
         let menu_bar = MenuBarBuilder::build();
         main_flex.fixed(&menu_bar, 30);
-
-        // Toolbar
-        let toolbar = Self::create_toolbar();
-        main_flex.fixed(&toolbar, 35);
 
         // Main content area with horizontal flex for panels
         let mut content_flex = Flex::default();
@@ -87,13 +84,19 @@ impl MainWindow {
         right_flex.resizable(&result_widget);
 
         right_flex.end();
+
+        // Make right_flex resizable within content_flex
+        content_flex.resizable(&right_flex);
         content_flex.end();
 
-        // Status bar
+        // Make content_flex resizable within main_flex (takes remaining space)
+        main_flex.resizable(&content_flex);
+
+        // Status bar - modern accent color
         let mut status_bar =
             Frame::default().with_label("Not connected | Ctrl+Space for autocomplete");
         status_bar.set_frame(FrameType::FlatBox);
-        status_bar.set_color(Color::from_rgb(0, 122, 204));
+        status_bar.set_color(Color::from_rgb(0, 120, 212)); // Modern blue accent
         status_bar.set_label_color(Color::White);
         status_bar.set_label_font(Font::Helvetica);
         status_bar.set_label_size(12);
@@ -121,21 +124,6 @@ impl MainWindow {
             last_result,
             query_history,
         }
-    }
-
-    fn create_toolbar() -> Pack {
-        let mut toolbar = Pack::default().with_size(0, 35);
-        toolbar.set_type(PackType::Horizontal);
-        toolbar.set_spacing(5);
-        toolbar.set_color(Color::from_rgb(60, 60, 63));
-
-        // Spacer
-        let mut spacer = Frame::default().with_size(10, 35);
-        spacer.set_frame(FrameType::FlatBox);
-        spacer.set_color(Color::from_rgb(60, 60, 63));
-
-        toolbar.end();
-        toolbar
     }
 
     pub fn setup_callbacks(&mut self) {

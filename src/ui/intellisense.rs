@@ -164,15 +164,15 @@ pub struct IntellisensePopup {
 impl IntellisensePopup {
     pub fn new() -> Self {
         let mut window = Window::default()
-            .with_size(300, 200);
+            .with_size(320, 200);
         window.set_border(false);
-        window.set_color(Color::from_rgb(37, 37, 38));
+        window.set_color(Color::from_rgb(45, 45, 48)); // Modern popup background
 
         let mut browser = HoldBrowser::default()
-            .with_size(300, 200)
+            .with_size(320, 200)
             .with_pos(0, 0);
-        browser.set_color(Color::from_rgb(37, 37, 38));
-        browser.set_selection_color(Color::from_rgb(0, 122, 204));
+        browser.set_color(Color::from_rgb(45, 45, 48)); // Match popup
+        browser.set_selection_color(Color::from_rgb(0, 120, 212)); // Modern accent
 
         window.end();
 
@@ -294,8 +294,8 @@ impl IntellisensePopup {
 
         // Calculate popup size
         let height = (suggestions.len().min(10) * 20 + 10) as i32;
-        self.window.set_size(300, height);
-        self.browser.set_size(300, height);
+        self.window.set_size(320, height);
+        self.browser.set_size(320, height);
 
         self.window.set_pos(x, y);
         self.window.show();
