@@ -419,14 +419,20 @@ impl SqlEditorWidget {
         }
 
         // Calculate popup position based on cursor
-        let (x, y) = editor.position_to_xy(editor.insert_position());
+        // position_to_xy returns cursor position relative to the editor widget
+        let (cursor_x, cursor_y) = editor.position_to_xy(editor.insert_position());
 
-        // Get editor's absolute position
-        let editor_x = editor.x();
-        let editor_y = editor.y();
-
-        let popup_x = editor_x + x;
-        let popup_y = editor_y + y + 20; // 20 pixels below cursor
+        // Get absolute screen coordinates by getting window position
+        // and adding widget's relative position within the window
+        let (popup_x, popup_y) = if let Some(win) = fltk::app::first_window() {
+            // Window position on screen + editor position in window + cursor position in editor
+            let abs_x = win.x() + editor.x() + cursor_x;
+            let abs_y = win.y() + editor.y() + cursor_y + 20; // 20 pixels below cursor
+            (abs_x, abs_y)
+        } else {
+            // Fallback: use relative position (may not be accurate)
+            (editor.x() + cursor_x, editor.y() + cursor_y + 20)
+        };
 
         intellisense_popup
             .borrow_mut()
