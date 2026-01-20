@@ -262,19 +262,8 @@ impl MainWindow {
                                                 data.functions = funcs;
                                             }
 
-                                            // Load columns for each table
-                                            for table in &data.tables.clone() {
-                                                if let Ok(cols) =
-                                                    ObjectBrowser::get_table_columns(conn, table)
-                                                {
-                                                    let col_names: Vec<String> =
-                                                        cols.into_iter().map(|c| c.name).collect();
-                                                    highlight_data
-                                                        .columns
-                                                        .extend(col_names.clone());
-                                                    data.columns.push((table.clone(), col_names));
-                                                }
-                                            }
+                                            // Note: Column information is loaded on-demand for better performance
+                                            // Instead of loading all columns upfront, they will be loaded when needed
 
                                             *intellisense_data.borrow_mut() = data;
                                             highlighter
