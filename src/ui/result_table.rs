@@ -29,6 +29,8 @@ struct DragState {
     is_dragging: bool,
     start_row: i32,
     start_col: i32,
+    last_row: i32,
+    last_col: i32,
 }
 
 impl TableData {
@@ -239,6 +241,8 @@ impl ResultTableWidget {
                             state.is_dragging = true;
                             state.start_row = row;
                             state.start_col = col;
+                            state.last_row = row;
+                            state.last_col = col;
                             t.set_selection(row, col, row, col);
                             t.redraw();
                             return true;
@@ -250,8 +254,18 @@ impl ResultTableWidget {
                     // Mouse drag - extend selection
                     let state = drag_state_for_handle.borrow();
                     if state.is_dragging {
-                        let (row, col) = Self::get_cell_at_mouse(t);
+                        let (mut row, mut col) = Self::get_cell_at_mouse(t);
+                        if row < 0 {
+                            row = state.last_row;
+                        }
+                        if col < 0 {
+                            col = state.last_col;
+                        }
                         if row >= 0 && col >= 0 {
+                            drop(state);
+                            let mut state = drag_state_for_handle.borrow_mut();
+                            state.last_row = row;
+                            state.last_col = col;
                             let (r1, r2) = if state.start_row <= row {
                                 (state.start_row, row)
                             } else {
