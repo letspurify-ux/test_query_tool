@@ -16,8 +16,8 @@ use std::rc::Rc;
 
 use crate::db::{create_shared_connection, ObjectBrowser, QueryResult, SharedConnection};
 use crate::ui::{
-    ConnectionDialog, FindReplaceDialog, HighlightData, IntellisenseData, MenuBarBuilder,
-    ObjectBrowserWidget, QueryHistoryDialog, ResultTableWidget, SqlEditorWidget,
+    ConnectionDialog, FeatureCatalogDialog, FindReplaceDialog, HighlightData, IntellisenseData,
+    MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, ResultTableWidget, SqlEditorWidget,
 };
 use crate::utils::{QueryHistory, QueryHistoryEntry};
 use chrono::Local;
@@ -440,6 +440,9 @@ impl MainWindow {
                                     .borrow()
                                     .highlight(&sql, &mut style_buffer.clone());
                             }
+                        }
+                        "&Tools/&Feature Catalog...\t" => {
+                            FeatureCatalogDialog::show();
                         }
                         _ => {}
                     }
