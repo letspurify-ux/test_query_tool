@@ -213,9 +213,8 @@ impl MainWindow {
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
             menu.set_callback(move |m| {
                 let menu_path = m
-                    .mvalue()
-                    .and_then(|item| m.item_pathname(Some(&item)).ok())
-                    .or_else(|| m.item_pathname(None).ok())
+                    .item_pathname(None)
+                    .ok()
                     .or_else(|| m.choice().map(|path| path.to_string()));
                 if let Some(path) = menu_path {
                     let choice = path
