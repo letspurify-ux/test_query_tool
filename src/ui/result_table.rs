@@ -1,6 +1,6 @@
 use fltk::{
     app,
-    enums::{Align, Color, Event, Font, FrameType, Key},
+    enums::{Align, Color, Event, Font, FrameType, Key, Shortcut},
     menu::MenuButton,
     prelude::*,
     table::{Table, TableContext},
@@ -232,6 +232,7 @@ impl ResultTableWidget {
                     }
                     // Left click - start drag selection
                     if app::event_mouse_button() == app::MouseButton::Left {
+                        let _ = t.take_focus();
                         let (row, col) = Self::get_cell_at_mouse(t);
                         if row >= 0 && col >= 0 {
                             let mut state = drag_state_for_handle.borrow_mut();
@@ -279,7 +280,8 @@ impl ResultTableWidget {
                 }
                 Event::KeyDown => {
                     let key = app::event_key();
-                    let ctrl = app::event_state().contains(fltk::enums::Shortcut::Ctrl);
+                    let ctrl = app::event_state().contains(Shortcut::Ctrl)
+                        || app::event_state().contains(Shortcut::Command);
 
                     if ctrl {
                         match key {
@@ -320,9 +322,10 @@ impl ResultTableWidget {
         let mouse_x = app::event_x();
         let mouse_y = app::event_y();
 
+        let (origin_x, origin_y) = Self::table_origin_in_window(table);
         // Get table area (excluding headers)
-        let table_x = table.x() + table.row_header_width();
-        let table_y = table.y() + table.col_header_height();
+        let table_x = origin_x + table.row_header_width();
+        let table_y = origin_y + table.col_header_height();
 
         // Check if mouse is in the cell area
         if mouse_x < table_x || mouse_y < table_y {
@@ -358,8 +361,8 @@ impl ResultTableWidget {
 
     fn show_context_menu(table: &Table, data: &Rc<RefCell<TableData>>) {
         // Get mouse position for proper popup placement
-        let mouse_x = app::event_x_root();
-        let mouse_y = app::event_y_root();
+        let mouse_x = app::event_x();
+        let mouse_y = app::event_y();
 
         // Create menu at mouse position with explicit size
         let mut menu = MenuButton::new(mouse_x, mouse_y, 0, 0, None);
@@ -385,6 +388,18 @@ impl ResultTableWidget {
                 _ => {}
             }
         }
+    }
+
+    fn table_origin_in_window(table: &Table) -> (i32, i32) {
+        let mut x = table.x();
+        let mut y = table.y();
+        let mut parent = table.parent();
+        while let Some(group) = parent {
+            x += group.x();
+            y += group.y();
+            parent = group.parent();
+        }
+        (x, y)
     }
 
     fn copy_selected_to_clipboard(table: &Table, data: &Rc<RefCell<TableData>>) {

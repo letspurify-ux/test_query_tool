@@ -322,8 +322,8 @@ impl ObjectBrowserWidget {
     ) {
         if let Some(item_info) = Self::get_item_info(item) {
             // Get mouse position for proper popup placement
-            let mouse_x = fltk::app::event_x_root();
-            let mouse_y = fltk::app::event_y_root();
+            let mouse_x = fltk::app::event_x();
+            let mouse_y = fltk::app::event_y();
 
             let mut menu = fltk::menu::MenuButton::new(mouse_x, mouse_y, 0, 0, None);
             menu.set_color(Color::from_rgb(45, 45, 48));
