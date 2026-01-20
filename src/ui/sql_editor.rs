@@ -385,6 +385,12 @@ impl SqlEditorWidget {
 
                     false
                 }
+                Event::Shortcut => {
+                    if ed.has_focus() {
+                        return true;
+                    }
+                    false
+                }
                 Event::Paste => {
                     // Update syntax highlighting after paste
                     let text = buffer_for_handle.text();
@@ -420,13 +426,27 @@ impl SqlEditorWidget {
             return;
         }
 
-        // Use program/window-relative mouse coordinates for popup placement
-        let popup_x = fltk::app::event_x();
-        let popup_y = fltk::app::event_y() + 20;
+        // Position popup relative to the editor cursor within the window
+        let (cursor_x, cursor_y) = editor.position_to_xy(editor.insert_position());
+        let (editor_x, editor_y) = Self::widget_origin_in_window(editor);
+        let popup_x = editor_x + cursor_x;
+        let popup_y = editor_y + cursor_y + 20;
 
         intellisense_popup
             .borrow_mut()
             .show_suggestions(suggestions, popup_x, popup_y);
+    }
+
+    fn widget_origin_in_window<W: WidgetExt>(widget: &W) -> (i32, i32) {
+        let mut x = widget.x();
+        let mut y = widget.y();
+        let mut parent = widget.parent();
+        while let Some(group) = parent {
+            x += group.x();
+            y += group.y();
+            parent = group.parent();
+        }
+        (x, y)
     }
 
     /// Show quick describe dialog for a table (F4 functionality)
