@@ -116,6 +116,13 @@ impl ResultTabsWidget {
         }
     }
 
+    pub fn finish_streaming(&mut self, index: usize) {
+        if let Some(tab) = self.data.borrow().get(index) {
+            let mut table = tab.table.clone();
+            table.finish_streaming();
+        }
+    }
+
     pub fn display_result(&mut self, index: usize, result: &crate::db::QueryResult) {
         if let Some(tab) = self.data.borrow().get(index) {
             let mut table = tab.table.clone();

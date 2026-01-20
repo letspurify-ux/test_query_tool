@@ -7,14 +7,26 @@ use fltk::{
 use fltk_table::{SmartTable, TableOpts};
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use crate::db::QueryResult;
+
+/// Minimum interval between UI updates during streaming
+const UI_UPDATE_INTERVAL: Duration = Duration::from_millis(500);
+/// Maximum rows to buffer before forcing a UI update
+const MAX_BUFFERED_ROWS: usize = 1000;
 
 #[derive(Clone)]
 pub struct ResultTableWidget {
     table: SmartTable,
     headers: Rc<RefCell<Vec<String>>>,
     drag_state: Rc<RefCell<DragState>>,
+    /// Buffer for pending rows during streaming
+    pending_rows: Rc<RefCell<Vec<Vec<String>>>>,
+    /// Pending column width updates
+    pending_widths: Rc<RefCell<Vec<i32>>>,
+    /// Last UI update time
+    last_flush: Rc<RefCell<Instant>>,
 }
 
 #[derive(Default)]
@@ -144,6 +156,9 @@ impl ResultTableWidget {
             table,
             headers,
             drag_state,
+            pending_rows: Rc::new(RefCell::new(Vec::new())),
+            pending_widths: Rc::new(RefCell::new(Vec::new())),
+            last_flush: Rc::new(RefCell::new(Instant::now())),
         }
     }
 
@@ -440,6 +455,18 @@ impl ResultTableWidget {
     pub fn start_streaming(&mut self, headers: &[String]) {
         let col_count = headers.len() as i32;
 
+        // Clear any pending data from previous queries
+        self.pending_rows.borrow_mut().clear();
+        self.pending_widths.borrow_mut().clear();
+        *self.last_flush.borrow_mut() = Instant::now();
+
+        // Initialize pending widths based on headers
+        let initial_widths: Vec<i32> = headers
+            .iter()
+            .map(|h| (h.len() * 10).max(80) as i32)
+            .collect();
+        *self.pending_widths.borrow_mut() = initial_widths.clone();
+
         self.table.set_opts(TableOpts {
             rows: 0,
             cols: col_count,
@@ -453,8 +480,7 @@ impl ResultTableWidget {
 
         for (i, name) in headers.iter().enumerate() {
             self.table.set_col_header_value(i as i32, name);
-            let width = (name.len() * 10).max(80) as i32;
-            self.table.set_col_width(i as i32, width);
+            self.table.set_col_width(i as i32, initial_widths[i]);
         }
 
         *self.headers.borrow_mut() = headers.to_vec();
@@ -462,16 +488,66 @@ impl ResultTableWidget {
         app::flush();
     }
 
+    /// Append rows to the buffer. UI is updated periodically for performance.
     pub fn append_rows(&mut self, rows: Vec<Vec<String>>) {
+        // Update pending column widths
+        {
+            let mut widths = self.pending_widths.borrow_mut();
+            for row in &rows {
+                for (col_idx, cell) in row.iter().enumerate() {
+                    if col_idx < widths.len() {
+                        let cell_width = (cell.len() * 8).max(80).min(300) as i32;
+                        if cell_width > widths[col_idx] {
+                            widths[col_idx] = cell_width;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add rows to pending buffer
+        self.pending_rows.borrow_mut().extend(rows);
+
+        // Check if we should flush to UI
+        let should_flush = {
+            let elapsed = self.last_flush.borrow().elapsed();
+            let buffered_count = self.pending_rows.borrow().len();
+            elapsed >= UI_UPDATE_INTERVAL || buffered_count >= MAX_BUFFERED_ROWS
+        };
+
+        if should_flush {
+            self.flush_pending();
+        }
+    }
+
+    /// Flush all pending rows to the UI
+    pub fn flush_pending(&mut self) {
+        let rows_to_add: Vec<Vec<String>> = self.pending_rows.borrow_mut().drain(..).collect();
+        if rows_to_add.is_empty() {
+            return;
+        }
+
         let current_rows = self.table.rows();
-        let new_row_count = current_rows + rows.len() as i32;
+        let new_row_count = current_rows + rows_to_add.len() as i32;
         let cols = self.table.cols();
 
         // Resize table to accommodate new rows
         self.table.set_rows(new_row_count);
 
-        // Add new cell values
-        for (row_offset, row) in rows.iter().enumerate() {
+        // Update column widths first (batch update)
+        let widths = self.pending_widths.borrow();
+        for (col_idx, &width) in widths.iter().enumerate() {
+            if (col_idx as i32) < cols {
+                let current_width = self.table.col_width(col_idx as i32);
+                if width > current_width {
+                    self.table.set_col_width(col_idx as i32, width);
+                }
+            }
+        }
+        drop(widths);
+
+        // Add cell values
+        for (row_offset, row) in rows_to_add.iter().enumerate() {
             let row_idx = current_rows + row_offset as i32;
             for (col_idx, cell) in row.iter().enumerate() {
                 if (col_idx as i32) < cols {
@@ -481,19 +557,18 @@ impl ResultTableWidget {
                         cell.clone()
                     };
                     self.table.set_cell_value(row_idx, col_idx as i32, &display_text);
-
-                    // Update column width if needed
-                    let cell_width = (cell.len() * 8).max(80).min(300) as i32;
-                    let current_width = self.table.col_width(col_idx as i32);
-                    if cell_width > current_width {
-                        self.table.set_col_width(col_idx as i32, cell_width);
-                    }
                 }
             }
         }
 
+        *self.last_flush.borrow_mut() = Instant::now();
         self.table.redraw();
         app::flush();
+    }
+
+    /// Call this when streaming is complete to flush any remaining buffered rows
+    pub fn finish_streaming(&mut self) {
+        self.flush_pending();
     }
 
     #[allow(dead_code)]
