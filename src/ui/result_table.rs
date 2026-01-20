@@ -1,6 +1,6 @@
 use fltk::{
     app,
-    enums::{Align, Color, Event, Font, FrameType},
+    enums::{Align, Color, Event, Font, FrameType, Key},
     menu::MenuButton,
     prelude::*,
     table::{Table, TableContext},
@@ -15,12 +15,20 @@ use crate::db::QueryResult;
 pub struct ResultTableWidget {
     table: Table,
     data: Rc<RefCell<TableData>>,
+    drag_state: Rc<RefCell<DragState>>,
 }
 
 struct TableData {
     headers: Vec<String>,
     rows: Vec<Vec<String>>,
     col_widths: Vec<i32>,
+}
+
+#[derive(Default)]
+struct DragState {
+    is_dragging: bool,
+    start_row: i32,
+    start_col: i32,
 }
 
 impl TableData {
@@ -103,6 +111,7 @@ impl ResultTableWidget {
 
     pub fn with_size(x: i32, y: i32, w: i32, h: i32) -> Self {
         let data = Rc::new(RefCell::new(TableData::new()));
+        let drag_state = Rc::new(RefCell::new(DragState::default()));
 
         let mut table = Table::new(x, y, w, h, None);
         table.set_rows(0);
@@ -205,8 +214,9 @@ impl ResultTableWidget {
             }
         });
 
-        // Setup right-click context menu for copy
+        // Setup event handler for mouse selection and keyboard shortcuts
         let data_for_handle = data.clone();
+        let drag_state_for_handle = drag_state.clone();
         table.handle(move |t, ev| {
             match ev {
                 Event::Push => {
@@ -214,15 +224,80 @@ impl ResultTableWidget {
                         Self::show_context_menu(t, &data_for_handle);
                         return true;
                     }
+                    // Left click - start drag selection
+                    if app::event_mouse_button() == app::MouseButton::Left {
+                        let (row, col) = Self::get_cell_at_mouse(t);
+                        if row >= 0 && col >= 0 {
+                            let mut state = drag_state_for_handle.borrow_mut();
+                            state.is_dragging = true;
+                            state.start_row = row;
+                            state.start_col = col;
+                            t.set_selection(row, col, row, col);
+                            t.redraw();
+                            return true;
+                        }
+                    }
+                    false
+                }
+                Event::Drag => {
+                    // Mouse drag - extend selection
+                    let state = drag_state_for_handle.borrow();
+                    if state.is_dragging {
+                        let (row, col) = Self::get_cell_at_mouse(t);
+                        if row >= 0 && col >= 0 {
+                            let (r1, r2) = if state.start_row <= row {
+                                (state.start_row, row)
+                            } else {
+                                (row, state.start_row)
+                            };
+                            let (c1, c2) = if state.start_col <= col {
+                                (state.start_col, col)
+                            } else {
+                                (col, state.start_col)
+                            };
+                            t.set_selection(r1, c1, r2, c2);
+                            t.redraw();
+                            return true;
+                        }
+                    }
+                    false
+                }
+                Event::Released => {
+                    // End drag selection
+                    let mut state = drag_state_for_handle.borrow_mut();
+                    if state.is_dragging {
+                        state.is_dragging = false;
+                        return true;
+                    }
                     false
                 }
                 Event::KeyDown => {
-                    // Ctrl+C to copy
-                    if app::event_state().contains(fltk::enums::Shortcut::Ctrl) {
-                        let key = app::event_key();
-                        if key == fltk::enums::Key::from_char('c') {
-                            Self::copy_selected_to_clipboard(t, &data_for_handle);
-                            return true;
+                    let key = app::event_key();
+                    let ctrl = app::event_state().contains(fltk::enums::Shortcut::Ctrl);
+
+                    if ctrl {
+                        match key {
+                            // Ctrl+A - Select all
+                            k if k == Key::from_char('a') => {
+                                let rows = t.rows();
+                                let cols = t.cols();
+                                if rows > 0 && cols > 0 {
+                                    t.set_selection(0, 0, rows - 1, cols - 1);
+                                    t.redraw();
+                                }
+                                return true;
+                            }
+                            // Ctrl+C - Copy selected cells
+                            k if k == Key::from_char('c') => {
+                                Self::copy_selected_to_clipboard(t, &data_for_handle);
+                                return true;
+                            }
+                            // Ctrl+H - Copy with headers
+                            k if k == Key::from_char('h') => {
+                                Self::copy_selected_with_headers(t, &data_for_handle);
+                                return true;
+                            }
+                            _ => {}
                         }
                     }
                     false
@@ -231,7 +306,48 @@ impl ResultTableWidget {
             }
         });
 
-        Self { table, data }
+        Self { table, data, drag_state }
+    }
+
+    /// Get cell row/col at current mouse position
+    fn get_cell_at_mouse(table: &Table) -> (i32, i32) {
+        let mouse_x = app::event_x();
+        let mouse_y = app::event_y();
+
+        // Get table area (excluding headers)
+        let table_x = table.x() + table.row_header_width();
+        let table_y = table.y() + table.col_header_height();
+
+        // Check if mouse is in the cell area
+        if mouse_x < table_x || mouse_y < table_y {
+            return (-1, -1);
+        }
+
+        // Calculate row
+        let mut row = -1i32;
+        let mut y_pos = table_y - table.row_position();
+        for r in 0..table.rows() {
+            let row_h = table.row_height(r);
+            if mouse_y >= y_pos && mouse_y < y_pos + row_h {
+                row = r;
+                break;
+            }
+            y_pos += row_h;
+        }
+
+        // Calculate col
+        let mut col = -1i32;
+        let mut x_pos = table_x - table.col_position();
+        for c in 0..table.cols() {
+            let col_w = table.col_width(c);
+            if mouse_x >= x_pos && mouse_x < x_pos + col_w {
+                col = c;
+                break;
+            }
+            x_pos += col_w;
+        }
+
+        (row, col)
     }
 
     fn show_context_menu(table: &Table, data: &Rc<RefCell<TableData>>) {
