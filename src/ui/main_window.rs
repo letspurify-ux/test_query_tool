@@ -79,6 +79,9 @@ impl MainWindow {
         right_flex.end();
         content_tile.end();
 
+        // Add content_tile to main_flex
+        main_flex.add(&content_tile);
+
         // Status bar
         let mut status_bar =
             Frame::default().with_label("Not connected | Ctrl+Space for autocomplete");
@@ -323,6 +326,9 @@ impl MainWindow {
                                         highlighter_for_file
                                             .borrow()
                                             .highlight(&text, &mut style_buffer.clone());
+
+                                        // Focus on editor
+                                        sql_editor.focus();
 
                                         status_bar
                                             .set_label(&format!("Opened: {}", filename.display()));
