@@ -1,11 +1,10 @@
 use fltk::{
     app,
-    enums::{Align, Color, Event, Font, FrameType, Key, Shortcut},
+    enums::{Color, Event, FrameType, Key, Shortcut},
     menu::MenuButton,
     prelude::*,
-    table::{Table, TableContext},
-    draw,
 };
+use fltk_table::{SmartTable, TableOpts};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -13,15 +12,9 @@ use crate::db::QueryResult;
 
 #[derive(Clone)]
 pub struct ResultTableWidget {
-    table: Table,
-    data: Rc<RefCell<TableData>>,
+    table: SmartTable,
+    headers: Rc<RefCell<Vec<String>>>,
     drag_state: Rc<RefCell<DragState>>,
-}
-
-struct TableData {
-    headers: Vec<String>,
-    rows: Vec<Vec<String>>,
-    col_widths: Vec<i32>,
 }
 
 #[derive(Default)]
@@ -29,81 +22,6 @@ struct DragState {
     is_dragging: bool,
     start_row: i32,
     start_col: i32,
-    last_row: i32,
-    last_col: i32,
-}
-
-impl TableData {
-    fn new() -> Self {
-        Self {
-            headers: vec![],
-            rows: vec![],
-            col_widths: vec![],
-        }
-    }
-
-    fn clear(&mut self) {
-        self.headers.clear();
-        self.rows.clear();
-        self.col_widths.clear();
-    }
-
-    fn set_data(&mut self, result: &QueryResult) {
-        self.clear();
-
-        if !result.is_select {
-            return;
-        }
-
-        self.headers = result.columns.iter().map(|c| c.name.clone()).collect();
-        self.rows = result.rows.clone();
-
-        // Calculate column widths based on content
-        let mut widths: Vec<i32> = self.headers.iter().map(|h| (h.len() * 10).max(80) as i32).collect();
-
-        for row in &self.rows {
-            for (i, cell) in row.iter().enumerate() {
-                if i < widths.len() {
-                    let cell_width = (cell.len() * 8).max(80).min(300) as i32;
-                    widths[i] = widths[i].max(cell_width);
-                }
-            }
-        }
-
-        self.col_widths = widths;
-    }
-
-    fn start_streaming(&mut self, headers: &[String]) {
-        self.clear();
-        self.headers = headers.to_vec();
-        self.col_widths = self
-            .headers
-            .iter()
-            .map(|h| (h.len() * 10).max(80) as i32)
-            .collect();
-    }
-
-    fn append_rows(&mut self, rows: Vec<Vec<String>>) -> Vec<(usize, i32)> {
-        if self.headers.is_empty() {
-            return Vec::new();
-        }
-
-        let mut changed_widths: Vec<(usize, i32)> = Vec::new();
-        for row in rows {
-            for (i, cell) in row.iter().enumerate() {
-                if i < self.col_widths.len() {
-                    let cell_width = (cell.len() * 8).max(80).min(300) as i32;
-                    if cell_width > self.col_widths[i] {
-                        self.col_widths[i] = cell_width;
-                        changed_widths.push((i, cell_width));
-                    }
-                }
-            }
-            self.rows.push(row);
-        }
-
-        changed_widths
-    }
 }
 
 impl ResultTableWidget {
@@ -112,137 +30,48 @@ impl ResultTableWidget {
     }
 
     pub fn with_size(x: i32, y: i32, w: i32, h: i32) -> Self {
-        let data = Rc::new(RefCell::new(TableData::new()));
+        let headers = Rc::new(RefCell::new(Vec::new()));
         let drag_state = Rc::new(RefCell::new(DragState::default()));
 
-        let mut table = Table::new(x, y, w, h, None);
-        table.set_rows(0);
-        table.set_cols(0);
+        // Create SmartTable with dark theme styling
+        let mut table = SmartTable::new(x, y, w, h, None).with_opts(TableOpts {
+            rows: 0,
+            cols: 0,
+            editable: false,
+            cell_selection_color: Color::from_rgb(38, 79, 120),
+            header_frame: FrameType::FlatBox,
+            header_color: Color::from_rgb(45, 45, 48),
+            cell_border_color: Color::from_rgb(50, 50, 52),
+            ..Default::default()
+        });
+
+        // Apply dark theme colors
+        table.set_color(Color::from_rgb(30, 30, 30));
         table.set_row_header(true);
         table.set_row_header_width(55);
         table.set_col_header(true);
         table.set_col_header_height(28);
         table.set_row_height_all(26);
-        table.set_color(Color::from_rgb(30, 30, 30)); // Modern dark background
-        table.set_selection_color(Color::from_rgb(38, 79, 120));
-
-        let data_clone = data.clone();
-        table.draw_cell(move |t, ctx, row, col, x, y, w, h| {
-            let data = data_clone.borrow();
-
-            match ctx {
-                TableContext::StartPage => {
-                    draw::set_font(Font::Helvetica, 13);
-                }
-                TableContext::ColHeader => {
-                    draw::push_clip(x, y, w, h);
-                    // Modern header with subtle gradient effect
-                    draw::draw_box(
-                        FrameType::FlatBox,
-                        x,
-                        y,
-                        w,
-                        h,
-                        Color::from_rgb(45, 45, 48), // Modern header background
-                    );
-                    // Bottom border for header
-                    draw::set_draw_color(Color::from_rgb(0, 120, 212)); // Accent line
-                    draw::draw_line(x, y + h - 1, x + w, y + h - 1);
-
-                    draw::set_draw_color(Color::from_rgb(220, 220, 220));
-                    draw::set_font(Font::HelveticaBold, 12);
-
-                    if let Some(header) = data.headers.get(col as usize) {
-                        draw::draw_text2(header, x, y, w, h, Align::Center);
-                    }
-                    draw::pop_clip();
-                }
-                TableContext::RowHeader => {
-                    draw::push_clip(x, y, w, h);
-                    draw::draw_box(
-                        FrameType::FlatBox,
-                        x,
-                        y,
-                        w,
-                        h,
-                        Color::from_rgb(45, 45, 48), // Modern row header
-                    );
-                    draw::set_draw_color(Color::from_rgb(140, 140, 140)); // Subtle text
-                    draw::set_font(Font::Helvetica, 11);
-                    draw::draw_text2(&format!("{}", row + 1), x, y, w, h, Align::Center);
-                    draw::pop_clip();
-                }
-                TableContext::Cell => {
-                    draw::push_clip(x, y, w, h);
-
-                    // Modern alternating row colors
-                    let bg_color = if row % 2 == 0 {
-                        Color::from_rgb(30, 30, 30) // Even row
-                    } else {
-                        Color::from_rgb(37, 37, 38) // Odd row - subtle difference
-                    };
-
-                    // Check if cell is selected
-                    let (row_top, row_bot, col_left, col_right) = t.get_selection();
-                    let is_selected = row >= row_top
-                        && row <= row_bot
-                        && col >= col_left
-                        && col <= col_right;
-
-                    let bg = if is_selected {
-                        Color::from_rgb(38, 79, 120) // Selection color
-                    } else {
-                        bg_color
-                    };
-
-                    draw::draw_box(FrameType::FlatBox, x, y, w, h, bg);
-
-                    // Subtle cell border
-                    draw::set_draw_color(Color::from_rgb(50, 50, 52));
-                    draw::draw_line(x + w - 1, y, x + w - 1, y + h); // Vertical
-                    draw::draw_line(x, y + h - 1, x + w, y + h - 1); // Horizontal
-
-                    // Cell text
-                    draw::set_draw_color(Color::from_rgb(212, 212, 212));
-                    draw::set_font(Font::Courier, 12);
-
-                    if let Some(row_data) = data.rows.get(row as usize) {
-                        if let Some(cell) = row_data.get(col as usize) {
-                            let display_text = if cell.len() > 50 {
-                                format!("{}...", &cell[..47])
-                            } else {
-                                cell.clone()
-                            };
-                            draw::draw_text2(&display_text, x + 6, y, w - 12, h, Align::Left);
-                        }
-                    }
-                    draw::pop_clip();
-                }
-                _ => {}
-            }
-        });
 
         // Setup event handler for mouse selection and keyboard shortcuts
-        let data_for_handle = data.clone();
+        let headers_for_handle = headers.clone();
         let drag_state_for_handle = drag_state.clone();
+
         table.handle(move |t, ev| {
             match ev {
                 Event::Push => {
                     if app::event_mouse_button() == app::MouseButton::Right {
-                        Self::show_context_menu(t, &data_for_handle);
+                        Self::show_context_menu(t, &headers_for_handle);
                         return true;
                     }
                     // Left click - start drag selection
                     if app::event_mouse_button() == app::MouseButton::Left {
                         let _ = t.take_focus();
-                        let (row, col) = Self::get_cell_at_mouse(t);
-                        if row >= 0 && col >= 0 {
+                        if let Some((row, col)) = Self::get_cell_at_mouse(t) {
                             let mut state = drag_state_for_handle.borrow_mut();
                             state.is_dragging = true;
                             state.start_row = row;
                             state.start_col = col;
-                            state.last_row = row;
-                            state.last_col = col;
                             t.set_selection(row, col, row, col);
                             t.redraw();
                             return true;
@@ -251,22 +80,15 @@ impl ResultTableWidget {
                     false
                 }
                 Event::Drag => {
-                    // Mouse drag - extend selection
                     let is_dragging = drag_state_for_handle.borrow().is_dragging;
                     if is_dragging {
-                        let (row, col) = Self::get_cell_at_mouse(t);
-                        // get_cell_at_mouse returns (-1, -1) only when table is empty
-                        if row >= 0 && col >= 0 {
-                            let mut state = drag_state_for_handle.borrow_mut();
-                            state.last_row = row;
-                            state.last_col = col;
-
-                            // Calculate selection rectangle from start to current
+                        if let Some((row, col)) = Self::get_cell_at_mouse_for_drag(t) {
+                            let state = drag_state_for_handle.borrow();
                             let r1 = state.start_row.min(row);
                             let r2 = state.start_row.max(row);
                             let c1 = state.start_col.min(col);
                             let c2 = state.start_col.max(col);
-
+                            drop(state);
                             t.set_selection(r1, c1, r2, c2);
                             t.redraw();
                         }
@@ -275,7 +97,6 @@ impl ResultTableWidget {
                     false
                 }
                 Event::Released => {
-                    // End drag selection
                     let mut state = drag_state_for_handle.borrow_mut();
                     if state.is_dragging {
                         state.is_dragging = false;
@@ -290,8 +111,8 @@ impl ResultTableWidget {
 
                     if ctrl {
                         match key {
-                            // Ctrl+A - Select all
                             k if k == Key::from_char('a') => {
+                                // Ctrl+A - Select all
                                 let rows = t.rows();
                                 let cols = t.cols();
                                 if rows > 0 && cols > 0 {
@@ -300,14 +121,14 @@ impl ResultTableWidget {
                                 }
                                 return true;
                             }
-                            // Ctrl+C - Copy selected cells
                             k if k == Key::from_char('c') => {
-                                Self::copy_selected_to_clipboard(t, &data_for_handle);
+                                // Ctrl+C - Copy selected cells
+                                Self::copy_selected_to_clipboard(t, &headers_for_handle);
                                 return true;
                             }
-                            // Ctrl+H - Copy with headers
                             k if k == Key::from_char('h') => {
-                                Self::copy_selected_with_headers(t, &data_for_handle);
+                                // Ctrl+H - Copy with headers
+                                Self::copy_selected_with_headers(t, &headers_for_handle);
                                 return true;
                             }
                             _ => {}
@@ -319,28 +140,51 @@ impl ResultTableWidget {
             }
         });
 
-        Self { table, data, drag_state }
+        Self {
+            table,
+            headers,
+            drag_state,
+        }
     }
 
-    /// Get cell row/col at current mouse position for drag selection.
-    /// Returns boundary cells when mouse is outside the table data area.
-    fn get_cell_at_mouse(table: &Table) -> (i32, i32) {
+    /// Get cell at mouse position (returns None if outside cells)
+    fn get_cell_at_mouse(table: &SmartTable) -> Option<(i32, i32)> {
+        let mouse_x = app::event_x();
+        let mouse_y = app::event_y();
+
+        // Check each visible cell
+        for row in 0..table.rows() {
+            for col in 0..table.cols() {
+                if let Some((cx, cy, cw, ch)) =
+                    table.find_cell(fltk::table::TableContext::Cell, row, col)
+                {
+                    if mouse_x >= cx && mouse_x < cx + cw && mouse_y >= cy && mouse_y < cy + ch {
+                        return Some((row, col));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Get cell at mouse position for drag (clamps to boundaries)
+    fn get_cell_at_mouse_for_drag(table: &SmartTable) -> Option<(i32, i32)> {
         let rows = table.rows();
         let cols = table.cols();
 
         if rows <= 0 || cols <= 0 {
-            return (-1, -1);
+            return None;
         }
 
         let mouse_x = app::event_x();
         let mouse_y = app::event_y();
 
-        // Try direct cell lookup first
-        if let Some((row, col)) = Self::cell_at_point(table, mouse_x, mouse_y) {
-            return (row, col);
+        // Try direct lookup first
+        if let Some((row, col)) = Self::get_cell_at_mouse(table) {
+            return Some((row, col));
         }
 
-        // Calculate table's data area bounds (excluding headers)
+        // Calculate boundaries for clamping
         let table_x = table.x();
         let table_y = table.y();
         let table_w = table.w();
@@ -353,50 +197,61 @@ impl ResultTableWidget {
         let data_right = table_x + table_w;
         let data_bottom = table_y + table_h;
 
-        // Determine row based on mouse Y position
+        // Clamp row
         let row = if mouse_y < data_top {
-            // Mouse above data area - select first visible row
             0
         } else if mouse_y >= data_bottom {
-            // Mouse below data area - select last row
             rows - 1
         } else {
-            // Mouse within vertical bounds - find the row
-            Self::row_at_y(table, mouse_y).unwrap_or(rows - 1)
+            // Find row by iterating
+            (0..rows)
+                .find(|&r| {
+                    if let Some((_, cy, _, ch)) =
+                        table.find_cell(fltk::table::TableContext::Cell, r, 0)
+                    {
+                        mouse_y >= cy && mouse_y < cy + ch
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(rows - 1)
         };
 
-        // Determine col based on mouse X position
+        // Clamp col
         let col = if mouse_x < data_left {
-            // Mouse left of data area - select first column
             0
         } else if mouse_x >= data_right {
-            // Mouse right of data area - select last column
             cols - 1
         } else {
-            // Mouse within horizontal bounds - find the column
-            Self::col_at_x(table, mouse_x).unwrap_or(cols - 1)
+            (0..cols)
+                .find(|&c| {
+                    if let Some((cx, _, cw, _)) =
+                        table.find_cell(fltk::table::TableContext::Cell, 0, c)
+                    {
+                        mouse_x >= cx && mouse_x < cx + cw
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(cols - 1)
         };
 
-        (row, col)
+        Some((row, col))
     }
 
-    fn show_context_menu(table: &Table, data: &Rc<RefCell<TableData>>) {
-        // Get mouse position for proper popup placement
+    fn show_context_menu(table: &SmartTable, headers: &Rc<RefCell<Vec<String>>>) {
         let mouse_x = app::event_x();
         let mouse_y = app::event_y();
 
-        // Temporarily suspend current group to prevent menu widget from being
-        // added to the parent container (which causes it to appear on resize)
+        // Prevent menu from being added to parent container
         let current_group = fltk::group::Group::current();
         fltk::group::Group::set_current::<fltk::group::Group>(None);
 
-        // Create menu (now orphaned, not added to any parent)
         let mut menu = MenuButton::new(mouse_x, mouse_y, 0, 0, None);
         menu.set_color(Color::from_rgb(45, 45, 48));
         menu.set_text_color(Color::White);
         menu.add_choice("Copy|Copy with Headers|Copy Cell|Copy All");
 
-        // Restore current group
         if let Some(ref group) = current_group {
             fltk::group::Group::set_current(Some(group));
         }
@@ -404,116 +259,36 @@ impl ResultTableWidget {
         if let Some(choice) = menu.popup() {
             let choice_label = choice.label().unwrap_or_default();
             match choice_label.as_str() {
-                "Copy" => {
-                    Self::copy_selected_to_clipboard(table, data);
-                }
-                "Copy with Headers" => {
-                    Self::copy_selected_with_headers(table, data);
-                }
-                "Copy Cell" => {
-                    Self::copy_current_cell(table, data);
-                }
-                "Copy All" => {
-                    Self::copy_all_to_clipboard(data);
-                }
+                "Copy" => Self::copy_selected_to_clipboard(table, headers),
+                "Copy with Headers" => Self::copy_selected_with_headers(table, headers),
+                "Copy Cell" => Self::copy_current_cell(table),
+                "Copy All" => Self::copy_all_to_clipboard(table, headers),
                 _ => {}
             }
         }
 
-        // Ensure menu is hidden after use
         menu.hide();
     }
 
-    fn cell_at_point(table: &Table, x: i32, y: i32) -> Option<(i32, i32)> {
-        for row in 0..table.rows() {
-            for col in 0..table.cols() {
-                if let Some((cell_x, cell_y, cell_w, cell_h)) =
-                    table.find_cell(TableContext::Cell, row, col)
-                {
-                    if x >= cell_x
-                        && x < cell_x + cell_w
-                        && y >= cell_y
-                        && y < cell_y + cell_h
-                    {
-                        return Some((row, col));
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    fn row_at_y(table: &Table, y: i32) -> Option<i32> {
-        let mut last_row: Option<i32> = None;
-        let mut last_y_end: Option<i32> = None;
-        for row in 0..table.rows() {
-            if let Some((_, cell_y, _, cell_h)) = table.find_cell(TableContext::Cell, row, 0) {
-                last_row = Some(row);
-                last_y_end = Some(cell_y + cell_h);
-                if y < cell_y {
-                    return Some(row);
-                }
-                if y >= cell_y && y < cell_y + cell_h {
-                    return Some(row);
-                }
-            }
-        }
-        if let (Some(row), Some(end)) = (last_row, last_y_end) {
-            if y >= end {
-                return Some(row);
-            }
-        }
-        None
-    }
-
-    fn col_at_x(table: &Table, x: i32) -> Option<i32> {
-        let mut last_col: Option<i32> = None;
-        let mut last_x_end: Option<i32> = None;
-        for col in 0..table.cols() {
-            if let Some((cell_x, _, cell_w, _)) = table.find_cell(TableContext::Cell, 0, col) {
-                last_col = Some(col);
-                last_x_end = Some(cell_x + cell_w);
-                if x < cell_x {
-                    return Some(col);
-                }
-                if x >= cell_x && x < cell_x + cell_w {
-                    return Some(col);
-                }
-            }
-        }
-        if let (Some(col), Some(end)) = (last_col, last_x_end) {
-            if x >= end {
-                return Some(col);
-            }
-        }
-        None
-    }
-
-    fn copy_selected_to_clipboard(table: &Table, data: &Rc<RefCell<TableData>>) {
+    fn copy_selected_to_clipboard(table: &SmartTable, _headers: &Rc<RefCell<Vec<String>>>) {
         let (row_top, row_bot, col_left, col_right) = table.get_selection();
         if row_top < 0 || col_left < 0 {
             return;
         }
 
-        let data = data.borrow();
         let mut result = String::new();
-
         for row in row_top..=row_bot {
-            if let Some(row_data) = data.rows.get(row as usize) {
-                let mut row_str = String::new();
-                for col in col_left..=col_right {
-                    if let Some(cell) = row_data.get(col as usize) {
-                        if !row_str.is_empty() {
-                            row_str.push('\t');
-                        }
-                        row_str.push_str(cell);
-                    }
+            let mut row_str = String::new();
+            for col in col_left..=col_right {
+                if !row_str.is_empty() {
+                    row_str.push('\t');
                 }
-                if !result.is_empty() {
-                    result.push('\n');
-                }
-                result.push_str(&row_str);
+                row_str.push_str(&table.cell_value(row, col));
             }
+            if !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(&row_str);
         }
 
         if !result.is_empty() {
@@ -521,43 +296,39 @@ impl ResultTableWidget {
         }
     }
 
-    fn copy_selected_with_headers(table: &Table, data: &Rc<RefCell<TableData>>) {
+    fn copy_selected_with_headers(table: &SmartTable, headers: &Rc<RefCell<Vec<String>>>) {
         let (row_top, row_bot, col_left, col_right) = table.get_selection();
         if row_top < 0 || col_left < 0 {
             return;
         }
 
-        let data = data.borrow();
+        let headers = headers.borrow();
         let mut result = String::new();
 
-        // Add headers first
+        // Add headers
         let mut header_str = String::new();
         for col in col_left..=col_right {
-            if let Some(header) = data.headers.get(col as usize) {
-                if !header_str.is_empty() {
-                    header_str.push('\t');
-                }
-                header_str.push_str(header);
+            if !header_str.is_empty() {
+                header_str.push('\t');
+            }
+            if let Some(h) = headers.get(col as usize) {
+                header_str.push_str(h);
             }
         }
         result.push_str(&header_str);
         result.push('\n');
 
-        // Add data rows
+        // Add data
         for row in row_top..=row_bot {
-            if let Some(row_data) = data.rows.get(row as usize) {
-                let mut row_str = String::new();
-                for col in col_left..=col_right {
-                    if let Some(cell) = row_data.get(col as usize) {
-                        if !row_str.is_empty() {
-                            row_str.push('\t');
-                        }
-                        row_str.push_str(cell);
-                    }
+            let mut row_str = String::new();
+            for col in col_left..=col_right {
+                if !row_str.is_empty() {
+                    row_str.push('\t');
                 }
-                result.push_str(&row_str);
-                result.push('\n');
+                row_str.push_str(&table.cell_value(row, col));
             }
+            result.push_str(&row_str);
+            result.push('\n');
         }
 
         if !result.is_empty() {
@@ -565,31 +336,31 @@ impl ResultTableWidget {
         }
     }
 
-    fn copy_current_cell(table: &Table, data: &Rc<RefCell<TableData>>) {
+    fn copy_current_cell(table: &SmartTable) {
         let (row_top, _, col_left, _) = table.get_selection();
-        if row_top < 0 || col_left < 0 {
-            return;
-        }
-
-        let data = data.borrow();
-        if let Some(row_data) = data.rows.get(row_top as usize) {
-            if let Some(cell) = row_data.get(col_left as usize) {
-                app::copy(cell);
-            }
+        if row_top >= 0 && col_left >= 0 {
+            app::copy(&table.cell_value(row_top, col_left));
         }
     }
 
-    fn copy_all_to_clipboard(data: &Rc<RefCell<TableData>>) {
-        let data = data.borrow();
+    fn copy_all_to_clipboard(table: &SmartTable, headers: &Rc<RefCell<Vec<String>>>) {
+        let headers = headers.borrow();
         let mut result = String::new();
 
         // Add headers
-        result.push_str(&data.headers.join("\t"));
+        result.push_str(&headers.join("\t"));
         result.push('\n');
 
-        // Add all rows
-        for row in &data.rows {
-            result.push_str(&row.join("\t"));
+        // Add all data
+        for row in 0..table.rows() {
+            let mut row_str = String::new();
+            for col in 0..table.cols() {
+                if !row_str.is_empty() {
+                    row_str.push('\t');
+                }
+                row_str.push_str(&table.cell_value(row, col));
+            }
+            result.push_str(&row_str);
             result.push('\n');
         }
 
@@ -599,73 +370,140 @@ impl ResultTableWidget {
     }
 
     pub fn display_result(&mut self, result: &QueryResult) {
-        let (is_select, row_count, col_count, col_widths) = {
-            let mut data = self.data.borrow_mut();
-            data.set_data(result);
-
-            if result.is_select {
-                (
-                    true,
-                    data.rows.len(),
-                    data.headers.len(),
-                    data.col_widths.clone(),
-                )
-            } else {
-                (false, 0, 0, Vec::new())
-            }
-        };
-
-        if is_select {
-            self.table.set_rows(row_count as i32);
-            self.table.set_cols(col_count as i32);
-
-            for (i, width) in col_widths.iter().enumerate() {
-                self.table.set_col_width(i as i32, *width);
-            }
-        } else {
-            self.table.set_rows(0);
-            self.table.set_cols(0);
+        if !result.is_select {
+            self.table.set_opts(TableOpts {
+                rows: 0,
+                cols: 0,
+                ..Default::default()
+            });
+            self.headers.borrow_mut().clear();
+            self.table.redraw();
+            return;
         }
 
+        let col_names: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
+        let row_count = result.rows.len() as i32;
+        let col_count = col_names.len() as i32;
+
+        // Update table dimensions
+        self.table.set_opts(TableOpts {
+            rows: row_count,
+            cols: col_count,
+            editable: false,
+            cell_selection_color: Color::from_rgb(38, 79, 120),
+            header_frame: FrameType::FlatBox,
+            header_color: Color::from_rgb(45, 45, 48),
+            cell_border_color: Color::from_rgb(50, 50, 52),
+            ..Default::default()
+        });
+
+        // Set column headers
+        for (i, name) in col_names.iter().enumerate() {
+            self.table.set_col_header_value(i as i32, name);
+        }
+
+        // Calculate and set column widths
+        let mut widths: Vec<i32> = col_names
+            .iter()
+            .map(|h| (h.len() * 10).max(80) as i32)
+            .collect();
+
+        for row in &result.rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i < widths.len() {
+                    let cell_width = (cell.len() * 8).max(80).min(300) as i32;
+                    widths[i] = widths[i].max(cell_width);
+                }
+            }
+        }
+
+        for (i, width) in widths.iter().enumerate() {
+            self.table.set_col_width(i as i32, *width);
+        }
+
+        // Set cell values
+        for (row_idx, row) in result.rows.iter().enumerate() {
+            for (col_idx, cell) in row.iter().enumerate() {
+                let display_text = if cell.len() > 50 {
+                    format!("{}...", &cell[..47])
+                } else {
+                    cell.clone()
+                };
+                self.table.set_cell_value(row_idx as i32, col_idx as i32, &display_text);
+            }
+        }
+
+        *self.headers.borrow_mut() = col_names;
         self.table.redraw();
     }
 
     pub fn start_streaming(&mut self, headers: &[String]) {
-        let col_widths = {
-            let mut data = self.data.borrow_mut();
-            data.start_streaming(headers);
-            data.col_widths.clone()
-        };
+        let col_count = headers.len() as i32;
 
-        self.table.set_rows(0);
-        self.table.set_cols(headers.len() as i32);
-        for (i, width) in col_widths.iter().enumerate() {
-            self.table.set_col_width(i as i32, *width);
+        self.table.set_opts(TableOpts {
+            rows: 0,
+            cols: col_count,
+            editable: false,
+            cell_selection_color: Color::from_rgb(38, 79, 120),
+            header_frame: FrameType::FlatBox,
+            header_color: Color::from_rgb(45, 45, 48),
+            cell_border_color: Color::from_rgb(50, 50, 52),
+            ..Default::default()
+        });
+
+        for (i, name) in headers.iter().enumerate() {
+            self.table.set_col_header_value(i as i32, name);
+            let width = (name.len() * 10).max(80) as i32;
+            self.table.set_col_width(i as i32, width);
         }
+
+        *self.headers.borrow_mut() = headers.to_vec();
         self.table.redraw();
         app::flush();
     }
 
     pub fn append_rows(&mut self, rows: Vec<Vec<String>>) {
-        let (row_count, width_updates) = {
-            let mut data = self.data.borrow_mut();
-            let updates = data.append_rows(rows);
-            (data.rows.len(), updates)
-        };
+        let current_rows = self.table.rows();
+        let new_row_count = current_rows + rows.len() as i32;
+        let cols = self.table.cols();
 
-        self.table.set_rows(row_count as i32);
-        for (index, width) in width_updates {
-            self.table.set_col_width(index as i32, width);
+        // Resize table to accommodate new rows
+        self.table.set_rows(new_row_count);
+
+        // Add new cell values
+        for (row_offset, row) in rows.iter().enumerate() {
+            let row_idx = current_rows + row_offset as i32;
+            for (col_idx, cell) in row.iter().enumerate() {
+                if (col_idx as i32) < cols {
+                    let display_text = if cell.len() > 50 {
+                        format!("{}...", &cell[..47])
+                    } else {
+                        cell.clone()
+                    };
+                    self.table.set_cell_value(row_idx, col_idx as i32, &display_text);
+
+                    // Update column width if needed
+                    let cell_width = (cell.len() * 8).max(80).min(300) as i32;
+                    let current_width = self.table.col_width(col_idx as i32);
+                    if cell_width > current_width {
+                        self.table.set_col_width(col_idx as i32, cell_width);
+                    }
+                }
+            }
         }
+
         self.table.redraw();
         app::flush();
     }
 
     #[allow(dead_code)]
     pub fn clear(&mut self) {
-        self.data.borrow_mut().clear();
-        self.table.set_rows(0);
-        self.table.set_cols(0);
+        self.table.set_opts(TableOpts {
+            rows: 0,
+            cols: 0,
+            ..Default::default()
+        });
+        self.headers.borrow_mut().clear();
         self.table.redraw();
     }
 
@@ -677,25 +515,19 @@ impl ResultTableWidget {
             return None;
         }
 
-        let data = self.data.borrow();
         let mut result = String::new();
-
         for row in row_top..=row_bot {
-            if let Some(row_data) = data.rows.get(row as usize) {
-                let mut row_str = String::new();
-                for col in col_left..=col_right {
-                    if let Some(cell) = row_data.get(col as usize) {
-                        if !row_str.is_empty() {
-                            row_str.push('\t');
-                        }
-                        row_str.push_str(cell);
-                    }
+            let mut row_str = String::new();
+            for col in col_left..=col_right {
+                if !row_str.is_empty() {
+                    row_str.push('\t');
                 }
-                if !result.is_empty() {
-                    result.push('\n');
-                }
-                result.push_str(&row_str);
+                row_str.push_str(&self.table.cell_value(row, col));
             }
+            if !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(&row_str);
         }
 
         if result.is_empty() {
@@ -707,29 +539,27 @@ impl ResultTableWidget {
 
     /// Export all data to CSV format
     pub fn export_to_csv(&self) -> String {
-        let data = self.data.borrow();
+        let headers = self.headers.borrow();
         let mut csv = String::new();
 
         // Header row
-        let header_line: Vec<String> = data
-            .headers
-            .iter()
-            .map(|h| Self::escape_csv_field(h))
-            .collect();
+        let header_line: Vec<String> = headers.iter().map(|h| Self::escape_csv_field(h)).collect();
         csv.push_str(&header_line.join(","));
         csv.push('\n');
 
         // Data rows
-        for row in &data.rows {
-            let row_line: Vec<String> = row.iter().map(|c| Self::escape_csv_field(c)).collect();
-            csv.push_str(&row_line.join(","));
+        for row in 0..self.table.rows() {
+            let mut row_fields = Vec::new();
+            for col in 0..self.table.cols() {
+                row_fields.push(Self::escape_csv_field(&self.table.cell_value(row, col)));
+            }
+            csv.push_str(&row_fields.join(","));
             csv.push('\n');
         }
 
         csv
     }
 
-    /// Escape a CSV field (add quotes if needed)
     fn escape_csv_field(field: &str) -> String {
         if field.contains(',') || field.contains('"') || field.contains('\n') {
             format!("\"{}\"", field.replace('"', "\"\""))
@@ -738,18 +568,15 @@ impl ResultTableWidget {
         }
     }
 
-    /// Get row count
     pub fn row_count(&self) -> usize {
-        self.data.borrow().rows.len()
+        self.table.rows() as usize
     }
 
-    /// Check if there is data
     pub fn has_data(&self) -> bool {
-        !self.data.borrow().rows.is_empty()
+        self.table.rows() > 0
     }
 
-    /// Get the table widget
-    pub fn get_widget(&self) -> Table {
+    pub fn get_widget(&self) -> SmartTable {
         self.table.clone()
     }
 }

@@ -7,6 +7,7 @@ authors = ["Developer"]
 
 [dependencies]
 fltk = "1.4"
+fltk-table = "0.3"
 oracle = "0.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
