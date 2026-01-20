@@ -1,4 +1,8 @@
 use std::collections::BTreeMap;
+use std::env;
+use std::path::PathBuf;
+
+use serde::Deserialize;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FeatureDefinition {
@@ -8,31 +12,108 @@ pub struct FeatureDefinition {
     pub description: &'static str,
 }
 
+#[derive(Debug, Clone)]
+pub struct FeatureCatalog {
+    pub features: Vec<FeatureDefinition>,
+    pub total_count: usize,
+    pub implemented_count: usize,
+    pub external_count: usize,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ExternalFeatureDefinition {
+    name: String,
+    category: String,
+    implemented: bool,
+    description: String,
+}
+
+pub fn load_feature_catalog() -> FeatureCatalog {
+    let mut features = FEATURES.to_vec();
+    let external_features = load_external_features();
+    let external_count = external_features.len();
+    features.extend(external_features);
+
+    let total_count = features.len();
+    let implemented_count = features
+        .iter()
+        .filter(|feature| feature.implemented)
+        .count();
+
+    FeatureCatalog {
+        features,
+        total_count,
+        implemented_count,
+        external_count,
+    }
+}
+
 pub fn list_features() -> Vec<FeatureDefinition> {
-    FEATURES.to_vec()
+    load_feature_catalog().features
 }
 
 pub fn total_count() -> usize {
-    FEATURES.len()
+    load_feature_catalog().total_count
 }
 
 pub fn implemented_count() -> usize {
-    FEATURES
-        .iter()
-        .filter(|feature| feature.implemented)
-        .count()
+    load_feature_catalog().implemented_count
 }
 
 pub fn build_catalog_text() -> String {
+    let catalog = load_feature_catalog();
+    build_catalog_text_filtered(&catalog, "", true, true)
+}
+
+pub fn build_catalog_text_filtered(
+    catalog: &FeatureCatalog,
+    filter: &str,
+    show_implemented: bool,
+    show_planned: bool,
+) -> String {
     let mut output = String::new();
-    let features = list_features();
-    let total = features.len();
-    let implemented = implemented_count();
+    let mut features = catalog.features.clone();
+    let total = catalog.total_count;
+    let implemented = catalog.implemented_count;
+    let filter_lower = filter.trim().to_lowercase();
+
+    features.retain(|feature| {
+        let matches_filter = if filter_lower.is_empty() {
+            true
+        } else {
+            let haystack = format!(
+                "{} {} {}",
+                feature.category, feature.name, feature.description
+            )
+            .to_lowercase();
+            haystack.contains(&filter_lower)
+        };
+
+        if feature.implemented {
+            matches_filter && show_implemented
+        } else {
+            matches_filter && show_planned
+        }
+    });
+
+    let matching_total = features.len();
+    let matching_implemented = features
+        .iter()
+        .filter(|feature| feature.implemented)
+        .count();
 
     output.push_str(&format!(
-        "Toad Core Feature Catalog (Implemented: {implemented}/{total})\n"
+        "Toad Core Feature Catalog (Implemented: {implemented}/{total}, External: {external_count})\n",
+        external_count = catalog.external_count
     ));
-    output.push_str("Status: [✓ Implemented] [• Planned]\n\n");
+    output.push_str(&format!(
+        "Filtered: {matching_implemented}/{matching_total} | Status: [✓ Implemented] [• Planned]\n\n"
+    ));
+
+    if features.is_empty() {
+        output.push_str("No matching features.\n");
+        return output;
+    }
 
     let mut grouped: BTreeMap<&'static str, Vec<FeatureDefinition>> = BTreeMap::new();
     for feature in features {
@@ -54,6 +135,48 @@ pub fn build_catalog_text() -> String {
     }
 
     output
+}
+
+fn load_external_features() -> Vec<FeatureDefinition> {
+    let Some(path) = external_features_path() else {
+        return Vec::new();
+    };
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(_) => return Vec::new(),
+    };
+
+    let parsed: Vec<ExternalFeatureDefinition> = match serde_json::from_str(&content) {
+        Ok(parsed) => parsed,
+        Err(_) => return Vec::new(),
+    };
+
+    parsed
+        .into_iter()
+        .map(|feature| FeatureDefinition {
+            name: Box::leak(feature.name.into_boxed_str()),
+            category: Box::leak(feature.category.into_boxed_str()),
+            implemented: feature.implemented,
+            description: Box::leak(feature.description.into_boxed_str()),
+        })
+        .collect()
+}
+
+fn external_features_path() -> Option<PathBuf> {
+    if let Ok(path) = env::var("TOAD_FEATURE_CATALOG_PATH") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+
+    let default_path = PathBuf::from("toad_manual_features.json");
+    if default_path.exists() {
+        return Some(default_path);
+    }
+
+    None
 }
 
 static FEATURES: &[FeatureDefinition] = &[
