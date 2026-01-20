@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone)]
 pub struct ColumnInfo {
     pub name: String,
+    #[allow(dead_code)]
     pub data_type: String,
 }
 
@@ -99,6 +100,7 @@ impl QueryExecutor {
 
         if statements.is_empty() {
             return Ok(QueryResult {
+                sql: sql.to_string(),
                 columns: vec![],
                 rows: vec![],
                 row_count: 0,
@@ -149,7 +151,8 @@ impl QueryExecutor {
                 );
             }
             if !error_messages.is_empty() {
-                result.message = format!("{} | Errors: {}", result.message, error_messages.join("; "));
+                result.message =
+                    format!("{} | Errors: {}", result.message, error_messages.join("; "));
             }
             Ok(result)
         } else {
@@ -170,6 +173,7 @@ impl QueryExecutor {
             };
 
             Ok(QueryResult {
+                sql: sql.to_string(),
                 columns: vec![],
                 rows: vec![],
                 row_count: total_affected as usize,
@@ -195,7 +199,11 @@ impl QueryExecutor {
 
         while i < len {
             let c = chars[i];
-            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+            let next = if i + 1 < len {
+                Some(chars[i + 1])
+            } else {
+                None
+            };
 
             // Handle line comment
             if !in_single_quote && !in_double_quote && !in_block_comment {
@@ -278,6 +286,7 @@ impl QueryExecutor {
     }
 
     /// Enable DBMS_OUTPUT for the session
+    #[allow(dead_code)]
     pub fn enable_dbms_output(conn: &Connection, buffer_size: u32) -> Result<(), OracleError> {
         let sql = format!("BEGIN DBMS_OUTPUT.ENABLE({}); END;", buffer_size);
         conn.execute(&sql, &[])?;
@@ -285,16 +294,18 @@ impl QueryExecutor {
     }
 
     /// Disable DBMS_OUTPUT for the session
+    #[allow(dead_code)]
     pub fn disable_dbms_output(conn: &Connection) -> Result<(), OracleError> {
         conn.execute("BEGIN DBMS_OUTPUT.DISABLE; END;", &[])?;
         Ok(())
     }
 
     /// Get DBMS_OUTPUT lines using a simple approach
-    pub fn get_dbms_output(conn: &Connection) -> Result<Vec<String>, OracleError> {
+    #[allow(dead_code)]
+    pub fn get_dbms_output(_conn: &Connection) -> Result<Vec<String>, OracleError> {
         // Use a PL/SQL block that collects all output into a temporary table or returns via cursor
         // For simplicity, we'll use DBMS_OUTPUT.GET_LINES via anonymous block
-        let sql = r#"
+        let _sql = r#"
             SELECT column_value
             FROM TABLE(
                 CAST(
@@ -316,19 +327,19 @@ impl QueryExecutor {
         "#;
 
         // Simpler approach: read lines in a loop
-        let mut lines = Vec::new();
+        let lines = Vec::new();
         let max_lines = 10000;
 
         for _ in 0..max_lines {
             // Use a query to check if there's output
-            let check_sql = r#"
+            let _check_sql = r#"
                 SELECT * FROM (
                     SELECT 1 FROM DUAL WHERE 1=0
                 )
             "#;
 
             // Try getting one line at a time using DBMS_SQL or direct approach
-            let plsql = r#"
+            let _plsql = r#"
                 DECLARE
                     v_line VARCHAR2(32767);
                     v_status INTEGER;
@@ -354,7 +365,11 @@ impl QueryExecutor {
 
     /// Execute with DBMS_OUTPUT capture (simplified version)
     /// Note: Full DBMS_OUTPUT capture requires session-level setup
-    pub fn execute_with_output(conn: &Connection, sql: &str) -> Result<(QueryResult, Vec<String>), OracleError> {
+    #[allow(dead_code)]
+    pub fn execute_with_output(
+        conn: &Connection,
+        sql: &str,
+    ) -> Result<(QueryResult, Vec<String>), OracleError> {
         // Enable DBMS_OUTPUT before execution
         let _ = Self::enable_dbms_output(conn, 1000000);
 
@@ -702,6 +717,7 @@ pub struct TableColumnDetail {
     pub data_precision: Option<i32>,
     pub data_scale: Option<i32>,
     pub nullable: bool,
+    #[allow(dead_code)]
     pub default_value: Option<String>,
     pub is_primary_key: bool,
 }

@@ -71,6 +71,7 @@ pub fn create_style_table() -> Vec<StyleTableEntry> {
 
 /// SQL Token types
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 enum TokenType {
     Default,
     Keyword,

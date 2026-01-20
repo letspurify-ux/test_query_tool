@@ -16,8 +16,8 @@ use std::rc::Rc;
 
 use crate::db::{create_shared_connection, ObjectBrowser, QueryResult, SharedConnection};
 use crate::ui::{
-    ConnectionDialog, FindReplaceDialog, HighlightData, IntellisenseData, MenuBarBuilder,
-    ObjectBrowserWidget, QueryHistoryDialog, ResultTableWidget, SqlEditorWidget,
+    ConnectionDialog, FeatureCatalogDialog, FindReplaceDialog, HighlightData, IntellisenseData,
+    MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, ResultTableWidget, SqlEditorWidget,
 };
 use crate::utils::{QueryHistory, QueryHistoryEntry};
 use chrono::Local;
@@ -199,7 +199,6 @@ impl MainWindow {
         let mut object_browser = self.object_browser.clone();
         let intellisense_data = self.sql_editor.get_intellisense_data();
         let highlighter = self.sql_editor.get_highlighter();
-        let sql_editor = self.sql_editor.clone();
         let mut sql_buffer = self.sql_buffer.clone();
         let current_file = self.current_file.clone();
         let mut window = self.window.clone();
@@ -214,8 +213,9 @@ impl MainWindow {
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
             menu.set_callback(move |m| {
                 if let Some(path) = m.choice() {
-                    match path.as_str() {
-                        "&File/&Connect...\t" => {
+                    let choice = path.split('\t').next().unwrap_or(path.as_str()).trim();
+                    match choice {
+                        "&File/&Connect..." => {
                             if let Some(info) = ConnectionDialog::show() {
                                 let mut db_conn = connection.lock().unwrap();
                                 match db_conn.connect(info.clone()) {
@@ -284,7 +284,7 @@ impl MainWindow {
                                 }
                             }
                         }
-                        "&File/&Disconnect\t" => {
+                        "&File/&Disconnect" => {
                             let mut db_conn = connection.lock().unwrap();
                             db_conn.disconnect();
                             status_bar.set_label("Disconnected | Ctrl+Space for autocomplete");
@@ -295,7 +295,7 @@ impl MainWindow {
                                 .borrow_mut()
                                 .set_highlight_data(HighlightData::new());
                         }
-                        "&File/&Open SQL File...\t" => {
+                        "&File/&Open SQL File..." => {
                             let mut dialog = FileDialog::new(FileDialogType::BrowseFile);
                             dialog.set_title("Open SQL File");
                             dialog.set_filter("SQL Files\t*.sql\nAll Files\t*");
@@ -336,7 +336,7 @@ impl MainWindow {
                                 }
                             }
                         }
-                        "&File/&Save SQL File...\t" => {
+                        "&File/&Save SQL File..." => {
                             let current = current_file.borrow().clone();
                             let save_path = if let Some(path) = current {
                                 Some(path)
@@ -385,10 +385,10 @@ impl MainWindow {
                                 }
                             }
                         }
-                        "&File/E&xit\t" => {
+                        "&File/E&xit" => {
                             app::quit();
                         }
-                        "&Tools/&Export Results...\t" => {
+                        "&Tools/&Export Results..." => {
                             if !result_table_export.has_data() {
                                 fltk::dialog::alert_default("No data to export");
                                 return;
@@ -426,13 +426,13 @@ impl MainWindow {
                                 }
                             }
                         }
-                        "&Edit/&Find...\t" => {
+                        "&Edit/&Find..." => {
                             FindReplaceDialog::show_find(&mut editor, &mut editor_buffer);
                         }
-                        "&Edit/&Replace...\t" => {
+                        "&Edit/&Replace..." => {
                             FindReplaceDialog::show_replace(&mut editor, &mut editor_buffer);
                         }
-                        "&Tools/Query &History...\t" => {
+                        "&Tools/Query &History..." => {
                             if let Some(sql) = QueryHistoryDialog::show() {
                                 sql_buffer.set_text(&sql);
                                 // Refresh highlighting
@@ -440,6 +440,9 @@ impl MainWindow {
                                     .borrow()
                                     .highlight(&sql, &mut style_buffer.clone());
                             }
+                        }
+                        "&Tools/&Feature Catalog..." => {
+                            FeatureCatalogDialog::show();
                         }
                         _ => {}
                     }
@@ -466,6 +469,7 @@ impl MainWindow {
         app.run().unwrap();
     }
 
+    #[allow(dead_code)]
     fn export_results_csv(
         path: &PathBuf,
         result: &QueryResult,
@@ -485,6 +489,7 @@ impl MainWindow {
         Ok(())
     }
 
+    #[allow(dead_code)]
     fn csv_row(values: &[String]) -> String {
         values
             .iter()
@@ -493,6 +498,7 @@ impl MainWindow {
             .join(",")
     }
 
+    #[allow(dead_code)]
     fn csv_escape(value: &str) -> String {
         if value.contains(',') || value.contains('"') || value.contains('\n') {
             format!("\"{}\"", value.replace('"', "\"\""))
@@ -501,6 +507,7 @@ impl MainWindow {
         }
     }
 
+    #[allow(dead_code)]
     fn format_query_history(history: &QueryHistory) -> String {
         if history.queries.is_empty() {
             return "No query history yet.".to_string();
