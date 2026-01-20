@@ -122,6 +122,8 @@ impl SqlEditorWidget {
         let style_table = create_style_table();
         editor.set_highlight_data(style_buffer.clone(), style_table);
 
+        // Add editor to flex and make it resizable (takes remaining space)
+        group.resizable(&editor);
         group.end();
 
         let execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>> =

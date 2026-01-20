@@ -83,7 +83,13 @@ impl MainWindow {
         right_flex.resizable(&result_widget);
 
         right_flex.end();
+
+        // Make right_flex resizable within content_flex
+        content_flex.resizable(&right_flex);
         content_flex.end();
+
+        // Make content_flex resizable within main_flex (takes remaining space)
+        main_flex.resizable(&content_flex);
 
         // Status bar
         let mut status_bar =

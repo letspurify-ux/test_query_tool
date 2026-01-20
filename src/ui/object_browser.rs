@@ -85,6 +85,8 @@ impl ObjectBrowserWidget {
         tree.add("Sequences");
         tree.add("Packages");
 
+        // Make tree resizable (takes remaining space after filter input)
+        flex.resizable(&tree);
         flex.end();
 
         // Close all items by default
