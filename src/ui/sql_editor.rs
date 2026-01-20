@@ -328,7 +328,7 @@ impl SqlEditorWidget {
     /// Show quick describe dialog for a table (F4 functionality)
     fn show_quick_describe(conn: &oracle::Connection, object_name: &str) {
         use crate::db::ObjectBrowser;
-        use fltk::{prelude::*, text::TextDisplay, window::Window, enums::Color};
+        use fltk::{enums::Color, prelude::*, text::TextDisplay, window::Window};
 
         // Try to get table structure
         match ObjectBrowser::get_table_structure(conn, object_name) {
@@ -366,9 +366,7 @@ impl SqlEditorWidget {
                 dialog.set_color(Color::from_rgb(45, 45, 48));
                 dialog.make_modal(true);
 
-                let mut display = TextDisplay::default()
-                    .with_pos(10, 10)
-                    .with_size(580, 340);
+                let mut display = TextDisplay::default().with_pos(10, 10).with_size(580, 340);
                 display.set_color(Color::from_rgb(30, 30, 30));
                 display.set_text_color(Color::from_rgb(220, 220, 220));
                 display.set_text_font(fltk::enums::Font::Courier);
@@ -414,7 +412,9 @@ impl SqlEditorWidget {
         mut commit_btn: Button,
         mut rollback_btn: Button,
     ) {
-        let widget = self.clone();
+        let buffer = self.buffer.clone();
+        let connection = self.connection.clone();
+        let callback = self.execute_callback.clone();
         execute_btn.set_callback(move |_| {
             let sql = buffer.text();
             if sql.trim().is_empty() {
@@ -433,7 +433,7 @@ impl SqlEditorWidget {
                 // Use batch execution to support multiple statements
                 let result = match QueryExecutor::execute_batch(db_conn, &sql) {
                     Ok(result) => result,
-                    Err(e) => QueryResult::new_error(&e.to_string()),
+                    Err(e) => QueryResult::new_error(&sql, &e.to_string()),
                 };
 
                 // Save to query history
@@ -469,6 +469,108 @@ impl SqlEditorWidget {
         rollback_btn.set_callback(move |_| {
             widget.rollback();
         });
+    }
+
+    fn explain_current(&self) {
+        let sql = self.buffer.text();
+        if sql.trim().is_empty() {
+            fltk::dialog::alert_default("No SQL to explain");
+            return;
+        }
+
+        let conn_guard = self.connection.lock().unwrap();
+        if !conn_guard.is_connected() {
+            fltk::dialog::alert_default("Not connected to database");
+            return;
+        }
+
+        if let Some(db_conn) = conn_guard.get_connection() {
+            match QueryExecutor::get_explain_plan(db_conn, &sql) {
+                Ok(plan_lines) => {
+                    let plan_text = if plan_lines.is_empty() {
+                        "No plan output.".to_string()
+                    } else {
+                        plan_lines.join("\n")
+                    };
+                    Self::show_plan_dialog(&plan_text);
+                }
+                Err(err) => {
+                    fltk::dialog::alert_default(&format!("Failed to explain plan: {}", err));
+                }
+            }
+        }
+    }
+
+    fn show_plan_dialog(plan_text: &str) {
+        use fltk::{enums::Color, prelude::*, text::TextDisplay, window::Window};
+
+        let mut dialog = Window::default()
+            .with_size(800, 500)
+            .with_label("Explain Plan");
+        dialog.set_color(Color::from_rgb(45, 45, 48));
+        dialog.make_modal(true);
+
+        let mut display = TextDisplay::default().with_pos(10, 10).with_size(780, 440);
+        display.set_color(Color::from_rgb(30, 30, 30));
+        display.set_text_color(Color::from_rgb(220, 220, 220));
+        display.set_text_font(fltk::enums::Font::Courier);
+        display.set_text_size(12);
+
+        let mut buffer = fltk::text::TextBuffer::default();
+        buffer.set_text(plan_text);
+        display.set_buffer(buffer);
+
+        let mut close_btn = fltk::button::Button::default()
+            .with_pos(690, 455)
+            .with_size(100, 30)
+            .with_label("Close");
+        close_btn.set_color(Color::from_rgb(0, 122, 204));
+        close_btn.set_label_color(Color::White);
+
+        let mut dialog_clone = dialog.clone();
+        close_btn.set_callback(move |_| {
+            dialog_clone.hide();
+        });
+
+        dialog.end();
+        dialog.show();
+
+        while dialog.shown() {
+            fltk::app::wait();
+        }
+    }
+
+    fn clear(&self) {
+        let mut buffer = self.buffer.clone();
+        buffer.set_text("");
+    }
+
+    fn commit(&self) {
+        let conn_guard = self.connection.lock().unwrap();
+        if !conn_guard.is_connected() {
+            fltk::dialog::alert_default("Not connected to database");
+            return;
+        }
+
+        if let Some(db_conn) = conn_guard.get_connection() {
+            if let Err(err) = db_conn.commit() {
+                fltk::dialog::alert_default(&format!("Commit failed: {}", err));
+            }
+        }
+    }
+
+    fn rollback(&self) {
+        let conn_guard = self.connection.lock().unwrap();
+        if !conn_guard.is_connected() {
+            fltk::dialog::alert_default("Not connected to database");
+            return;
+        }
+
+        if let Some(db_conn) = conn_guard.get_connection() {
+            if let Err(err) = db_conn.rollback() {
+                fltk::dialog::alert_default(&format!("Rollback failed: {}", err));
+            }
+        }
     }
 
     pub fn set_execute_callback<F>(&mut self, callback: F)

@@ -99,6 +99,7 @@ impl QueryExecutor {
 
         if statements.is_empty() {
             return Ok(QueryResult {
+                sql: sql.to_string(),
                 columns: vec![],
                 rows: vec![],
                 row_count: 0,
@@ -149,7 +150,8 @@ impl QueryExecutor {
                 );
             }
             if !error_messages.is_empty() {
-                result.message = format!("{} | Errors: {}", result.message, error_messages.join("; "));
+                result.message =
+                    format!("{} | Errors: {}", result.message, error_messages.join("; "));
             }
             Ok(result)
         } else {
@@ -170,6 +172,7 @@ impl QueryExecutor {
             };
 
             Ok(QueryResult {
+                sql: sql.to_string(),
                 columns: vec![],
                 rows: vec![],
                 row_count: total_affected as usize,
@@ -195,7 +198,11 @@ impl QueryExecutor {
 
         while i < len {
             let c = chars[i];
-            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+            let next = if i + 1 < len {
+                Some(chars[i + 1])
+            } else {
+                None
+            };
 
             // Handle line comment
             if !in_single_quote && !in_double_quote && !in_block_comment {
@@ -354,7 +361,10 @@ impl QueryExecutor {
 
     /// Execute with DBMS_OUTPUT capture (simplified version)
     /// Note: Full DBMS_OUTPUT capture requires session-level setup
-    pub fn execute_with_output(conn: &Connection, sql: &str) -> Result<(QueryResult, Vec<String>), OracleError> {
+    pub fn execute_with_output(
+        conn: &Connection,
+        sql: &str,
+    ) -> Result<(QueryResult, Vec<String>), OracleError> {
         // Enable DBMS_OUTPUT before execution
         let _ = Self::enable_dbms_output(conn, 1000000);
 
