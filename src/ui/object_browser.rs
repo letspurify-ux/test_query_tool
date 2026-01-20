@@ -25,6 +25,7 @@ struct ObjectCache {
 
 #[derive(Clone)]
 pub struct ObjectBrowserWidget {
+    flex: Flex,
     tree: Tree,
     connection: SharedConnection,
     sql_callback: SqlExecuteCallback,
@@ -88,6 +89,7 @@ impl ObjectBrowserWidget {
         let object_cache = Rc::new(RefCell::new(ObjectCache::default()));
 
         let mut widget = Self {
+            flex,
             tree,
             connection,
             filter_input,
@@ -97,6 +99,10 @@ impl ObjectBrowserWidget {
         widget.setup_callbacks();
         widget.setup_filter_callback();
         widget
+    }
+
+    pub fn get_widget(&self) -> Flex {
+        self.flex.clone()
     }
 
     fn setup_filter_callback(&mut self) {

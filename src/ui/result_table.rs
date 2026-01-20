@@ -451,6 +451,11 @@ impl ResultTableWidget {
     pub fn has_data(&self) -> bool {
         !self.data.borrow().rows.is_empty()
     }
+
+    /// Get the table widget
+    pub fn get_widget(&self) -> Table {
+        self.table.clone()
+    }
 }
 
 impl Default for ResultTableWidget {

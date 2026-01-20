@@ -3,7 +3,7 @@ use fltk::{
     dialog::{FileDialog, FileDialogType},
     enums::{Color, Font, FrameType},
     frame::Frame,
-    group::{Flex, FlexType, Pack, PackType, Tile},
+    group::{Flex, FlexType, Pack, PackType},
     menu::MenuBar,
     prelude::*,
     text::TextBuffer,
@@ -56,17 +56,22 @@ impl MainWindow {
         let toolbar = Self::create_toolbar();
         main_flex.fixed(&toolbar, 35);
 
-        // Main content area with Tile for resizable panels
-        let mut content_tile = Tile::default();
-        content_tile.set_color(Color::from_rgb(45, 45, 48));
+        // Main content area with horizontal flex for panels
+        let mut content_flex = Flex::default();
+        content_flex.set_type(FlexType::Row);
+        content_flex.set_margin(0);
+        content_flex.set_spacing(0);
 
-        // Left panel - Object Browser (200px wide)
-        let object_browser = ObjectBrowserWidget::new(0, 0, 200, 600, connection.clone());
+        // Left panel - Object Browser
+        let object_browser = ObjectBrowserWidget::new(0, 0, 250, 600, connection.clone());
+        let obj_browser_widget = object_browser.get_widget();
+        content_flex.fixed(&obj_browser_widget, 250);
 
         // Right panel - Editor and Results
-        let mut right_flex = Flex::default().with_pos(200, 0).with_size(1000, 600);
+        let mut right_flex = Flex::default();
         right_flex.set_type(FlexType::Column);
         right_flex.set_margin(5);
+        right_flex.set_spacing(5);
 
         // SQL Editor
         let sql_editor = SqlEditorWidget::new(connection.clone());
@@ -75,12 +80,11 @@ impl MainWindow {
 
         // Result Table
         let result_table = ResultTableWidget::new();
+        let result_widget = result_table.get_widget();
+        right_flex.add(&result_widget);
 
         right_flex.end();
-        content_tile.end();
-
-        // Add content_tile to main_flex
-        main_flex.add(&content_tile);
+        content_flex.end();
 
         // Status bar
         let mut status_bar =
