@@ -412,42 +412,9 @@ impl SqlEditorWidget {
         mut commit_btn: Button,
         mut rollback_btn: Button,
     ) {
-        let buffer = self.buffer.clone();
-        let connection = self.connection.clone();
-        let callback = self.execute_callback.clone();
+        let widget = self.clone();
         execute_btn.set_callback(move |_| {
-            let sql = buffer.text();
-            if sql.trim().is_empty() {
-                return;
-            }
-
-            let conn_guard = connection.lock().unwrap();
-            if !conn_guard.is_connected() {
-                fltk::dialog::alert_default("Not connected to database");
-                return;
-            }
-
-            let conn_name = conn_guard.get_info().name.clone();
-
-            if let Some(db_conn) = conn_guard.get_connection() {
-                // Use batch execution to support multiple statements
-                let result = match QueryExecutor::execute_batch(db_conn, &sql) {
-                    Ok(result) => result,
-                    Err(e) => QueryResult::new_error(&sql, &e.to_string()),
-                };
-
-                // Save to query history
-                QueryHistoryDialog::add_to_history(
-                    &sql,
-                    result.execution_time.as_millis() as u64,
-                    result.row_count,
-                    &conn_name,
-                );
-
-                if let Some(ref mut cb) = *callback.borrow_mut() {
-                    cb(result);
-                }
-            }
+            widget.execute_current();
         });
 
         let widget = self.clone();
@@ -471,7 +438,7 @@ impl SqlEditorWidget {
         });
     }
 
-    fn explain_current(&self) {
+    pub fn explain_current(&self) {
         let sql = self.buffer.text();
         if sql.trim().is_empty() {
             fltk::dialog::alert_default("No SQL to explain");
@@ -540,12 +507,12 @@ impl SqlEditorWidget {
         }
     }
 
-    fn clear(&self) {
+    pub fn clear(&self) {
         let mut buffer = self.buffer.clone();
         buffer.set_text("");
     }
 
-    fn commit(&self) {
+    pub fn commit(&self) {
         let conn_guard = self.connection.lock().unwrap();
         if !conn_guard.is_connected() {
             fltk::dialog::alert_default("Not connected to database");
@@ -559,7 +526,7 @@ impl SqlEditorWidget {
         }
     }
 
-    fn rollback(&self) {
+    pub fn rollback(&self) {
         let conn_guard = self.connection.lock().unwrap();
         if !conn_guard.is_connected() {
             fltk::dialog::alert_default("Not connected to database");
@@ -646,5 +613,58 @@ impl SqlEditorWidget {
 
     pub fn get_editor(&self) -> TextEditor {
         self.editor.clone()
+    }
+
+    pub fn focus(&self) {
+        self.group.show();
+        self.editor.take_focus();
+    }
+
+    pub fn execute_current(&self) {
+        let sql = self.buffer.text();
+        self.execute_sql(&sql);
+    }
+
+    pub fn execute_selected(&self) {
+        let buffer = self.buffer.clone();
+        if !buffer.selected() {
+            fltk::dialog::alert_default("No SQL selected");
+            return;
+        }
+
+        let sql = buffer.selection_text();
+        self.execute_sql(&sql);
+    }
+
+    fn execute_sql(&self, sql: &str) {
+        if sql.trim().is_empty() {
+            return;
+        }
+
+        let conn_guard = self.connection.lock().unwrap();
+        if !conn_guard.is_connected() {
+            fltk::dialog::alert_default("Not connected to database");
+            return;
+        }
+
+        let conn_name = conn_guard.get_info().name.clone();
+
+        if let Some(db_conn) = conn_guard.get_connection() {
+            let result = match QueryExecutor::execute_batch(db_conn, sql) {
+                Ok(result) => result,
+                Err(e) => QueryResult::new_error(sql, &e.to_string()),
+            };
+
+            QueryHistoryDialog::add_to_history(
+                sql,
+                result.execution_time.as_millis() as u64,
+                result.row_count,
+                &conn_name,
+            );
+
+            if let Some(ref mut cb) = *self.execute_callback.borrow_mut() {
+                cb(result);
+            }
+        }
     }
 }
