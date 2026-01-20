@@ -615,9 +615,9 @@ impl SqlEditorWidget {
         self.editor.clone()
     }
 
-    pub fn focus(&self) {
+    pub fn focus(&mut self) {
         self.group.show();
-        self.editor.take_focus();
+        let _ = self.editor.take_focus();
     }
 
     pub fn execute_current(&self) {
