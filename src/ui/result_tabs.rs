@@ -74,12 +74,19 @@ impl ResultTabsWidget {
         }
 
         self.tabs.begin();
-        let mut group = Group::default_fill().with_label(label);
+        // Use explicit size from tabs instead of default_fill() to avoid
+        // "center of requires the size of the widget to be known" panic
+        // Use minimum dimensions (100x100) if tabs size is not yet known
+        let x = self.tabs.x();
+        let y = self.tabs.y() + 25;
+        let w = self.tabs.w().max(100);
+        let h = (self.tabs.h() - 25).max(100);
+        let mut group = Group::new(x, y, w, h, None).with_label(label);
         group.set_color(Color::from_rgb(30, 30, 30));
         group.set_label_color(Color::White);
 
         group.begin();
-        let table = ResultTableWidget::new();
+        let table = ResultTableWidget::with_size(x, y, w, h);
         let widget = table.get_widget();
         group.resizable(&widget);
         group.end();
