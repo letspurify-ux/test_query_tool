@@ -1,6 +1,8 @@
 use fltk::{
+    app,
     button::Button,
-    enums::{Color, Event, Font, FrameType, Key},
+    draw::set_cursor,
+    enums::{Color, Cursor, Event, Font, FrameType, Key},
     group::{Flex, FlexType, Pack, PackType},
     prelude::*,
     text::{TextBuffer, TextEditor, WrapMode},
@@ -650,10 +652,17 @@ impl SqlEditorWidget {
         let conn_name = conn_guard.get_info().name.clone();
 
         if let Some(db_conn) = conn_guard.get_connection() {
+            // Change cursor to wait and flush UI before executing query
+            set_cursor(Cursor::Wait);
+            app::flush();
+
             let result = match QueryExecutor::execute_batch(db_conn, sql) {
                 Ok(result) => result,
                 Err(e) => QueryResult::new_error(sql, &e.to_string()),
             };
+
+            // Restore cursor to default
+            set_cursor(Cursor::Default);
 
             QueryHistoryDialog::add_to_history(
                 sql,
