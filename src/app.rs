@@ -2,6 +2,7 @@ use crate::ui::MainWindow;
 use crate::utils::AppConfig;
 
 pub struct App {
+    #[allow(dead_code)]
     config: AppConfig,
 }
 

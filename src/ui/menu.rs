@@ -86,12 +86,7 @@ impl MenuBarBuilder {
             MenuFlag::Normal,
             |_| {},
         );
-        menu.add(
-            "&Edit/",
-            Shortcut::None,
-            MenuFlag::MenuDivider,
-            |_| {},
-        );
+        menu.add("&Edit/", Shortcut::None, MenuFlag::MenuDivider, |_| {});
         menu.add(
             "&Edit/&Find...\t",
             Shortcut::Ctrl | 'f',
@@ -165,24 +160,21 @@ impl MenuBarBuilder {
             MenuFlag::Normal,
             |_| {},
         );
-        menu.add(
-            "&Tools/",
-            Shortcut::None,
-            MenuFlag::MenuDivider,
-            |_| {},
-        );
+        menu.add("&Tools/", Shortcut::None, MenuFlag::MenuDivider, |_| {});
         menu.add(
             "&Tools/Query &History...\t",
             Shortcut::from_key(fltk::enums::Key::F9),
             MenuFlag::Normal,
             |_| {},
         );
+        menu.add("&Tools/", Shortcut::None, MenuFlag::MenuDivider, |_| {});
         menu.add(
-            "&Tools/",
+            "&Tools/&Feature Catalog...\t",
             Shortcut::None,
-            MenuFlag::MenuDivider,
+            MenuFlag::Normal,
             |_| {},
         );
+        menu.add("&Tools/", Shortcut::None, MenuFlag::MenuDivider, |_| {});
         menu.add(
             "&Tools/&Auto-Commit\t",
             Shortcut::None,
