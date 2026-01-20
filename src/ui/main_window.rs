@@ -206,6 +206,7 @@ impl MainWindow {
         let highlighter_for_file = highlighter.clone();
         let mut editor = self.sql_editor.get_editor();
         let mut editor_buffer = self.sql_buffer.clone();
+        let sql_editor = self.sql_editor.clone();
         let result_table_export = self.result_table.clone();
         let mut status_bar_export = self.status_bar.clone();
 
@@ -397,6 +398,58 @@ impl MainWindow {
                         "File/Exit" => {
                             app::quit();
                         }
+                        "Edit/Undo" => {
+                            editor.undo();
+                        }
+                        "Edit/Redo" => {
+                            editor.redo();
+                        }
+                        "Edit/Cut" => {
+                            editor.cut();
+                        }
+                        "Edit/Copy" => {
+                            editor.copy();
+                        }
+                        "Edit/Paste" => {
+                            editor.paste();
+                        }
+                        "Edit/Select All" => {
+                            let buffer_len = editor_buffer.length();
+                            editor_buffer.select(0, buffer_len);
+                        }
+                        "Edit/Find Next" => {
+                            if editor_buffer.selected() {
+                                let search_text = editor_buffer.selection_text();
+                                if !FindReplaceDialog::find_next(
+                                    &mut editor,
+                                    &mut editor_buffer,
+                                    &search_text,
+                                    false,
+                                ) {
+                                    fltk::dialog::message_default("Text not found");
+                                }
+                            } else {
+                                fltk::dialog::message_default("Select text to search for");
+                            }
+                        }
+                        "Query/Execute" => {
+                            sql_editor.execute_current();
+                        }
+                        "Query/Execute Selected" => {
+                            sql_editor.execute_selected();
+                        }
+                        "Query/Explain Plan" => {
+                            sql_editor.explain_current();
+                        }
+                        "Query/Commit" => {
+                            sql_editor.commit();
+                        }
+                        "Query/Rollback" => {
+                            sql_editor.rollback();
+                        }
+                        "Tools/Refresh Objects" => {
+                            object_browser.refresh();
+                        }
                         "Tools/Export Results..." => {
                             if !result_table_export.has_data() {
                                 fltk::dialog::alert_default("No data to export");
@@ -452,6 +505,11 @@ impl MainWindow {
                         }
                         "Tools/Feature Catalog..." => {
                             FeatureCatalogDialog::show();
+                        }
+                        "Tools/Auto-Commit" => {
+                            fltk::dialog::message_default(
+                                "Auto-commit is not implemented yet in this build.",
+                            );
                         }
                         _ => {}
                     }
