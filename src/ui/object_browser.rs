@@ -6,12 +6,28 @@ use fltk::{
     tree::{Tree, TreeItem, TreeSelect},
 };
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::db::{ObjectBrowser, SharedConnection};
 
+#[derive(Clone)]
+pub enum SqlAction {
+    Set(String),
+    Insert(String),
+}
+
 /// Callback type for executing SQL from object browser
-pub type SqlExecuteCallback = Rc<RefCell<Option<Box<dyn FnMut(String)>>>>;
+pub type SqlExecuteCallback = Rc<RefCell<Option<Box<dyn FnMut(SqlAction)>>>>;
+
+#[derive(Clone)]
+enum ObjectItem {
+    Simple { object_type: String, object_name: String },
+    PackageProcedure {
+        package_name: String,
+        procedure_name: String,
+    },
+}
 
 /// Stores original object lists for filtering
 #[derive(Clone, Default)]
@@ -21,6 +37,8 @@ struct ObjectCache {
     procedures: Vec<String>,
     functions: Vec<String>,
     sequences: Vec<String>,
+    packages: Vec<String>,
+    package_procedures: HashMap<String, Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -65,6 +83,7 @@ impl ObjectBrowserWidget {
         tree.add("Procedures");
         tree.add("Functions");
         tree.add("Sequences");
+        tree.add("Packages");
 
         flex.end();
 
@@ -82,6 +101,9 @@ impl ObjectBrowserWidget {
             item.close();
         }
         if let Some(mut item) = tree.find_item("Sequences") {
+            item.close();
+        }
+        if let Some(mut item) = tree.find_item("Packages") {
             item.close();
         }
 
@@ -114,7 +136,14 @@ impl ObjectBrowserWidget {
             let cache = object_cache.borrow();
 
             // Clear existing items
-            for category in &["Tables", "Views", "Procedures", "Functions", "Sequences"] {
+            for category in &[
+                "Tables",
+                "Views",
+                "Procedures",
+                "Functions",
+                "Sequences",
+                "Packages",
+            ] {
                 if let Some(item) = tree.find_item(category) {
                     while item.has_children() {
                         if let Some(child) = item.child(0) {
@@ -153,6 +182,34 @@ impl ObjectBrowserWidget {
                 }
             }
 
+            for package in &cache.packages {
+                let procedures = cache
+                    .package_procedures
+                    .get(package)
+                    .cloned()
+                    .unwrap_or_default();
+                let package_matches =
+                    filter_text.is_empty() || package.to_lowercase().contains(&filter_text);
+                let matching_procs: Vec<String> = procedures
+                    .into_iter()
+                    .filter(|proc_name| {
+                        filter_text.is_empty()
+                            || proc_name.to_lowercase().contains(&filter_text)
+                            || package_matches
+                    })
+                    .collect();
+
+                if package_matches || !matching_procs.is_empty() {
+                    tree.add(&format!("Packages/{}", package));
+                    for proc_name in matching_procs {
+                        tree.add(&format!(
+                            "Packages/{}/Procedures/{}",
+                            package, proc_name
+                        ));
+                    }
+                }
+            }
+
             tree.redraw();
         });
     }
@@ -164,27 +221,45 @@ impl ObjectBrowserWidget {
         self.tree.handle(move |t, ev| {
             match ev {
                 Event::Push => {
-                    // Right-click for context menu
-                    if fltk::app::event_mouse_button() == fltk::app::MouseButton::Right {
+                    let mouse_button = fltk::app::event_mouse_button();
+                    if mouse_button == fltk::app::MouseButton::Right {
                         if let Some(item) = t.first_selected_item() {
                             Self::show_context_menu(&connection, &item, &sql_callback);
                         }
                         return true;
                     }
+
+                    if mouse_button == fltk::app::MouseButton::Left
+                        && fltk::app::event_clicks()
+                    {
+                        if let Some(item) = t.first_selected_item() {
+                            if let Some(insert_text) = Self::get_insert_text(&item) {
+                                if let Some(ref mut cb) = *sql_callback.borrow_mut() {
+                                    cb(SqlAction::Insert(insert_text));
+                                }
+                                return true;
+                            }
+                        }
+                    }
+
                     false
                 }
                 Event::KeyUp => {
                     // Enter key to generate SELECT
                     if fltk::app::event_key() == Key::Enter {
                         if let Some(item) = t.first_selected_item() {
-                            if let Some((parent_type, object_name)) = Self::get_item_info(&item) {
-                                if parent_type == "Tables" || parent_type == "Views" {
+                            if let Some(ObjectItem::Simple {
+                                object_type,
+                                object_name,
+                            }) = Self::get_item_info(&item)
+                            {
+                                if object_type == "Tables" || object_type == "Views" {
                                     let sql = format!(
                                         "SELECT * FROM {} WHERE ROWNUM <= 100",
                                         object_name
                                     );
                                     if let Some(ref mut cb) = *sql_callback.borrow_mut() {
-                                        cb(sql);
+                                        cb(SqlAction::Set(sql));
                                     }
                                 }
                             }
@@ -196,38 +271,45 @@ impl ObjectBrowserWidget {
                 _ => false,
             }
         });
-
-        // Double-click callback using set_callback
-        let sql_callback_dbl = self.sql_callback.clone();
-        self.tree.set_callback(move |t| {
-            if let Some(item) = t.callback_item() {
-                if let Some((parent_type, object_name)) = Self::get_item_info(&item) {
-                    if parent_type == "Tables" || parent_type == "Views" {
-                        let sql = format!("SELECT * FROM {} WHERE ROWNUM <= 100", object_name);
-                        if let Some(ref mut cb) = *sql_callback_dbl.borrow_mut() {
-                            cb(sql);
-                        }
-                    }
-                }
-            }
-        });
     }
 
-    fn get_item_info(item: &TreeItem) -> Option<(String, String)> {
+    fn get_item_info(item: &TreeItem) -> Option<ObjectItem> {
         let object_name = item.label()?;
         let parent = item.parent()?;
         let parent_type = parent.label()?;
 
         // Make sure this is not a category item
-        if parent_type == "Tables"
-            || parent_type == "Views"
-            || parent_type == "Procedures"
-            || parent_type == "Functions"
-            || parent_type == "Sequences"
-        {
-            Some((parent_type, object_name))
-        } else {
-            None
+        if parent_type == "Procedures" {
+            if let Some(grandparent) = parent.parent() {
+                let package_name = grandparent.label()?;
+                let root = grandparent.parent()?;
+                if root.label()? == "Packages" {
+                    return Some(ObjectItem::PackageProcedure {
+                        package_name,
+                        procedure_name: object_name,
+                    });
+                }
+            }
+        }
+
+        match parent_type.as_str() {
+            "Tables" | "Views" | "Procedures" | "Functions" | "Sequences" | "Packages" => {
+                Some(ObjectItem::Simple {
+                    object_type: parent_type,
+                    object_name,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn get_insert_text(item: &TreeItem) -> Option<String> {
+        match Self::get_item_info(item)? {
+            ObjectItem::Simple { object_name, .. } => Some(object_name),
+            ObjectItem::PackageProcedure {
+                package_name,
+                procedure_name,
+            } => Some(format!("{}.{}", package_name, procedure_name)),
         }
     }
 
@@ -236,19 +318,25 @@ impl ObjectBrowserWidget {
         item: &TreeItem,
         sql_callback: &SqlExecuteCallback,
     ) {
-        if let Some((parent_type, object_name)) = Self::get_item_info(item) {
+        if let Some(item_info) = Self::get_item_info(item) {
             let mut menu = fltk::menu::MenuButton::default();
             menu.set_color(Color::from_rgb(45, 45, 48));
             menu.set_text_color(Color::White);
 
-            match parent_type.as_str() {
-                "Tables" => {
+            match &item_info {
+                ObjectItem::Simple { object_type, .. } if object_type == "Tables" => {
                     menu.add_choice("Select Data (Top 100)|View Structure|View Indexes|View Constraints|Generate DDL");
                 }
-                "Views" => {
+                ObjectItem::Simple { object_type, .. } if object_type == "Views" => {
                     menu.add_choice("Select Data (Top 100)|Generate DDL");
                 }
-                "Procedures" | "Functions" | "Sequences" => {
+                ObjectItem::Simple {
+                    object_type,
+                    ..
+                } if object_type == "Procedures"
+                    || object_type == "Functions"
+                    || object_type == "Sequences" =>
+                {
                     menu.add_choice("Generate DDL");
                 }
                 _ => return,
@@ -264,28 +352,30 @@ impl ObjectBrowserWidget {
                 }
 
                 if let Some(db_conn) = conn_guard.get_connection() {
-                    match choice_label.as_str() {
-                        "Select Data (Top 100)" => {
-                            let sql = format!(
-                                "SELECT * FROM {} WHERE ROWNUM <= 100",
-                                object_name
-                            );
+                    match (choice_label.as_str(), &item_info) {
+                        ("Select Data (Top 100)", _) => {
+                            let object_name = match &item_info {
+                                ObjectItem::Simple { object_name, .. } => object_name,
+                                _ => return,
+                            };
+                            let sql =
+                                format!("SELECT * FROM {} WHERE ROWNUM <= 100", object_name);
                             drop(conn_guard);
                             if let Some(ref mut cb) = *sql_callback.borrow_mut() {
-                                cb(sql);
+                                cb(SqlAction::Set(sql));
                             }
                         }
-                        "View Structure" => {
-                            Self::show_table_structure(db_conn, &object_name);
+                        ("View Structure", ObjectItem::Simple { object_name, .. }) => {
+                            Self::show_table_structure(db_conn.as_ref(), object_name);
                         }
-                        "View Indexes" => {
-                            Self::show_table_indexes(db_conn, &object_name);
+                        ("View Indexes", ObjectItem::Simple { object_name, .. }) => {
+                            Self::show_table_indexes(db_conn.as_ref(), object_name);
                         }
-                        "View Constraints" => {
-                            Self::show_table_constraints(db_conn, &object_name);
+                        ("View Constraints", ObjectItem::Simple { object_name, .. }) => {
+                            Self::show_table_constraints(db_conn.as_ref(), object_name);
                         }
-                        "Generate DDL" => {
-                            let obj_type = match parent_type.as_str() {
+                        ("Generate DDL", ObjectItem::Simple { object_type, object_name }) => {
+                            let obj_type = match object_type.as_str() {
                                 "Tables" => "TABLE",
                                 "Views" => "VIEW",
                                 "Procedures" => "PROCEDURE",
@@ -293,7 +383,7 @@ impl ObjectBrowserWidget {
                                 "Sequences" => "SEQUENCE",
                                 _ => return,
                             };
-                            Self::show_ddl(db_conn, obj_type, &object_name, sql_callback);
+                            Self::show_ddl(db_conn.as_ref(), obj_type, object_name, sql_callback);
                         }
                         _ => {}
                     }
@@ -404,7 +494,7 @@ impl ObjectBrowserWidget {
             Ok(ddl) => {
                 // Put DDL in editor
                 if let Some(ref mut cb) = *sql_callback.borrow_mut() {
-                    cb(ddl);
+                    cb(SqlAction::Set(ddl));
                 }
             }
             Err(e) => {
@@ -456,7 +546,7 @@ impl ObjectBrowserWidget {
 
     pub fn set_sql_callback<F>(&mut self, callback: F)
     where
-        F: FnMut(String) + 'static,
+        F: FnMut(SqlAction) + 'static,
     {
         *self.sql_callback.borrow_mut() = Some(Box::new(callback));
     }
@@ -478,7 +568,7 @@ impl ObjectBrowserWidget {
 
         if let Some(db_conn) = conn_guard.get_connection() {
             // Load tables
-            if let Ok(tables) = ObjectBrowser::get_tables(db_conn) {
+            if let Ok(tables) = ObjectBrowser::get_tables(db_conn.as_ref()) {
                 for table in &tables {
                     self.tree.add(&format!("Tables/{}", table));
                 }
@@ -486,7 +576,7 @@ impl ObjectBrowserWidget {
             }
 
             // Load views
-            if let Ok(views) = ObjectBrowser::get_views(db_conn) {
+            if let Ok(views) = ObjectBrowser::get_views(db_conn.as_ref()) {
                 for view in &views {
                     self.tree.add(&format!("Views/{}", view));
                 }
@@ -494,7 +584,7 @@ impl ObjectBrowserWidget {
             }
 
             // Load procedures
-            if let Ok(procedures) = ObjectBrowser::get_procedures(db_conn) {
+            if let Ok(procedures) = ObjectBrowser::get_procedures(db_conn.as_ref()) {
                 for proc in &procedures {
                     self.tree.add(&format!("Procedures/{}", proc));
                 }
@@ -502,7 +592,7 @@ impl ObjectBrowserWidget {
             }
 
             // Load functions
-            if let Ok(functions) = ObjectBrowser::get_functions(db_conn) {
+            if let Ok(functions) = ObjectBrowser::get_functions(db_conn.as_ref()) {
                 for func in &functions {
                     self.tree.add(&format!("Functions/{}", func));
                 }
@@ -510,11 +600,32 @@ impl ObjectBrowserWidget {
             }
 
             // Load sequences
-            if let Ok(sequences) = ObjectBrowser::get_sequences(db_conn) {
+            if let Ok(sequences) = ObjectBrowser::get_sequences(db_conn.as_ref()) {
                 for seq in &sequences {
                     self.tree.add(&format!("Sequences/{}", seq));
                 }
                 cache.sequences = sequences;
+            }
+
+            // Load packages and package procedures
+            if let Ok(packages) = ObjectBrowser::get_packages(db_conn.as_ref()) {
+                for package in &packages {
+                    self.tree.add(&format!("Packages/{}", package));
+                    if let Ok(procs) =
+                        ObjectBrowser::get_package_procedures(db_conn.as_ref(), package)
+                    {
+                        for proc_name in &procs {
+                            self.tree.add(&format!(
+                                "Packages/{}/Procedures/{}",
+                                package, proc_name
+                            ));
+                        }
+                        cache
+                            .package_procedures
+                            .insert(package.clone(), procs);
+                    }
+                }
+                cache.packages = packages;
             }
         }
 
@@ -527,7 +638,14 @@ impl ObjectBrowserWidget {
 
     fn clear_items(&mut self) {
         // Remove all children from each category
-        let categories = vec!["Tables", "Views", "Procedures", "Functions", "Sequences"];
+        let categories = vec![
+            "Tables",
+            "Views",
+            "Procedures",
+            "Functions",
+            "Sequences",
+            "Packages",
+        ];
 
         for category in categories {
             if let Some(item) = self.tree.find_item(category) {
