@@ -44,6 +44,8 @@ impl ResultTabsWidget {
             }
         });
 
+        tabs.end();
+
         Self {
             tabs,
             data,
