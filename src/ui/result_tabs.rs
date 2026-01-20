@@ -1,6 +1,6 @@
 use fltk::{
     enums::Color,
-    group::{Group, Tabs},
+    group::{Group, Tabs, TabsOverflow},
     prelude::*,
 };
 use std::cell::RefCell;
@@ -25,6 +25,8 @@ impl ResultTabsWidget {
     pub fn new() -> Self {
         let mut tabs = Tabs::default();
         tabs.set_color(Color::from_rgb(30, 30, 30));
+        tabs.set_label_color(Color::White);
+        tabs.handle_overflow(TabsOverflow::Compress);
 
         let data = Rc::new(RefCell::new(Vec::<ResultTab>::new()));
         let active_index = Rc::new(RefCell::new(None));
@@ -72,6 +74,7 @@ impl ResultTabsWidget {
         self.tabs.begin();
         let mut group = Group::default().with_label(label);
         group.set_color(Color::from_rgb(30, 30, 30));
+        group.set_label_color(Color::White);
 
         group.begin();
         let table = ResultTableWidget::new();

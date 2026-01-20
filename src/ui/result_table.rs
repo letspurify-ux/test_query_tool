@@ -100,7 +100,7 @@ impl ResultTableWidget {
     pub fn new() -> Self {
         let data = Rc::new(RefCell::new(TableData::new()));
 
-        let mut table = Table::default();
+        let mut table = Table::default_fill();
         table.set_rows(0);
         table.set_cols(0);
         table.set_row_header(true);
