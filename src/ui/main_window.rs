@@ -212,7 +212,11 @@ impl MainWindow {
         // Find menu bar and set callbacks
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
             menu.set_callback(move |m| {
-                if let Some(path) = m.choice() {
+                let menu_path = m
+                    .item_pathname(None)
+                    .ok()
+                    .or_else(|| m.choice().map(|path| path.to_string()));
+                if let Some(path) = menu_path {
                     let choice = path
                         .split('\t')
                         .next()
