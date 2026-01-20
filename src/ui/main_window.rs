@@ -80,8 +80,8 @@ impl MainWindow {
         let sql_group = sql_editor.get_group().clone();
         right_flex.fixed(&sql_group, 250);
 
-        // Result Tabs
-        let result_tabs = ResultTabsWidget::new();
+        // Result Tabs - use explicit size to avoid default_fill() panic
+        let result_tabs = ResultTabsWidget::new(0, 0, 900, 400);
         let result_widget = result_tabs.get_widget();
         right_flex.add(&result_widget);
         right_flex.resizable(&result_widget);
