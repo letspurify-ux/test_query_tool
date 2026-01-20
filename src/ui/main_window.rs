@@ -284,6 +284,7 @@ impl MainWindow {
 
                                         drop(db_conn);
                                         object_browser.refresh();
+                                        sql_editor.focus();
                                     }
                                     Err(e) => {
                                         fltk::dialog::alert_default(&format!(
@@ -520,6 +521,7 @@ impl MainWindow {
 
     pub fn show(&mut self) {
         self.window.show();
+        self.sql_editor.focus();
     }
 
     pub fn run() {

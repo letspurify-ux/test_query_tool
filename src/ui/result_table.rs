@@ -334,15 +334,27 @@ impl ResultTableWidget {
     }
 
     pub fn display_result(&mut self, result: &QueryResult) {
-        let mut data = self.data.borrow_mut();
-        data.set_data(result);
+        let (is_select, row_count, col_count, col_widths) = {
+            let mut data = self.data.borrow_mut();
+            data.set_data(result);
 
-        if result.is_select {
-            self.table.set_rows(data.rows.len() as i32);
-            self.table.set_cols(data.headers.len() as i32);
+            if result.is_select {
+                (
+                    true,
+                    data.rows.len(),
+                    data.headers.len(),
+                    data.col_widths.clone(),
+                )
+            } else {
+                (false, 0, 0, Vec::new())
+            }
+        };
 
-            // Set column widths
-            for (i, width) in data.col_widths.iter().enumerate() {
+        if is_select {
+            self.table.set_rows(row_count as i32);
+            self.table.set_cols(col_count as i32);
+
+            for (i, width) in col_widths.iter().enumerate() {
                 self.table.set_col_width(i as i32, *width);
             }
         } else {
@@ -350,7 +362,6 @@ impl ResultTableWidget {
             self.table.set_cols(0);
         }
 
-        drop(data);
         self.table.redraw();
     }
 

@@ -615,6 +615,11 @@ impl SqlEditorWidget {
         self.editor.clone()
     }
 
+    pub fn focus(&self) {
+        self.group.show();
+        self.editor.take_focus();
+    }
+
     pub fn execute_current(&self) {
         let sql = self.buffer.text();
         self.execute_sql(&sql);
