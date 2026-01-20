@@ -245,17 +245,68 @@ impl SqlEditorWidget {
 
         editor.handle(move |ed, ev| {
             match ev {
-                Event::KeyUp => {
-                    // Update syntax highlighting
-                    let text = buffer_for_handle.text();
-                    highlighter_for_handle
-                        .borrow()
-                        .highlight(&text, &mut style_buffer_for_handle);
-
+                Event::KeyDown => {
+                    // KeyDown fires BEFORE the character is inserted into the buffer.
+                    // Handle navigation and selection keys here to consume them
+                    // before they affect the editor.
                     let key = fltk::app::event_key();
+                    let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
 
-                    // F4 - Quick Describe (show table structure)
+                    if popup_visible {
+                        match key {
+                            Key::Escape => {
+                                // Close popup, consume event
+                                intellisense_popup_for_handle.borrow_mut().hide();
+                                return true;
+                            }
+                            Key::Up => {
+                                // Navigate popup up, consume event
+                                intellisense_popup_for_handle.borrow_mut().select_prev();
+                                return true;
+                            }
+                            Key::Down => {
+                                // Navigate popup down, consume event
+                                intellisense_popup_for_handle.borrow_mut().select_next();
+                                return true;
+                            }
+                            Key::Enter | Key::Tab => {
+                                // Insert selected suggestion, consume event
+                                let selected = intellisense_popup_for_handle.borrow().get_selected();
+                                if let Some(selected) = selected {
+                                    let cursor_pos = ed.insert_position() as usize;
+                                    let text = buffer_for_handle.text();
+                                    let (word, start, _) = get_word_at_cursor(&text, cursor_pos);
+
+                                    if !word.is_empty() {
+                                        buffer_for_handle.replace(
+                                            start as i32,
+                                            cursor_pos as i32,
+                                            &selected,
+                                        );
+                                        ed.set_insert_position((start + selected.len()) as i32);
+                                    } else {
+                                        buffer_for_handle.insert(cursor_pos as i32, &selected);
+                                        ed.set_insert_position((cursor_pos + selected.len()) as i32);
+                                    }
+
+                                    // Update syntax highlighting after insertion
+                                    let new_text = buffer_for_handle.text();
+                                    highlighter_for_handle
+                                        .borrow()
+                                        .highlight(&new_text, &mut style_buffer_for_handle);
+                                }
+                                intellisense_popup_for_handle.borrow_mut().hide();
+                                return true;
+                            }
+                            _ => {
+                                // Let other keys pass through to editor
+                            }
+                        }
+                    }
+
+                    // F4 - Quick Describe (handle on KeyDown for immediate response)
                     if key == Key::F4 {
+                        let text = buffer_for_handle.text();
                         let cursor_pos = ed.insert_position() as usize;
                         let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
 
@@ -272,7 +323,7 @@ impl SqlEditorWidget {
                         return true;
                     }
 
-                    // Check for Ctrl+Space to trigger intellisense
+                    // Ctrl+Space - trigger intellisense manually
                     if fltk::app::event_state().contains(fltk::enums::Shortcut::Ctrl)
                         && key == Key::from_char(' ')
                     {
@@ -285,44 +336,41 @@ impl SqlEditorWidget {
                         return true;
                     }
 
-                    // Hide intellisense on navigation keys or when word becomes invalid
-                    let hide_keys = matches!(
+                    false
+                }
+                Event::KeyUp => {
+                    // KeyUp fires AFTER the character is inserted into the buffer.
+                    // Update syntax highlighting and filter/show intellisense here.
+                    let text = buffer_for_handle.text();
+                    highlighter_for_handle
+                        .borrow()
+                        .highlight(&text, &mut style_buffer_for_handle);
+
+                    let key = fltk::app::event_key();
+                    let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
+
+                    // Navigation keys - hide popup and let editor handle cursor movement
+                    if matches!(
                         key,
                         Key::Left | Key::Right | Key::Home | Key::End | Key::PageUp | Key::PageDown
-                    );
-                    if hide_keys {
-                        intellisense_popup_for_handle.borrow_mut().hide();
+                    ) {
+                        if popup_visible {
+                            intellisense_popup_for_handle.borrow_mut().hide();
+                        }
                         return false;
                     }
 
-                    // Check current character to decide whether to show/hide intellisense
-                    if let Some(ch) = fltk::app::event_text().chars().next() {
-                        if ch.is_alphanumeric() || ch == '_' {
-                            // Auto-trigger on typing alphanumeric characters
-                            let cursor_pos = ed.insert_position() as usize;
-                            let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
+                    // Skip if these keys (already handled in KeyDown)
+                    if popup_visible && matches!(key, Key::Up | Key::Down | Key::Escape | Key::Enter | Key::Tab) {
+                        return false;
+                    }
 
-                            // Only show suggestions if word is at least 2 characters
-                            if word.len() >= 2 {
-                                Self::trigger_intellisense(
-                                    ed,
-                                    &buffer_for_handle,
-                                    &intellisense_data_for_handle,
-                                    &intellisense_popup_for_handle,
-                                );
-                            } else {
-                                // Word too short, hide popup
-                                intellisense_popup_for_handle.borrow_mut().hide();
-                            }
-                        } else {
-                            // Non-identifier character typed (space, punctuation, etc.)
-                            // Hide the intellisense popup
-                            intellisense_popup_for_handle.borrow_mut().hide();
-                        }
-                    } else if key == Key::BackSpace || key == Key::Delete {
-                        // On backspace/delete, check if we still have a valid word
-                        let cursor_pos = ed.insert_position() as usize;
-                        let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
+                    // Handle typing - update intellisense filter
+                    let cursor_pos = ed.insert_position() as usize;
+                    let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
+
+                    if key == Key::BackSpace || key == Key::Delete {
+                        // After backspace/delete, re-evaluate
                         if word.len() >= 2 {
                             Self::trigger_intellisense(
                                 ed,
@@ -333,63 +381,31 @@ impl SqlEditorWidget {
                         } else {
                             intellisense_popup_for_handle.borrow_mut().hide();
                         }
-                    }
-
-                    false
-                }
-                Event::KeyDown => {
-                    let key = fltk::app::event_key();
-                    let mut popup = intellisense_popup_for_handle.borrow_mut();
-
-                    if popup.is_visible() {
-                        match key {
-                            Key::Escape => {
-                                popup.hide();
-                                return true;
+                    } else if let Some(ch) = fltk::app::event_text().chars().next() {
+                        if ch.is_alphanumeric() || ch == '_' {
+                            // Alphanumeric typed - show/update popup if word is long enough
+                            if word.len() >= 2 {
+                                Self::trigger_intellisense(
+                                    ed,
+                                    &buffer_for_handle,
+                                    &intellisense_data_for_handle,
+                                    &intellisense_popup_for_handle,
+                                );
+                            } else {
+                                intellisense_popup_for_handle.borrow_mut().hide();
                             }
-                            Key::Up => {
-                                popup.select_prev();
-                                return true;
-                            }
-                            Key::Down => {
-                                popup.select_next();
-                                return true;
-                            }
-                            Key::Enter | Key::Tab => {
-                                if let Some(selected) = popup.get_selected() {
-                                    // Insert selected suggestion
-                                    let cursor_pos = ed.insert_position() as usize;
-                                    let text = buffer_for_handle.text();
-                                    let (word, start, _) = get_word_at_cursor(&text, cursor_pos);
-
-                                    if !word.is_empty() {
-                                        buffer_for_handle.replace(
-                                            start as i32,
-                                            cursor_pos as i32,
-                                            &selected,
-                                        );
-                                        ed.set_insert_position((start + selected.len()) as i32);
-                                    } else {
-                                        buffer_for_handle.insert(cursor_pos as i32, &selected);
-                                        ed.set_insert_position(
-                                            (cursor_pos + selected.len()) as i32,
-                                        );
-                                    }
-                                }
-                                popup.hide();
-                                return true;
-                            }
-                            _ => {}
+                        } else {
+                            // Non-identifier character (space, punctuation, etc.)
+                            // Close popup - user is done with this word
+                            intellisense_popup_for_handle.borrow_mut().hide();
                         }
                     }
 
                     false
                 }
                 Event::Shortcut => {
-                    if ed.has_focus() {
-                        return true;
-                    }
-                    false
+                    // Prevent shortcut from being processed twice
+                    ed.has_focus()
                 }
                 Event::Paste => {
                     // Update syntax highlighting after paste
