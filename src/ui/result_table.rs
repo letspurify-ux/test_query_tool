@@ -62,6 +62,38 @@ impl TableData {
 
         self.col_widths = widths;
     }
+
+    fn start_streaming(&mut self, headers: &[String]) {
+        self.clear();
+        self.headers = headers.to_vec();
+        self.col_widths = self
+            .headers
+            .iter()
+            .map(|h| (h.len() * 10).max(80) as i32)
+            .collect();
+    }
+
+    fn append_rows(&mut self, rows: Vec<Vec<String>>) -> Vec<(usize, i32)> {
+        if self.headers.is_empty() {
+            return Vec::new();
+        }
+
+        let mut changed_widths: Vec<(usize, i32)> = Vec::new();
+        for row in rows {
+            for (i, cell) in row.iter().enumerate() {
+                if i < self.col_widths.len() {
+                    let cell_width = (cell.len() * 8).max(80).min(300) as i32;
+                    if cell_width > self.col_widths[i] {
+                        self.col_widths[i] = cell_width;
+                        changed_widths.push((i, cell_width));
+                    }
+                }
+            }
+            self.rows.push(row);
+        }
+
+        changed_widths
+    }
 }
 
 impl ResultTableWidget {
@@ -363,6 +395,37 @@ impl ResultTableWidget {
         }
 
         self.table.redraw();
+    }
+
+    pub fn start_streaming(&mut self, headers: &[String]) {
+        let col_widths = {
+            let mut data = self.data.borrow_mut();
+            data.start_streaming(headers);
+            data.col_widths.clone()
+        };
+
+        self.table.set_rows(0);
+        self.table.set_cols(headers.len() as i32);
+        for (i, width) in col_widths.iter().enumerate() {
+            self.table.set_col_width(i as i32, *width);
+        }
+        self.table.redraw();
+        app::flush();
+    }
+
+    pub fn append_rows(&mut self, rows: Vec<Vec<String>>) {
+        let (row_count, width_updates) = {
+            let mut data = self.data.borrow_mut();
+            let updates = data.append_rows(rows);
+            (data.rows.len(), updates)
+        };
+
+        self.table.set_rows(row_count as i32);
+        for (index, width) in width_updates {
+            self.table.set_col_width(index as i32, width);
+        }
+        self.table.redraw();
+        app::flush();
     }
 
     #[allow(dead_code)]

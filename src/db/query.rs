@@ -10,6 +10,7 @@ pub struct ColumnInfo {
 
 #[derive(Debug, Clone)]
 pub struct QueryResult {
+    #[allow(dead_code)]
     pub sql: String,
     pub columns: Vec<ColumnInfo>,
     pub rows: Vec<Vec<String>>,
@@ -96,7 +97,7 @@ impl QueryExecutor {
     /// Execute multiple SQL statements separated by semicolons
     /// Returns the result of the last SELECT statement, or a summary of DML/DDL operations
     pub fn execute_batch(conn: &Connection, sql: &str) -> Result<QueryResult, OracleError> {
-        let statements = Self::split_statements(sql);
+        let statements = Self::split_statements_with_blocks(sql);
 
         if statements.is_empty() {
             return Ok(QueryResult {
@@ -184,18 +185,77 @@ impl QueryExecutor {
         }
     }
 
-    /// Split SQL text into individual statements by semicolons
-    /// Handles quoted strings and comments to avoid splitting inside them
-    fn split_statements(sql: &str) -> Vec<String> {
+    #[allow(dead_code)]
+    pub fn execute_batch_streaming<F, G>(
+        conn: &Connection,
+        sql: &str,
+        mut on_select_start: F,
+        mut on_row: G,
+    ) -> Result<QueryResult, OracleError>
+    where
+        F: FnMut(&[ColumnInfo]),
+        G: FnMut(Vec<String>),
+    {
+        let statements = Self::split_statements_with_blocks(sql);
+
+        if statements.is_empty() {
+            return Ok(QueryResult {
+                sql: sql.to_string(),
+                columns: vec![],
+                rows: vec![],
+                row_count: 0,
+                execution_time: Duration::from_secs(0),
+                message: "No statements to execute".to_string(),
+                is_select: false,
+            });
+        }
+
+        if statements.len() == 1 {
+            let statement = statements[0].trim();
+            let sql_upper = statement.to_uppercase();
+
+            if sql_upper.starts_with("SELECT") || sql_upper.starts_with("WITH") {
+                return Self::execute_select_streaming(
+                    conn,
+                    statement,
+                    &mut on_select_start,
+                    &mut on_row,
+                );
+            }
+
+            return Self::execute(conn, statement);
+        }
+
+        Self::execute_batch(conn, sql)
+    }
+
+    /// Split SQL text into individual statements by semicolons.
+    /// Handles quoted strings, comments, and PL/SQL blocks (BEGIN/END, DECLARE).
+    pub fn split_statements_with_blocks(sql: &str) -> Vec<String> {
         let mut statements = Vec::new();
         let mut current = String::new();
         let mut in_single_quote = false;
         let mut in_double_quote = false;
         let mut in_line_comment = false;
         let mut in_block_comment = false;
+        let mut block_depth = 0usize;
+        let mut token = String::new();
         let chars: Vec<char> = sql.chars().collect();
         let len = chars.len();
         let mut i = 0;
+
+        let flush_token = |token: &mut String, block_depth: &mut usize| {
+            if token.is_empty() {
+                return;
+            }
+            let upper = token.to_uppercase();
+            if upper == "BEGIN" || upper == "DECLARE" {
+                *block_depth += 1;
+            } else if upper == "END" && *block_depth > 0 {
+                *block_depth -= 1;
+            }
+            token.clear();
+        };
 
         while i < len {
             let c = chars[i];
@@ -223,6 +283,19 @@ impl QueryExecutor {
                 i += 1;
                 continue;
             }
+
+            if !in_single_quote
+                && !in_double_quote
+                && !in_block_comment
+                && (c.is_alphanumeric() || c == '_')
+            {
+                token.push(c);
+                current.push(c);
+                i += 1;
+                continue;
+            }
+
+            flush_token(&mut token, &mut block_depth);
 
             // Handle block comment
             if !in_single_quote && !in_double_quote && !in_line_comment {
@@ -262,7 +335,7 @@ impl QueryExecutor {
             }
 
             // Handle semicolon (statement separator)
-            if c == ';' && !in_single_quote && !in_double_quote {
+            if c == ';' && !in_single_quote && !in_double_quote && block_depth == 0 {
                 let trimmed = current.trim();
                 if !trimmed.is_empty() {
                     statements.push(trimmed.to_string());
@@ -275,6 +348,8 @@ impl QueryExecutor {
             current.push(c);
             i += 1;
         }
+
+        flush_token(&mut token, &mut block_depth);
 
         // Don't forget the last statement
         let trimmed = current.trim();
@@ -422,6 +497,55 @@ impl QueryExecutor {
         ))
     }
 
+    pub fn execute_select_streaming<F, G>(
+        conn: &Connection,
+        sql: &str,
+        on_select_start: &mut F,
+        on_row: &mut G,
+    ) -> Result<QueryResult, OracleError>
+    where
+        F: FnMut(&[ColumnInfo]),
+        G: FnMut(Vec<String>),
+    {
+        let start = Instant::now();
+        let mut stmt = conn.statement(sql).build()?;
+        let result_set = stmt.query(&[])?;
+
+        let column_info: Vec<ColumnInfo> = result_set
+            .column_info()
+            .iter()
+            .map(|col| ColumnInfo {
+                name: col.name().to_string(),
+                data_type: format!("{:?}", col.oracle_type()),
+            })
+            .collect();
+
+        on_select_start(&column_info);
+
+        let mut rows: Vec<Vec<String>> = Vec::new();
+
+        for row_result in result_set {
+            let row: Row = row_result?;
+            let mut row_data: Vec<String> = Vec::new();
+
+            for i in 0..column_info.len() {
+                let value: Option<String> = row.get(i).unwrap_or(None);
+                row_data.push(value.unwrap_or_else(|| "NULL".to_string()));
+            }
+
+            on_row(row_data.clone());
+            rows.push(row_data);
+        }
+
+        let execution_time = start.elapsed();
+        Ok(QueryResult::new_select(
+            sql,
+            column_info,
+            rows,
+            execution_time,
+        ))
+    }
+
     fn execute_dml(
         conn: &Connection,
         sql: &str,
@@ -507,6 +631,37 @@ impl ObjectBrowser {
         Self::get_object_list(conn, sql)
     }
 
+    pub fn get_packages(conn: &Connection) -> Result<Vec<String>, OracleError> {
+        let sql = "SELECT object_name FROM user_objects WHERE object_type = 'PACKAGE' ORDER BY object_name";
+        Self::get_object_list(conn, sql)
+    }
+
+    pub fn get_package_procedures(
+        conn: &Connection,
+        package_name: &str,
+    ) -> Result<Vec<String>, OracleError> {
+        let sql = r#"
+            SELECT procedure_name
+            FROM user_procedures
+            WHERE object_type = 'PACKAGE'
+              AND object_name = :1
+              AND procedure_name IS NOT NULL
+            ORDER BY procedure_name
+        "#;
+        let mut stmt = conn.statement(sql).build()?;
+        let rows = stmt.query(&[&package_name.to_uppercase()])?;
+
+        let mut procedures: Vec<String> = Vec::new();
+        for row_result in rows {
+            let row: Row = row_result?;
+            let name: String = row.get(0)?;
+            procedures.push(name);
+        }
+
+        Ok(procedures)
+    }
+
+    #[allow(dead_code)]
     pub fn get_table_columns(
         conn: &Connection,
         table_name: &str,
