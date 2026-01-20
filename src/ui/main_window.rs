@@ -206,7 +206,7 @@ impl MainWindow {
         let highlighter_for_file = highlighter.clone();
         let mut editor = self.sql_editor.get_editor();
         let mut editor_buffer = self.sql_buffer.clone();
-        let sql_editor = self.sql_editor.clone();
+        let mut sql_editor = self.sql_editor.clone();
         let result_table_export = self.result_table.clone();
         let mut status_bar_export = self.status_bar.clone();
 
