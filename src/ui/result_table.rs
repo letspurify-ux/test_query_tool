@@ -385,11 +385,21 @@ impl ResultTableWidget {
         let mouse_x = app::event_x();
         let mouse_y = app::event_y();
 
-        // Create menu at mouse position with explicit size
+        // Temporarily suspend current group to prevent menu widget from being
+        // added to the parent container (which causes it to appear on resize)
+        let current_group = fltk::group::Group::current();
+        fltk::group::Group::set_current::<fltk::group::Group>(None);
+
+        // Create menu (now orphaned, not added to any parent)
         let mut menu = MenuButton::new(mouse_x, mouse_y, 0, 0, None);
         menu.set_color(Color::from_rgb(45, 45, 48));
         menu.set_text_color(Color::White);
         menu.add_choice("Copy|Copy with Headers|Copy Cell|Copy All");
+
+        // Restore current group
+        if let Some(ref group) = current_group {
+            fltk::group::Group::set_current(Some(group));
+        }
 
         if let Some(choice) = menu.popup() {
             let choice_label = choice.label().unwrap_or_default();
@@ -409,6 +419,9 @@ impl ResultTableWidget {
                 _ => {}
             }
         }
+
+        // Ensure menu is hidden after use
+        menu.hide();
     }
 
     fn cell_at_point(table: &Table, x: i32, y: i32) -> Option<(i32, i32)> {
