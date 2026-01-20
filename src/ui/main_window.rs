@@ -213,9 +213,14 @@ impl MainWindow {
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
             menu.set_callback(move |m| {
                 if let Some(path) = m.choice() {
-                    let choice = path.split('\t').next().unwrap_or(path.as_str()).trim();
-                    match choice {
-                        "&File/&Connect..." => {
+                    let choice = path
+                        .split('\t')
+                        .next()
+                        .unwrap_or(path.as_str())
+                        .trim()
+                        .replace('&', "");
+                    match choice.as_str() {
+                        "File/Connect..." => {
                             if let Some(info) = ConnectionDialog::show() {
                                 let mut db_conn = connection.lock().unwrap();
                                 match db_conn.connect(info.clone()) {
@@ -284,7 +289,7 @@ impl MainWindow {
                                 }
                             }
                         }
-                        "&File/&Disconnect" => {
+                        "File/Disconnect" => {
                             let mut db_conn = connection.lock().unwrap();
                             db_conn.disconnect();
                             status_bar.set_label("Disconnected | Ctrl+Space for autocomplete");
@@ -295,7 +300,7 @@ impl MainWindow {
                                 .borrow_mut()
                                 .set_highlight_data(HighlightData::new());
                         }
-                        "&File/&Open SQL File..." => {
+                        "File/Open SQL File..." => {
                             let mut dialog = FileDialog::new(FileDialogType::BrowseFile);
                             dialog.set_title("Open SQL File");
                             dialog.set_filter("SQL Files\t*.sql\nAll Files\t*");
@@ -336,7 +341,7 @@ impl MainWindow {
                                 }
                             }
                         }
-                        "&File/&Save SQL File..." => {
+                        "File/Save SQL File..." => {
                             let current = current_file.borrow().clone();
                             let save_path = if let Some(path) = current {
                                 Some(path)
@@ -385,10 +390,10 @@ impl MainWindow {
                                 }
                             }
                         }
-                        "&File/E&xit" => {
+                        "File/Exit" => {
                             app::quit();
                         }
-                        "&Tools/&Export Results..." => {
+                        "Tools/Export Results..." => {
                             if !result_table_export.has_data() {
                                 fltk::dialog::alert_default("No data to export");
                                 return;
@@ -426,13 +431,13 @@ impl MainWindow {
                                 }
                             }
                         }
-                        "&Edit/&Find..." => {
+                        "Edit/Find..." => {
                             FindReplaceDialog::show_find(&mut editor, &mut editor_buffer);
                         }
-                        "&Edit/&Replace..." => {
+                        "Edit/Replace..." => {
                             FindReplaceDialog::show_replace(&mut editor, &mut editor_buffer);
                         }
-                        "&Tools/Query &History..." => {
+                        "Tools/Query History..." => {
                             if let Some(sql) = QueryHistoryDialog::show() {
                                 sql_buffer.set_text(&sql);
                                 // Refresh highlighting
@@ -441,7 +446,7 @@ impl MainWindow {
                                     .highlight(&sql, &mut style_buffer.clone());
                             }
                         }
-                        "&Tools/&Feature Catalog..." => {
+                        "Tools/Feature Catalog..." => {
                             FeatureCatalogDialog::show();
                         }
                         _ => {}
