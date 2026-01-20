@@ -60,20 +60,20 @@ impl ObjectBrowserWidget {
         flex.set_type(FlexType::Column);
         flex.set_spacing(2);
 
-        // Filter input
+        // Filter input with modern styling
         let mut filter_input = Input::default();
-        filter_input.set_color(Color::from_rgb(60, 60, 63));
-        filter_input.set_text_color(Color::White);
+        filter_input.set_color(Color::from_rgb(45, 45, 48)); // Modern input background
+        filter_input.set_text_color(Color::from_rgb(212, 212, 212));
         filter_input.set_tooltip("Type to filter objects...");
-        flex.fixed(&filter_input, 25);
+        flex.fixed(&filter_input, 28);
 
-        // Tree view
+        // Tree view with modern styling
         let mut tree = Tree::default();
 
-        tree.set_color(Color::from_rgb(37, 37, 38));
-        tree.set_selection_color(Color::from_rgb(38, 79, 120));
-        tree.set_item_label_fgcolor(Color::from_rgb(220, 220, 220));
-        tree.set_connector_color(Color::from_rgb(100, 100, 100));
+        tree.set_color(Color::from_rgb(37, 37, 38)); // Modern tree background
+        tree.set_selection_color(Color::from_rgb(38, 79, 120)); // Selection
+        tree.set_item_label_fgcolor(Color::from_rgb(200, 200, 200)); // Item text
+        tree.set_connector_color(Color::from_rgb(80, 80, 80)); // Subtle connectors
         tree.set_select_mode(TreeSelect::Single);
 
         // Initialize tree structure

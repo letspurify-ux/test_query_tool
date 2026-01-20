@@ -43,7 +43,8 @@ impl MainWindow {
         let mut window = Window::default()
             .with_size(1200, 800)
             .with_label("Oracle Query Tool - Rust Edition");
-        window.set_color(Color::from_rgb(45, 45, 48));
+        // Modern dark theme - primary background
+        window.set_color(Color::from_rgb(30, 30, 30));
 
         let mut main_flex = Flex::default_fill();
         main_flex.set_type(FlexType::Column);
@@ -91,11 +92,11 @@ impl MainWindow {
         // Make content_flex resizable within main_flex (takes remaining space)
         main_flex.resizable(&content_flex);
 
-        // Status bar
+        // Status bar - modern accent color
         let mut status_bar =
             Frame::default().with_label("Not connected | Ctrl+Space for autocomplete");
         status_bar.set_frame(FrameType::FlatBox);
-        status_bar.set_color(Color::from_rgb(0, 122, 204));
+        status_bar.set_color(Color::from_rgb(0, 120, 212)); // Modern blue accent
         status_bar.set_label_color(Color::White);
         status_bar.set_label_font(Font::Helvetica);
         status_bar.set_label_size(12);

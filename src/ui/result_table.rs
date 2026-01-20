@@ -117,11 +117,11 @@ impl ResultTableWidget {
         table.set_rows(0);
         table.set_cols(0);
         table.set_row_header(true);
-        table.set_row_header_width(60);
+        table.set_row_header_width(55);
         table.set_col_header(true);
-        table.set_col_header_height(25);
-        table.set_row_height_all(25);
-        table.set_color(Color::from_rgb(30, 30, 30));
+        table.set_col_header_height(28);
+        table.set_row_height_all(26);
+        table.set_color(Color::from_rgb(30, 30, 30)); // Modern dark background
         table.set_selection_color(Color::from_rgb(38, 79, 120));
 
         let data_clone = data.clone();
@@ -130,19 +130,24 @@ impl ResultTableWidget {
 
             match ctx {
                 TableContext::StartPage => {
-                    draw::set_font(Font::Helvetica, 14);
+                    draw::set_font(Font::Helvetica, 13);
                 }
                 TableContext::ColHeader => {
                     draw::push_clip(x, y, w, h);
+                    // Modern header with subtle gradient effect
                     draw::draw_box(
                         FrameType::FlatBox,
                         x,
                         y,
                         w,
                         h,
-                        Color::from_rgb(60, 60, 63),
+                        Color::from_rgb(45, 45, 48), // Modern header background
                     );
-                    draw::set_draw_color(Color::White);
+                    // Bottom border for header
+                    draw::set_draw_color(Color::from_rgb(0, 120, 212)); // Accent line
+                    draw::draw_line(x, y + h - 1, x + w, y + h - 1);
+
+                    draw::set_draw_color(Color::from_rgb(220, 220, 220));
                     draw::set_font(Font::HelveticaBold, 12);
 
                     if let Some(header) = data.headers.get(col as usize) {
@@ -158,21 +163,21 @@ impl ResultTableWidget {
                         y,
                         w,
                         h,
-                        Color::from_rgb(60, 60, 63),
+                        Color::from_rgb(45, 45, 48), // Modern row header
                     );
-                    draw::set_draw_color(Color::White);
-                    draw::set_font(Font::Helvetica, 12);
+                    draw::set_draw_color(Color::from_rgb(140, 140, 140)); // Subtle text
+                    draw::set_font(Font::Helvetica, 11);
                     draw::draw_text2(&format!("{}", row + 1), x, y, w, h, Align::Center);
                     draw::pop_clip();
                 }
                 TableContext::Cell => {
                     draw::push_clip(x, y, w, h);
 
-                    // Alternate row colors
+                    // Modern alternating row colors
                     let bg_color = if row % 2 == 0 {
-                        Color::from_rgb(30, 30, 30)
+                        Color::from_rgb(30, 30, 30) // Even row
                     } else {
-                        Color::from_rgb(40, 40, 43)
+                        Color::from_rgb(37, 37, 38) // Odd row - subtle difference
                     };
 
                     // Check if cell is selected
@@ -183,19 +188,20 @@ impl ResultTableWidget {
                         && col <= col_right;
 
                     let bg = if is_selected {
-                        Color::from_rgb(38, 79, 120)
+                        Color::from_rgb(38, 79, 120) // Selection color
                     } else {
                         bg_color
                     };
 
                     draw::draw_box(FrameType::FlatBox, x, y, w, h, bg);
 
-                    // Draw cell border
-                    draw::set_draw_color(Color::from_rgb(60, 60, 63));
-                    draw::draw_rect(x, y, w, h);
+                    // Subtle cell border
+                    draw::set_draw_color(Color::from_rgb(50, 50, 52));
+                    draw::draw_line(x + w - 1, y, x + w - 1, y + h); // Vertical
+                    draw::draw_line(x, y + h - 1, x + w, y + h - 1); // Horizontal
 
-                    // Draw cell text
-                    draw::set_draw_color(Color::from_rgb(220, 220, 220));
+                    // Cell text
+                    draw::set_draw_color(Color::from_rgb(212, 212, 212));
                     draw::set_font(Font::Courier, 12);
 
                     if let Some(row_data) = data.rows.get(row as usize) {
@@ -205,7 +211,7 @@ impl ResultTableWidget {
                             } else {
                                 cell.clone()
                             };
-                            draw::draw_text2(&display_text, x + 5, y, w - 10, h, Align::Left);
+                            draw::draw_text2(&display_text, x + 6, y, w - 12, h, Align::Left);
                         }
                     }
                     draw::pop_clip();
