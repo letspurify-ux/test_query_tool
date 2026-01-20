@@ -19,8 +19,7 @@ use crate::ui::{
     ConnectionDialog, FeatureCatalogDialog, FindReplaceDialog, HighlightData, IntellisenseData,
     MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, ResultTableWidget, SqlEditorWidget,
 };
-use crate::utils::{QueryHistory, QueryHistoryEntry};
-use chrono::Local;
+use crate::utils::QueryHistory;
 
 pub struct MainWindow {
     window: Window,
@@ -32,6 +31,7 @@ pub struct MainWindow {
     status_bar: Frame,
     current_file: Rc<RefCell<Option<PathBuf>>>,
     last_result: Rc<RefCell<Option<QueryResult>>>,
+    #[allow(dead_code)]
     query_history: Rc<RefCell<QueryHistory>>,
 }
 
@@ -139,14 +139,14 @@ impl MainWindow {
         let mut status_bar = self.status_bar.clone();
         let mut result_table = self.result_table.clone();
         let last_result = self.last_result.clone();
-        let query_history = self.query_history.clone();
-        let connection = self.connection.clone();
 
         // Setup SQL editor execute callback
         self.sql_editor.set_execute_callback(move |query_result| {
+            // Update result table
             result_table.display_result(&query_result);
             *last_result.borrow_mut() = Some(query_result.clone());
 
+            // Update status bar
             let status_text = format!(
                 "{} | Time: {:.3}s",
                 query_result.message,
@@ -154,33 +154,8 @@ impl MainWindow {
             );
             status_bar.set_label(&status_text);
 
-            let connection_name = {
-                let conn_guard = connection.lock().unwrap();
-                if conn_guard.is_connected() {
-                    let info = conn_guard.get_info();
-                    if info.name.is_empty() {
-                        info.display_string()
-                    } else {
-                        info.name.clone()
-                    }
-                } else {
-                    "Disconnected".to_string()
-                }
-            };
-
-            let entry = QueryHistoryEntry {
-                sql: query_result.sql.clone(),
-                timestamp: Local::now().to_rfc3339(),
-                execution_time_ms: query_result.execution_time.as_millis() as u64,
-                row_count: query_result.row_count,
-                connection_name,
-            };
-
-            let mut history = query_history.borrow_mut();
-            history.add_entry(entry);
-            if let Err(err) = history.save() {
-                fltk::dialog::alert_default(&format!("Failed to save query history: {}", err));
-            }
+            // Note: Query history is saved in SqlEditorWidget::execute_sql()
+            // to avoid duplicate saves and UI blocking
         });
 
         // Setup object browser callback to set SQL in editor
