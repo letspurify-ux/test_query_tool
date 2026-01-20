@@ -3,17 +3,28 @@ use fltk::{
     button::Button,
     draw::set_cursor,
     enums::{Color, Cursor, Event, Font, FrameType, Key},
+    frame::Frame,
     group::{Flex, FlexType, Pack, PackType},
+    input::IntInput,
     prelude::*,
     text::{TextBuffer, TextEditor, WrapMode},
 };
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::thread;
+use std::time::Duration;
 
 use crate::db::{QueryExecutor, QueryResult, SharedConnection};
 use crate::ui::intellisense::{get_word_at_cursor, IntellisenseData, IntellisensePopup};
 use crate::ui::query_history::QueryHistoryDialog;
 use crate::ui::syntax_highlight::{create_style_table, HighlightData, SqlHighlighter};
+
+#[derive(Clone)]
+pub enum QueryProgress {
+    StartSelect { columns: Vec<String> },
+    Row { values: Vec<String> },
+    Finished { result: QueryResult },
+}
 
 #[derive(Clone)]
 pub struct SqlEditorWidget {
@@ -23,9 +34,13 @@ pub struct SqlEditorWidget {
     style_buffer: TextBuffer,
     connection: SharedConnection,
     execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>>,
+    progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>>,
+    progress_sender: app::Sender<QueryProgress>,
+    query_running: Rc<RefCell<bool>>,
     intellisense_data: Rc<RefCell<IntellisenseData>>,
     intellisense_popup: Rc<RefCell<IntellisensePopup>>,
     highlighter: Rc<RefCell<SqlHighlighter>>,
+    timeout_input: IntInput,
 }
 
 impl SqlEditorWidget {
@@ -44,6 +59,11 @@ impl SqlEditorWidget {
         execute_btn.set_color(Color::from_rgb(0, 122, 204));
         execute_btn.set_label_color(Color::White);
         execute_btn.set_frame(FrameType::FlatBox);
+
+        let mut cancel_btn = Button::default().with_size(80, 25).with_label("Cancel");
+        cancel_btn.set_color(Color::from_rgb(160, 80, 0));
+        cancel_btn.set_label_color(Color::White);
+        cancel_btn.set_frame(FrameType::FlatBox);
 
         let mut explain_btn = Button::default().with_size(80, 25).with_label("Explain");
         explain_btn.set_color(Color::from_rgb(104, 33, 122));
@@ -64,6 +84,15 @@ impl SqlEditorWidget {
         rollback_btn.set_color(Color::from_rgb(200, 50, 50));
         rollback_btn.set_label_color(Color::White);
         rollback_btn.set_frame(FrameType::FlatBox);
+
+        let mut timeout_label = Frame::default().with_size(90, 25);
+        timeout_label.set_label("Timeout(s)");
+        timeout_label.set_label_color(Color::from_rgb(220, 220, 220));
+
+        let mut timeout_input = IntInput::default().with_size(60, 25);
+        timeout_input.set_color(Color::from_rgb(60, 60, 63));
+        timeout_input.set_text_color(Color::White);
+        timeout_input.set_tooltip("Call timeout in seconds (empty = no timeout)");
 
         button_pack.end();
         group.fixed(&button_pack, 30);
@@ -91,6 +120,10 @@ impl SqlEditorWidget {
 
         let execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>> =
             Rc::new(RefCell::new(None));
+        let progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>> =
+            Rc::new(RefCell::new(None));
+        let (progress_sender, progress_receiver) = app::channel::<QueryProgress>();
+        let query_running = Rc::new(RefCell::new(false));
 
         let intellisense_data = Rc::new(RefCell::new(IntellisenseData::new()));
         let intellisense_popup = Rc::new(RefCell::new(IntellisensePopup::new()));
@@ -103,13 +136,18 @@ impl SqlEditorWidget {
             style_buffer,
             connection,
             execute_callback,
+            progress_callback: progress_callback.clone(),
+            progress_sender,
+            query_running: query_running.clone(),
             intellisense_data,
             intellisense_popup,
             highlighter,
+            timeout_input: timeout_input.clone(),
         };
 
         widget.setup_button_callbacks(
             execute_btn,
+            cancel_btn,
             explain_btn,
             clear_btn,
             commit_btn,
@@ -117,8 +155,33 @@ impl SqlEditorWidget {
         );
         widget.setup_intellisense();
         widget.setup_syntax_highlighting();
+        widget.setup_progress_handler(progress_receiver, progress_callback, query_running);
 
         widget
+    }
+
+    fn setup_progress_handler(
+        &self,
+        progress_receiver: app::Receiver<QueryProgress>,
+        progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>>,
+        query_running: Rc<RefCell<bool>>,
+    ) {
+        let execute_callback = self.execute_callback.clone();
+        app::add_idle(move || {
+            while let Some(message) = progress_receiver.recv() {
+                if let Some(ref mut cb) = *progress_callback.borrow_mut() {
+                    cb(message.clone());
+                }
+
+                if let QueryProgress::Finished { result } = message {
+                    *query_running.borrow_mut() = false;
+                    set_cursor(Cursor::Default);
+                    if let Some(ref mut cb) = *execute_callback.borrow_mut() {
+                        cb(result);
+                    }
+                }
+            }
+        });
     }
 
     fn setup_syntax_highlighting(&self) {
@@ -187,7 +250,7 @@ impl SqlEditorWidget {
                             let conn_guard = connection_for_f4.lock().unwrap();
                             if conn_guard.is_connected() {
                                 if let Some(db_conn) = conn_guard.get_connection() {
-                                    Self::show_quick_describe(db_conn, &word);
+                                    Self::show_quick_describe(db_conn.as_ref(), &word);
                                 }
                             } else {
                                 fltk::dialog::alert_default("Not connected to database");
@@ -409,6 +472,7 @@ impl SqlEditorWidget {
     fn setup_button_callbacks(
         &mut self,
         mut execute_btn: Button,
+        mut cancel_btn: Button,
         mut explain_btn: Button,
         mut clear_btn: Button,
         mut commit_btn: Button,
@@ -417,6 +481,11 @@ impl SqlEditorWidget {
         let widget = self.clone();
         execute_btn.set_callback(move |_| {
             widget.execute_current();
+        });
+
+        let widget = self.clone();
+        cancel_btn.set_callback(move |_| {
+            widget.cancel_current();
         });
 
         let widget = self.clone();
@@ -454,7 +523,7 @@ impl SqlEditorWidget {
         }
 
         if let Some(db_conn) = conn_guard.get_connection() {
-            match QueryExecutor::get_explain_plan(db_conn, &sql) {
+            match QueryExecutor::get_explain_plan(db_conn.as_ref(), &sql) {
                 Ok(plan_lines) => {
                     let plan_text = if plan_lines.is_empty() {
                         "No plan output.".to_string()
@@ -538,6 +607,25 @@ impl SqlEditorWidget {
         if let Some(db_conn) = conn_guard.get_connection() {
             if let Err(err) = db_conn.rollback() {
                 fltk::dialog::alert_default(&format!("Rollback failed: {}", err));
+            }
+        }
+    }
+
+    pub fn cancel_current(&self) {
+        if !*self.query_running.borrow() {
+            fltk::dialog::alert_default("No query is running");
+            return;
+        }
+
+        let conn_guard = self.connection.lock().unwrap();
+        if !conn_guard.is_connected() {
+            fltk::dialog::alert_default("Not connected to database");
+            return;
+        }
+
+        if let Some(db_conn) = conn_guard.get_connection() {
+            if let Err(err) = db_conn.break_execution() {
+                fltk::dialog::alert_default(&format!("Cancel failed: {}", err));
             }
         }
     }
@@ -643,6 +731,11 @@ impl SqlEditorWidget {
             return;
         }
 
+        if *self.query_running.borrow() {
+            fltk::dialog::alert_default("A query is already running");
+            return;
+        }
+
         let conn_guard = self.connection.lock().unwrap();
         if !conn_guard.is_connected() {
             fltk::dialog::alert_default("Not connected to database");
@@ -650,30 +743,108 @@ impl SqlEditorWidget {
         }
 
         let conn_name = conn_guard.get_info().name.clone();
+        let auto_commit = conn_guard.auto_commit();
+        let query_timeout = Self::parse_timeout(&self.timeout_input.value());
 
         if let Some(db_conn) = conn_guard.get_connection() {
+            let sql_text = sql.to_string();
+            let sender = self.progress_sender.clone();
+            let conn = db_conn.clone();
+            let query_running = self.query_running.clone();
+
+            *query_running.borrow_mut() = true;
+
             // Change cursor to wait and flush UI before executing query
             set_cursor(Cursor::Wait);
             app::flush();
 
-            let result = match QueryExecutor::execute_batch(db_conn, sql) {
-                Ok(result) => result,
-                Err(e) => QueryResult::new_error(sql, &e.to_string()),
-            };
+            thread::spawn(move || {
+                let previous_timeout = conn.call_timeout().unwrap_or(None);
+                if let Err(err) = conn.set_call_timeout(query_timeout) {
+                    let _ = sender.send(QueryProgress::Finished {
+                        result: QueryResult::new_error(&sql_text, &err.to_string()),
+                    });
+                    let _ = conn.set_call_timeout(previous_timeout);
+                    return;
+                }
 
-            // Restore cursor to default
-            set_cursor(Cursor::Default);
+                let result = match QueryExecutor::execute_batch_streaming(
+                    conn.as_ref(),
+                    &sql_text,
+                    |columns| {
+                        let names = columns
+                            .iter()
+                            .map(|col| col.name.clone())
+                            .collect::<Vec<String>>();
+                        let _ = sender.send(QueryProgress::StartSelect { columns: names });
+                    },
+                    |row| {
+                        let _ = sender.send(QueryProgress::Row { values: row });
+                    },
+                ) {
+                    Ok(result) => result,
+                    Err(e) => QueryResult::new_error(&sql_text, &e.to_string()),
+                };
 
-            QueryHistoryDialog::add_to_history(
-                sql,
-                result.execution_time.as_millis() as u64,
-                result.row_count,
-                &conn_name,
-            );
+                let _ = conn.set_call_timeout(previous_timeout);
 
-            if let Some(ref mut cb) = *self.execute_callback.borrow_mut() {
-                cb(result);
-            }
+                let mut final_result = result;
+                if auto_commit && !final_result.is_select {
+                    if let Err(err) = conn.commit() {
+                        final_result = QueryResult::new_error(
+                            &sql_text,
+                            &format!("Auto-commit failed: {}", err),
+                        );
+                    } else {
+                        final_result.message =
+                            format!("{} | Auto-commit applied", final_result.message);
+                    }
+                }
+
+                QueryHistoryDialog::add_to_history(
+                    &sql_text,
+                    final_result.execution_time.as_millis() as u64,
+                    final_result.row_count,
+                    &conn_name,
+                );
+
+                let _ = sender.send(QueryProgress::Finished {
+                    result: final_result,
+                });
+            });
         }
+    }
+
+    fn parse_timeout(value: &str) -> Option<Duration> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let secs = trimmed.parse::<u64>().ok()?;
+        if secs == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(secs))
+        }
+    }
+
+    pub fn set_progress_callback<F>(&mut self, callback: F)
+    where
+        F: FnMut(QueryProgress) + 'static,
+    {
+        *self.progress_callback.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn insert_text(&self, text: &str) {
+        let mut editor = self.editor.clone();
+        let mut buffer = self.buffer.clone();
+        let insert_pos = editor.insert_position();
+        buffer.insert(insert_pos, text);
+        editor.set_insert_position(insert_pos + text.len() as i32);
+
+        self.highlighter
+            .borrow()
+            .highlight(&buffer.text(), &mut self.style_buffer.clone());
     }
 }

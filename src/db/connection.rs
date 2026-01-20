@@ -60,9 +60,10 @@ impl Default for ConnectionInfo {
 }
 
 pub struct DatabaseConnection {
-    connection: Option<Connection>,
+    connection: Option<Arc<Connection>>,
     info: ConnectionInfo,
     connected: bool,
+    auto_commit: bool,
 }
 
 impl DatabaseConnection {
@@ -71,12 +72,17 @@ impl DatabaseConnection {
             connection: None,
             info: ConnectionInfo::default(),
             connected: false,
+            auto_commit: false,
         }
     }
 
     pub fn connect(&mut self, info: ConnectionInfo) -> Result<(), OracleError> {
         let conn_str = info.connection_string();
-        let connection = Connection::connect(&info.username, &info.password, &conn_str)?;
+        let connection = Arc::new(Connection::connect(
+            &info.username,
+            &info.password,
+            &conn_str,
+        )?);
 
         self.connection = Some(connection);
         self.info = info;
@@ -94,12 +100,20 @@ impl DatabaseConnection {
         self.connected
     }
 
-    pub fn get_connection(&self) -> Option<&Connection> {
-        self.connection.as_ref()
+    pub fn get_connection(&self) -> Option<Arc<Connection>> {
+        self.connection.clone()
     }
 
     pub fn get_info(&self) -> &ConnectionInfo {
         &self.info
+    }
+
+    pub fn set_auto_commit(&mut self, enabled: bool) {
+        self.auto_commit = enabled;
+    }
+
+    pub fn auto_commit(&self) -> bool {
+        self.auto_commit
     }
 
     pub fn test_connection(info: &ConnectionInfo) -> Result<(), OracleError> {

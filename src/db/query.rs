@@ -184,6 +184,51 @@ impl QueryExecutor {
         }
     }
 
+    pub fn execute_batch_streaming<F, G>(
+        conn: &Connection,
+        sql: &str,
+        mut on_select_start: F,
+        mut on_row: G,
+    ) -> Result<QueryResult, OracleError>
+    where
+        F: FnMut(&[ColumnInfo]),
+        G: FnMut(Vec<String>),
+    {
+        let statements = Self::split_statements(sql);
+
+        if statements.is_empty() {
+            return Ok(QueryResult {
+                sql: sql.to_string(),
+                columns: vec![],
+                rows: vec![],
+                row_count: 0,
+                execution_time: Duration::from_secs(0),
+                message: "No statements to execute".to_string(),
+                is_select: false,
+            });
+        }
+
+        if statements.len() == 1 {
+            let statement = statements[0].trim();
+            let sql_upper = statement.to_uppercase();
+            let start = Instant::now();
+
+            if sql_upper.starts_with("SELECT") || sql_upper.starts_with("WITH") {
+                return Self::execute_select_streaming(
+                    conn,
+                    statement,
+                    start,
+                    &mut on_select_start,
+                    &mut on_row,
+                );
+            }
+
+            return Self::execute(conn, statement);
+        }
+
+        Self::execute_batch(conn, sql)
+    }
+
     /// Split SQL text into individual statements by semicolons
     /// Handles quoted strings and comments to avoid splitting inside them
     fn split_statements(sql: &str) -> Vec<String> {
@@ -422,6 +467,55 @@ impl QueryExecutor {
         ))
     }
 
+    fn execute_select_streaming<F, G>(
+        conn: &Connection,
+        sql: &str,
+        start: Instant,
+        on_select_start: &mut F,
+        on_row: &mut G,
+    ) -> Result<QueryResult, OracleError>
+    where
+        F: FnMut(&[ColumnInfo]),
+        G: FnMut(Vec<String>),
+    {
+        let mut stmt = conn.statement(sql).build()?;
+        let result_set = stmt.query(&[])?;
+
+        let column_info: Vec<ColumnInfo> = result_set
+            .column_info()
+            .iter()
+            .map(|col| ColumnInfo {
+                name: col.name().to_string(),
+                data_type: format!("{:?}", col.oracle_type()),
+            })
+            .collect();
+
+        on_select_start(&column_info);
+
+        let mut rows: Vec<Vec<String>> = Vec::new();
+
+        for row_result in result_set {
+            let row: Row = row_result?;
+            let mut row_data: Vec<String> = Vec::new();
+
+            for i in 0..column_info.len() {
+                let value: Option<String> = row.get(i).unwrap_or(None);
+                row_data.push(value.unwrap_or_else(|| "NULL".to_string()));
+            }
+
+            on_row(row_data.clone());
+            rows.push(row_data);
+        }
+
+        let execution_time = start.elapsed();
+        Ok(QueryResult::new_select(
+            sql,
+            column_info,
+            rows,
+            execution_time,
+        ))
+    }
+
     fn execute_dml(
         conn: &Connection,
         sql: &str,
@@ -505,6 +599,36 @@ impl ObjectBrowser {
     pub fn get_sequences(conn: &Connection) -> Result<Vec<String>, OracleError> {
         let sql = "SELECT sequence_name FROM user_sequences ORDER BY sequence_name";
         Self::get_object_list(conn, sql)
+    }
+
+    pub fn get_packages(conn: &Connection) -> Result<Vec<String>, OracleError> {
+        let sql = "SELECT object_name FROM user_objects WHERE object_type = 'PACKAGE' ORDER BY object_name";
+        Self::get_object_list(conn, sql)
+    }
+
+    pub fn get_package_procedures(
+        conn: &Connection,
+        package_name: &str,
+    ) -> Result<Vec<String>, OracleError> {
+        let sql = r#"
+            SELECT procedure_name
+            FROM user_procedures
+            WHERE object_type = 'PACKAGE'
+              AND object_name = :1
+              AND procedure_name IS NOT NULL
+            ORDER BY procedure_name
+        "#;
+        let mut stmt = conn.statement(sql).build()?;
+        let rows = stmt.query(&[&package_name.to_uppercase()])?;
+
+        let mut procedures: Vec<String> = Vec::new();
+        for row_result in rows {
+            let row: Row = row_result?;
+            let name: String = row.get(0)?;
+            procedures.push(name);
+        }
+
+        Ok(procedures)
     }
 
     pub fn get_table_columns(

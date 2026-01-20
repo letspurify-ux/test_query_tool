@@ -17,7 +17,8 @@ use std::rc::Rc;
 use crate::db::{create_shared_connection, ObjectBrowser, QueryResult, SharedConnection};
 use crate::ui::{
     ConnectionDialog, FeatureCatalogDialog, FindReplaceDialog, HighlightData, IntellisenseData,
-    MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, ResultTableWidget, SqlEditorWidget,
+    MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, QueryProgress, ResultTableWidget,
+    SqlAction, SqlEditorWidget,
 };
 use crate::utils::QueryHistory;
 
@@ -142,8 +143,10 @@ impl MainWindow {
 
         // Setup SQL editor execute callback
         self.sql_editor.set_execute_callback(move |query_result| {
-            // Update result table
-            result_table.display_result(&query_result);
+            // Update result table for non-select results
+            if !query_result.is_select {
+                result_table.display_result(&query_result);
+            }
             *last_result.borrow_mut() = Some(query_result.clone());
 
             // Update status bar
@@ -160,15 +163,36 @@ impl MainWindow {
 
         // Setup object browser callback to set SQL in editor
         let mut sql_buffer = self.sql_buffer.clone();
+        let mut editor = self.sql_editor.get_editor();
         let highlighter = self.sql_editor.get_highlighter();
         let style_buffer = self.sql_editor.get_style_buffer();
+        let sql_editor = self.sql_editor.clone();
 
-        self.object_browser.set_sql_callback(move |sql| {
-            sql_buffer.set_text(&sql);
-            // Refresh highlighting
-            highlighter
-                .borrow()
-                .highlight(&sql, &mut style_buffer.clone());
+        self.object_browser.set_sql_callback(move |action| match action {
+            SqlAction::Set(sql) => {
+                sql_buffer.set_text(&sql);
+                // Refresh highlighting
+                highlighter
+                    .borrow()
+                    .highlight(&sql, &mut style_buffer.clone());
+            }
+            SqlAction::Insert(text) => {
+                let insert_pos = editor.insert_position();
+                sql_buffer.insert(insert_pos, &text);
+                editor.set_insert_position(insert_pos + text.len() as i32);
+                sql_editor.refresh_highlighting();
+            }
+        });
+
+        let mut result_table_stream = self.result_table.clone();
+        self.sql_editor.set_progress_callback(move |progress| match progress {
+            QueryProgress::StartSelect { columns } => {
+                result_table_stream.start_streaming(&columns);
+            }
+            QueryProgress::Row { values } => {
+                result_table_stream.append_row(values);
+            }
+            QueryProgress::Finished { .. } => {}
         });
 
         // Setup menu callbacks
@@ -223,24 +247,31 @@ impl MainWindow {
                                             let mut highlight_data = HighlightData::new();
 
                                             // Load tables
-                                            if let Ok(tables) = ObjectBrowser::get_tables(conn) {
+                                            if let Ok(tables) =
+                                                ObjectBrowser::get_tables(conn.as_ref())
+                                            {
                                                 highlight_data.tables = tables.clone();
                                                 data.tables = tables;
                                             }
 
                                             // Load views
-                                            if let Ok(views) = ObjectBrowser::get_views(conn) {
+                                            if let Ok(views) = ObjectBrowser::get_views(conn.as_ref())
+                                            {
                                                 highlight_data.views = views.clone();
                                                 data.views = views;
                                             }
 
                                             // Load procedures
-                                            if let Ok(procs) = ObjectBrowser::get_procedures(conn) {
+                                            if let Ok(procs) =
+                                                ObjectBrowser::get_procedures(conn.as_ref())
+                                            {
                                                 data.procedures = procs;
                                             }
 
                                             // Load functions
-                                            if let Ok(funcs) = ObjectBrowser::get_functions(conn) {
+                                            if let Ok(funcs) =
+                                                ObjectBrowser::get_functions(conn.as_ref())
+                                            {
                                                 data.functions = funcs;
                                             }
 
@@ -482,9 +513,17 @@ impl MainWindow {
                             FeatureCatalogDialog::show();
                         }
                         "Tools/Auto-Commit" => {
-                            fltk::dialog::message_default(
-                                "Auto-commit is not implemented yet in this build.",
-                            );
+                            if let Some(item) = m.find_item("Tools/Auto-Commit") {
+                                let enabled = item.value();
+                                let mut db_conn = connection.lock().unwrap();
+                                db_conn.set_auto_commit(enabled);
+                                let status = if enabled {
+                                    "Auto-commit enabled"
+                                } else {
+                                    "Auto-commit disabled"
+                                };
+                                status_bar.set_label(status);
+                            }
                         }
                         _ => {}
                     }
