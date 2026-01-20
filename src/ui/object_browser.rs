@@ -537,6 +537,7 @@ impl ObjectBrowserWidget {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_selected_item(&self) -> Option<String> {
         self.tree.first_selected_item().and_then(|item| item.label())
     }
