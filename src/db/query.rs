@@ -75,22 +75,83 @@ impl QueryExecutor {
     /// Execute a single SQL statement
     pub fn execute(conn: &Connection, sql: &str) -> Result<QueryResult, OracleError> {
         let sql_trimmed = sql.trim();
-        // Remove trailing semicolon if present
-        let sql_clean = sql_trimmed.trim_end_matches(';').trim();
+        // Remove trailing semicolon if present (but keep for PL/SQL blocks)
+        let sql_clean = if sql_trimmed.to_uppercase().starts_with("BEGIN")
+            || sql_trimmed.to_uppercase().starts_with("DECLARE")
+        {
+            sql_trimmed.to_string()
+        } else {
+            sql_trimmed.trim_end_matches(';').trim().to_string()
+        };
         let sql_upper = sql_clean.to_uppercase();
 
         let start = Instant::now();
 
+        // SELECT or WITH (Common Table Expression)
         if sql_upper.starts_with("SELECT") || sql_upper.starts_with("WITH") {
-            Self::execute_select(conn, sql_clean, start)
-        } else if sql_upper.starts_with("INSERT") {
-            Self::execute_dml(conn, sql_clean, start, "INSERT")
+            Self::execute_select(conn, &sql_clean, start)
+        }
+        // DML statements
+        else if sql_upper.starts_with("INSERT") {
+            Self::execute_dml(conn, &sql_clean, start, "INSERT")
         } else if sql_upper.starts_with("UPDATE") {
-            Self::execute_dml(conn, sql_clean, start, "UPDATE")
+            Self::execute_dml(conn, &sql_clean, start, "UPDATE")
         } else if sql_upper.starts_with("DELETE") {
-            Self::execute_dml(conn, sql_clean, start, "DELETE")
-        } else {
-            Self::execute_ddl(conn, sql_clean, start)
+            Self::execute_dml(conn, &sql_clean, start, "DELETE")
+        } else if sql_upper.starts_with("MERGE") {
+            Self::execute_dml(conn, &sql_clean, start, "MERGE")
+        }
+        // PL/SQL anonymous blocks
+        else if sql_upper.starts_with("BEGIN") || sql_upper.starts_with("DECLARE") {
+            Self::execute_plsql_block(conn, &sql_clean, start)
+        }
+        // Procedure calls with CALL
+        else if sql_upper.starts_with("CALL") {
+            Self::execute_call(conn, &sql_clean, start)
+        }
+        // Procedure calls with EXEC/EXECUTE (SQL*Plus style)
+        else if sql_upper.starts_with("EXEC") {
+            Self::execute_exec(conn, &sql_clean, start)
+        }
+        // DDL statements
+        else if sql_upper.starts_with("CREATE")
+            || sql_upper.starts_with("ALTER")
+            || sql_upper.starts_with("DROP")
+            || sql_upper.starts_with("TRUNCATE")
+            || sql_upper.starts_with("RENAME")
+            || sql_upper.starts_with("GRANT")
+            || sql_upper.starts_with("REVOKE")
+            || sql_upper.starts_with("COMMENT")
+        {
+            Self::execute_ddl(conn, &sql_clean, start)
+        }
+        // Transaction control
+        else if sql_upper.starts_with("COMMIT") {
+            conn.commit()?;
+            Ok(QueryResult {
+                sql: sql_clean,
+                columns: vec![],
+                rows: vec![],
+                row_count: 0,
+                execution_time: start.elapsed(),
+                message: "Commit complete".to_string(),
+                is_select: false,
+            })
+        } else if sql_upper.starts_with("ROLLBACK") {
+            conn.rollback()?;
+            Ok(QueryResult {
+                sql: sql_clean,
+                columns: vec![],
+                rows: vec![],
+                row_count: 0,
+                execution_time: start.elapsed(),
+                message: "Rollback complete".to_string(),
+                is_select: false,
+            })
+        }
+        // Everything else - try as DDL/DML
+        else {
+            Self::execute_ddl(conn, &sql_clean, start)
         }
     }
 
@@ -570,13 +631,125 @@ impl QueryExecutor {
     ) -> Result<QueryResult, OracleError> {
         conn.execute(sql, &[])?;
         let execution_time = start.elapsed();
+
+        // Determine the DDL type for better messaging
+        let sql_upper = sql.to_uppercase();
+        let message = if sql_upper.starts_with("CREATE") {
+            if sql_upper.contains(" TABLE ") {
+                "Table created"
+            } else if sql_upper.contains(" VIEW ") {
+                "View created"
+            } else if sql_upper.contains(" INDEX ") {
+                "Index created"
+            } else if sql_upper.contains(" PROCEDURE ") {
+                "Procedure created"
+            } else if sql_upper.contains(" FUNCTION ") {
+                "Function created"
+            } else if sql_upper.contains(" PACKAGE ") {
+                "Package created"
+            } else if sql_upper.contains(" TRIGGER ") {
+                "Trigger created"
+            } else if sql_upper.contains(" SEQUENCE ") {
+                "Sequence created"
+            } else if sql_upper.contains(" SYNONYM ") {
+                "Synonym created"
+            } else if sql_upper.contains(" TYPE ") {
+                "Type created"
+            } else {
+                "Object created"
+            }
+        } else if sql_upper.starts_with("ALTER") {
+            "Object altered"
+        } else if sql_upper.starts_with("DROP") {
+            "Object dropped"
+        } else if sql_upper.starts_with("TRUNCATE") {
+            "Table truncated"
+        } else if sql_upper.starts_with("GRANT") {
+            "Grant succeeded"
+        } else if sql_upper.starts_with("REVOKE") {
+            "Revoke succeeded"
+        } else if sql_upper.starts_with("COMMENT") {
+            "Comment added"
+        } else {
+            "Statement executed successfully"
+        };
+
         Ok(QueryResult {
             sql: sql.to_string(),
             columns: vec![],
             rows: vec![],
             row_count: 0,
             execution_time,
-            message: "Statement executed successfully".to_string(),
+            message: message.to_string(),
+            is_select: false,
+        })
+    }
+
+    /// Execute a PL/SQL anonymous block (BEGIN...END or DECLARE...BEGIN...END)
+    fn execute_plsql_block(
+        conn: &Connection,
+        sql: &str,
+        start: Instant,
+    ) -> Result<QueryResult, OracleError> {
+        conn.execute(sql, &[])?;
+        let execution_time = start.elapsed();
+        Ok(QueryResult {
+            sql: sql.to_string(),
+            columns: vec![],
+            rows: vec![],
+            row_count: 0,
+            execution_time,
+            message: "PL/SQL procedure successfully completed".to_string(),
+            is_select: false,
+        })
+    }
+
+    /// Execute a CALL statement (standard SQL procedure call)
+    fn execute_call(
+        conn: &Connection,
+        sql: &str,
+        start: Instant,
+    ) -> Result<QueryResult, OracleError> {
+        conn.execute(sql, &[])?;
+        let execution_time = start.elapsed();
+        Ok(QueryResult {
+            sql: sql.to_string(),
+            columns: vec![],
+            rows: vec![],
+            row_count: 0,
+            execution_time,
+            message: "Call completed".to_string(),
+            is_select: false,
+        })
+    }
+
+    /// Execute EXEC/EXECUTE statement (SQL*Plus style procedure call)
+    /// Converts "EXEC procedure_name(args)" to "BEGIN procedure_name(args); END;"
+    fn execute_exec(
+        conn: &Connection,
+        sql: &str,
+        start: Instant,
+    ) -> Result<QueryResult, OracleError> {
+        // Remove EXEC or EXECUTE keyword and convert to PL/SQL block
+        let sql_trimmed = sql.trim();
+        let proc_call = if sql_trimmed.to_uppercase().starts_with("EXECUTE ") {
+            &sql_trimmed[8..] // Remove "EXECUTE "
+        } else if sql_trimmed.to_uppercase().starts_with("EXEC ") {
+            &sql_trimmed[5..] // Remove "EXEC "
+        } else {
+            sql_trimmed
+        };
+
+        let plsql = format!("BEGIN {}; END;", proc_call.trim().trim_end_matches(';'));
+        conn.execute(&plsql, &[])?;
+        let execution_time = start.elapsed();
+        Ok(QueryResult {
+            sql: sql.to_string(),
+            columns: vec![],
+            rows: vec![],
+            row_count: 0,
+            execution_time,
+            message: "PL/SQL procedure successfully completed".to_string(),
             is_select: false,
         })
     }
