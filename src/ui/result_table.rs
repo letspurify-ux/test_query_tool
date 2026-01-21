@@ -403,6 +403,17 @@ impl ResultTableWidget {
             return;
         }
 
+        if result.rows.is_empty() && result.row_count > 0 && self.table.rows() > 0 {
+            let col_names: Vec<String> =
+                result.columns.iter().map(|c| c.name.clone()).collect();
+            for (i, name) in col_names.iter().enumerate() {
+                self.table.set_col_header_value(i as i32, name);
+            }
+            *self.headers.borrow_mut() = col_names;
+            self.table.redraw();
+            return;
+        }
+
         let col_names: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
         let row_count = result.rows.len() as i32;
         let col_count = col_names.len() as i32;
