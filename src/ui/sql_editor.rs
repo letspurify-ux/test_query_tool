@@ -903,8 +903,7 @@ impl SqlEditorWidget {
                         continue;
                     }
 
-                    let sql_upper = trimmed.to_uppercase();
-                    let is_select = sql_upper.starts_with("SELECT") || sql_upper.starts_with("WITH");
+                    let is_select = QueryExecutor::is_select_statement(trimmed);
 
                     let _ = sender.send(QueryProgress::StatementStart { index });
 
