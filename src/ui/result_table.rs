@@ -220,7 +220,10 @@ impl ResultTableWidget {
             row += 1;
         }
 
-        let row_hit = row_hit?;
+        let row_hit = match row_hit {
+            Some(row_hit) => row_hit,
+            None => return None,
+        };
 
         let mut col = start_col;
         while col < cols {

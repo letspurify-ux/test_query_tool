@@ -1016,7 +1016,13 @@ impl SqlEditorWidget {
             return None;
         }
 
-        let secs = trimmed.parse::<u64>().ok()?;
+        let secs = match trimmed.parse::<u64>() {
+            Ok(secs) => secs,
+            Err(err) => {
+                eprintln!("Invalid timeout value '{trimmed}': {err}");
+                return None;
+            }
+        };
         if secs == 0 {
             None
         } else {

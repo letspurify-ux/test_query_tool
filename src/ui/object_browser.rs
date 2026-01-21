@@ -222,16 +222,35 @@ impl ObjectBrowserWidget {
     }
 
     fn get_item_info(item: &TreeItem) -> Option<ObjectItem> {
-        let object_name = item.label()?;
-        let parent = item.parent()?;
-        let parent_type = parent.label()?;
+        let object_name = match item.label() {
+            Some(label) => label,
+            None => return None,
+        };
+        let parent = match item.parent() {
+            Some(parent) => parent,
+            None => return None,
+        };
+        let parent_type = match parent.label() {
+            Some(label) => label,
+            None => return None,
+        };
 
         // Make sure this is not a category item
         if parent_type == "Procedures" {
             if let Some(grandparent) = parent.parent() {
-                let package_name = grandparent.label()?;
-                let root = grandparent.parent()?;
-                if root.label()? == "Packages" {
+                let package_name = match grandparent.label() {
+                    Some(label) => label,
+                    None => return None,
+                };
+                let root = match grandparent.parent() {
+                    Some(root) => root,
+                    None => return None,
+                };
+                let root_label = match root.label() {
+                    Some(label) => label,
+                    None => return None,
+                };
+                if root_label == "Packages" {
                     return Some(ObjectItem::PackageProcedure {
                         package_name,
                         procedure_name: object_name,
@@ -252,12 +271,13 @@ impl ObjectBrowserWidget {
     }
 
     fn get_insert_text(item: &TreeItem) -> Option<String> {
-        match Self::get_item_info(item)? {
-            ObjectItem::Simple { object_name, .. } => Some(object_name),
-            ObjectItem::PackageProcedure {
+        match Self::get_item_info(item) {
+            Some(ObjectItem::Simple { object_name, .. }) => Some(object_name),
+            Some(ObjectItem::PackageProcedure {
                 package_name,
                 procedure_name,
-            } => Some(format!("{}.{}", package_name, procedure_name)),
+            }) => Some(format!("{}.{}", package_name, procedure_name)),
+            None => None,
         }
     }
 
