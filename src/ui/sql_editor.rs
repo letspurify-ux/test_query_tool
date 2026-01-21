@@ -190,6 +190,7 @@ impl SqlEditorWidget {
                     QueryProgress::BatchFinished => {
                         *query_running.borrow_mut() = false;
                         set_cursor(Cursor::Default);
+                        app::flush();
                     }
                     _ => {}
                 }

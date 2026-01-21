@@ -218,7 +218,12 @@ impl MainWindow {
                         result_tabs_stream.display_result(index, &result);
                     }
                 }
-                QueryProgress::BatchFinished => {}
+                QueryProgress::BatchFinished => {
+                    let mut streaming_indices = streaming_indices_for_cb.borrow_mut();
+                    for index in streaming_indices.drain() {
+                        result_tabs_stream.finish_streaming(index);
+                    }
+                }
             });
 
         // Setup menu callbacks
