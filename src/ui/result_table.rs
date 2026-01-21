@@ -175,21 +175,70 @@ impl ResultTableWidget {
 
     /// Get cell at mouse position (returns None if outside cells)
     fn get_cell_at_mouse(table: &SmartTable) -> Option<(i32, i32)> {
+        let rows = table.rows();
+        let cols = table.cols();
+        if rows <= 0 || cols <= 0 {
+            return None;
+        }
+
         let mouse_x = app::event_x();
         let mouse_y = app::event_y();
 
-        // Check each visible cell
-        for row in 0..table.rows() {
-            for col in 0..table.cols() {
-                if let Some((cx, cy, cw, ch)) =
-                    table.find_cell(fltk::table::TableContext::Cell, row, col)
-                {
-                    if mouse_x >= cx && mouse_x < cx + cw && mouse_y >= cy && mouse_y < cy + ch {
-                        return Some((row, col));
-                    }
-                }
-            }
+        let table_x = table.x();
+        let table_y = table.y();
+        let table_w = table.w();
+        let table_h = table.h();
+        let data_left = table_x + table.row_header_width();
+        let data_top = table_y + table.col_header_height();
+        let data_right = table_x + table_w;
+        let data_bottom = table_y + table_h;
+
+        if mouse_x < data_left || mouse_y < data_top || mouse_x >= data_right || mouse_y >= data_bottom
+        {
+            return None;
         }
+
+        let start_row = table.row_position().max(0).min(rows - 1);
+        let start_col = table.col_position().max(0).min(cols - 1);
+
+        let mut row_hit = None;
+        let mut row = start_row;
+        while row < rows {
+            if let Some((_, cy, _, ch)) =
+                table.find_cell(fltk::table::TableContext::Cell, row, start_col)
+            {
+                if mouse_y >= cy && mouse_y < cy + ch {
+                    row_hit = Some(row);
+                    break;
+                }
+                if cy > mouse_y || cy >= data_bottom {
+                    break;
+                }
+            } else {
+                break;
+            }
+            row += 1;
+        }
+
+        let row_hit = row_hit?;
+
+        let mut col = start_col;
+        while col < cols {
+            if let Some((cx, _, cw, _)) =
+                table.find_cell(fltk::table::TableContext::Cell, row_hit, col)
+            {
+                if mouse_x >= cx && mouse_x < cx + cw {
+                    return Some((row_hit, col));
+                }
+                if cx > mouse_x || cx >= data_right {
+                    break;
+                }
+            } else {
+                break;
+            }
+            col += 1;
+        }
+
         None
     }
 
