@@ -166,6 +166,19 @@ impl ResultTableWidget {
         }
     }
 
+    fn table_opts(rows: i32, cols: i32) -> TableOpts {
+        TableOpts {
+            rows,
+            cols,
+            editable: false,
+            cell_selection_color: Color::from_rgb(38, 79, 120),
+            header_frame: FrameType::FlatBox,
+            header_color: Color::from_rgb(45, 45, 48),
+            cell_border_color: Color::from_rgb(50, 50, 52),
+            ..Default::default()
+        }
+    }
+
     /// Get cell at mouse position (returns None if outside cells)
     fn get_cell_at_mouse(table: &SmartTable) -> Option<(i32, i32)> {
         let mouse_x = app::event_x();
@@ -390,16 +403,7 @@ impl ResultTableWidget {
 
     pub fn display_result(&mut self, result: &QueryResult) {
         if !result.is_select {
-            self.table.set_opts(TableOpts {
-                editable: false,
-                cell_selection_color: Color::from_rgb(38, 79, 120),
-                header_frame: FrameType::FlatBox,
-                header_color: Color::from_rgb(45, 45, 48),
-                cell_border_color: Color::from_rgb(50, 50, 52),
-                ..Default::default()
-            });
-            self.table.set_rows(0);
-            self.table.set_cols(0);
+            self.table.set_opts(Self::table_opts(0, 0));
             self.headers.borrow_mut().clear();
             self.table.redraw();
             return;
@@ -410,16 +414,7 @@ impl ResultTableWidget {
         let col_count = col_names.len() as i32;
 
         // Update table dimensions
-        self.table.set_opts(TableOpts {
-            editable: false,
-            cell_selection_color: Color::from_rgb(38, 79, 120),
-            header_frame: FrameType::FlatBox,
-            header_color: Color::from_rgb(45, 45, 48),
-            cell_border_color: Color::from_rgb(50, 50, 52),
-            ..Default::default()
-        });
-        self.table.set_rows(row_count);
-        self.table.set_cols(col_count);
+        self.table.set_opts(Self::table_opts(row_count, col_count));
 
         // Set column headers
         for (i, name) in col_names.iter().enumerate() {
@@ -476,16 +471,7 @@ impl ResultTableWidget {
             .collect();
         *self.pending_widths.borrow_mut() = initial_widths.clone();
 
-        self.table.set_opts(TableOpts {
-            editable: false,
-            cell_selection_color: Color::from_rgb(38, 79, 120),
-            header_frame: FrameType::FlatBox,
-            header_color: Color::from_rgb(45, 45, 48),
-            cell_border_color: Color::from_rgb(50, 50, 52),
-            ..Default::default()
-        });
-        self.table.set_rows(0);
-        self.table.set_cols(col_count);
+        self.table.set_opts(Self::table_opts(0, col_count));
 
         for (i, name) in headers.iter().enumerate() {
             self.table.set_col_header_value(i as i32, name);
@@ -552,14 +538,18 @@ impl ResultTableWidget {
         let mut cols = self.table.cols().max(max_cols_in_rows).max(pending_cols);
 
         // Resize table to accommodate new rows and columns
-        if cols > self.table.cols() {
-            self.table.set_cols(cols);
-            let mut headers = self.headers.borrow_mut();
-            if headers.len() < cols as usize {
-                headers.resize(cols as usize, String::new());
-            }
+        let mut headers = self.headers.borrow_mut();
+        if headers.len() < cols as usize {
+            headers.resize(cols as usize, String::new());
         }
-        self.table.set_rows(new_row_count);
+        drop(headers);
+
+        self.table
+            .set_opts(Self::table_opts(new_row_count, cols));
+        let headers = self.headers.borrow();
+        for (i, header) in headers.iter().enumerate() {
+            self.table.set_col_header_value(i as i32, header);
+        }
 
         // Update column widths first (batch update)
         let widths = self.pending_widths.borrow();
@@ -600,16 +590,7 @@ impl ResultTableWidget {
 
     #[allow(dead_code)]
     pub fn clear(&mut self) {
-        self.table.set_opts(TableOpts {
-            editable: false,
-            cell_selection_color: Color::from_rgb(38, 79, 120),
-            header_frame: FrameType::FlatBox,
-            header_color: Color::from_rgb(45, 45, 48),
-            cell_border_color: Color::from_rgb(50, 50, 52),
-            ..Default::default()
-        });
-        self.table.set_rows(0);
-        self.table.set_cols(0);
+        self.table.set_opts(Self::table_opts(0, 0));
         self.headers.borrow_mut().clear();
         self.table.redraw();
     }
