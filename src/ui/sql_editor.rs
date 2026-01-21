@@ -593,9 +593,9 @@ impl SqlEditorWidget {
                 close_btn.set_color(Color::from_rgb(0, 122, 204));
                 close_btn.set_label_color(Color::White);
 
-                let mut dialog_clone = dialog.clone();
+                let (sender, receiver) = fltk::app::channel::<()>();
                 close_btn.set_callback(move |_| {
-                    dialog_clone.hide();
+                    let _ = sender.send(());
                 });
 
                 dialog.end();
@@ -603,6 +603,9 @@ impl SqlEditorWidget {
 
                 while dialog.shown() {
                     fltk::app::wait();
+                    if receiver.recv().is_some() {
+                        dialog.hide();
+                    }
                 }
             }
             Err(_) => {
@@ -715,9 +718,9 @@ impl SqlEditorWidget {
         close_btn.set_color(Color::from_rgb(0, 122, 204));
         close_btn.set_label_color(Color::White);
 
-        let mut dialog_clone = dialog.clone();
+        let (sender, receiver) = fltk::app::channel::<()>();
         close_btn.set_callback(move |_| {
-            dialog_clone.hide();
+            let _ = sender.send(());
         });
 
         dialog.end();
@@ -725,6 +728,9 @@ impl SqlEditorWidget {
 
         while dialog.shown() {
             fltk::app::wait();
+            if receiver.recv().is_some() {
+                dialog.hide();
+            }
         }
     }
 

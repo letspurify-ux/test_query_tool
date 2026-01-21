@@ -15,6 +15,13 @@ pub struct FeatureCatalogDialog;
 
 impl FeatureCatalogDialog {
     pub fn show() {
+        enum DialogMessage {
+            UpdateDisplay,
+            ClearFilter,
+            ReloadCatalog,
+            Close,
+        }
+
         let mut dialog = Window::default()
             .with_size(900, 700)
             .with_label("Feature Catalog");
@@ -96,64 +103,82 @@ impl FeatureCatalogDialog {
 
         dialog.end();
 
-        let update_display = {
-            let filter_input = filter_input.clone();
-            let show_implemented = show_implemented.clone();
-            let show_planned = show_planned.clone();
-            let mut display_buffer = display_buffer.clone();
-            let catalog = catalog.clone();
+        let (sender, receiver) = fltk::app::channel::<DialogMessage>();
 
-            move || {
-                let text = build_catalog_text_filtered(
-                    &catalog.borrow(),
-                    &filter_input.value(),
-                    show_implemented.value(),
-                    show_planned.value(),
-                );
-                display_buffer.set_text(&text);
-            }
-        };
-
-        let update_display = std::rc::Rc::new(std::cell::RefCell::new(update_display));
-
-        let update_for_filter = update_display.clone();
+        let update_for_filter = sender.clone();
         filter_input.set_callback(move |_| {
-            (update_for_filter.borrow_mut())();
+            let _ = update_for_filter.send(DialogMessage::UpdateDisplay);
         });
 
-        let update_for_impl = update_display.clone();
+        let update_for_impl = sender.clone();
         show_implemented.set_callback(move |_| {
-            (update_for_impl.borrow_mut())();
+            let _ = update_for_impl.send(DialogMessage::UpdateDisplay);
         });
 
-        let update_for_planned = update_display.clone();
+        let update_for_planned = sender.clone();
         show_planned.set_callback(move |_| {
-            (update_for_planned.borrow_mut())();
+            let _ = update_for_planned.send(DialogMessage::UpdateDisplay);
         });
 
-        let update_for_clear = update_display.clone();
-        let mut filter_for_clear = filter_input.clone();
+        let update_for_clear = sender.clone();
         clear_btn.set_callback(move |_| {
-            filter_for_clear.set_value("");
-            (update_for_clear.borrow_mut())();
+            let _ = update_for_clear.send(DialogMessage::ClearFilter);
         });
 
-        let update_for_reload = update_display.clone();
-        let catalog_for_reload = catalog.clone();
+        let update_for_reload = sender.clone();
         reload_btn.set_callback(move |_| {
-            *catalog_for_reload.borrow_mut() = load_feature_catalog();
-            (update_for_reload.borrow_mut())();
+            let _ = update_for_reload.send(DialogMessage::ReloadCatalog);
         });
 
-        let mut dialog_clone = dialog.clone();
+        let sender_for_close = sender.clone();
         close_btn.set_callback(move |_| {
-            dialog_clone.hide();
+            let _ = sender_for_close.send(DialogMessage::Close);
         });
 
         dialog.show();
 
+        let mut filter_input = filter_input.clone();
+        let show_implemented = show_implemented.clone();
+        let show_planned = show_planned.clone();
+        let mut display_buffer = display_buffer.clone();
         while dialog.shown() {
             fltk::app::wait();
+            while let Some(message) = receiver.recv() {
+                match message {
+                    DialogMessage::UpdateDisplay => {
+                        let text = build_catalog_text_filtered(
+                            &catalog.borrow(),
+                            &filter_input.value(),
+                            show_implemented.value(),
+                            show_planned.value(),
+                        );
+                        display_buffer.set_text(&text);
+                    }
+                    DialogMessage::ClearFilter => {
+                        filter_input.set_value("");
+                        let text = build_catalog_text_filtered(
+                            &catalog.borrow(),
+                            "",
+                            show_implemented.value(),
+                            show_planned.value(),
+                        );
+                        display_buffer.set_text(&text);
+                    }
+                    DialogMessage::ReloadCatalog => {
+                        *catalog.borrow_mut() = load_feature_catalog();
+                        let text = build_catalog_text_filtered(
+                            &catalog.borrow(),
+                            &filter_input.value(),
+                            show_implemented.value(),
+                            show_planned.value(),
+                        );
+                        display_buffer.set_text(&text);
+                    }
+                    DialogMessage::Close => {
+                        dialog.hide();
+                    }
+                }
+            }
         }
     }
 }

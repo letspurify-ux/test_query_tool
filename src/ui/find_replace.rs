@@ -25,6 +25,24 @@ impl FindReplaceDialog {
     }
 
     fn show_dialog(editor: &mut TextEditor, buffer: &mut TextBuffer, show_replace: bool) {
+        enum DialogMessage {
+            FindNext {
+                search_text: String,
+                case_sensitive: bool,
+            },
+            Replace {
+                search_text: String,
+                replace_text: String,
+                case_sensitive: bool,
+            },
+            ReplaceAll {
+                search_text: String,
+                replace_text: String,
+                case_sensitive: bool,
+            },
+            Close,
+        }
+
         let title = if show_replace {
             "Find and Replace"
         } else {
@@ -140,53 +158,27 @@ impl FindReplaceDialog {
         // State for search
         let search_pos = Rc::new(RefCell::new(0i32));
 
+        let (sender, receiver) = fltk::app::channel::<DialogMessage>();
+
         // Find Next callback
+        let sender_for_find = sender.clone();
         let find_input_clone = find_input.clone();
         let case_check_clone = case_check.clone();
-        let search_pos_clone = search_pos.clone();
-        let mut buffer_clone = buffer.clone();
-        let mut editor_clone = editor.clone();
-
         find_next_btn.set_callback(move |_| {
             let search_text = find_input_clone.value();
             if search_text.is_empty() {
                 return;
             }
 
-            let case_sensitive = case_check_clone.value();
-            let text = buffer_clone.text();
-            let start_pos = *search_pos_clone.borrow();
-
-            let found_pos = if case_sensitive {
-                text[start_pos as usize..].find(&search_text)
-            } else {
-                text[start_pos as usize..]
-                    .to_lowercase()
-                    .find(&search_text.to_lowercase())
-            };
-
-            if let Some(pos) = found_pos {
-                let absolute_pos = start_pos as usize + pos;
-                buffer_clone.select(
-                    absolute_pos as i32,
-                    (absolute_pos + search_text.len()) as i32,
-                );
-                editor_clone.set_insert_position((absolute_pos + search_text.len()) as i32);
-                editor_clone.show_insert_position();
-                *search_pos_clone.borrow_mut() = (absolute_pos + 1) as i32;
-            } else {
-                // Wrap around
-                if start_pos > 0 {
-                    *search_pos_clone.borrow_mut() = 0;
-                    fltk::dialog::message_default("Reached end, searching from beginning...");
-                } else {
-                    fltk::dialog::message_default("Text not found");
-                }
-            }
+            let _ = sender_for_find.send(DialogMessage::FindNext {
+                search_text,
+                case_sensitive: case_check_clone.value(),
+            });
         });
 
         // Replace callback
         if let Some(mut replace_btn) = replace_btn {
+            let sender_for_replace = sender.clone();
             let find_input_clone = find_input.clone();
             let replace_input_clone = match replace_input.clone() {
                 Some(input) => input,
@@ -196,8 +188,6 @@ impl FindReplaceDialog {
                 }
             };
             let case_check_clone = case_check.clone();
-            let mut buffer_clone = buffer.clone();
-            let mut editor_clone = editor.clone();
 
             replace_btn.set_callback(move |_| {
                 let search_text = find_input_clone.value();
@@ -207,26 +197,17 @@ impl FindReplaceDialog {
                     return;
                 }
 
-                // Check if there's a selection matching the search text
-                if let Some((start, end)) = buffer_clone.selection_position() {
-                    let selected = buffer_clone.text_range(start, end).unwrap_or_default();
-                    let matches = if case_check_clone.value() {
-                        selected == search_text
-                    } else {
-                        selected.to_lowercase() == search_text.to_lowercase()
-                    };
-
-                    if matches {
-                        buffer_clone.remove(start, end);
-                        buffer_clone.insert(start, &replace_text);
-                        editor_clone.set_insert_position(start + replace_text.len() as i32);
-                    }
-                }
+                let _ = sender_for_replace.send(DialogMessage::Replace {
+                    search_text,
+                    replace_text,
+                    case_sensitive: case_check_clone.value(),
+                });
             });
         }
 
         // Replace All callback
         if let Some(mut replace_all_btn) = replace_all_btn {
+            let sender_for_replace_all = sender.clone();
             let find_input_clone = find_input.clone();
             let replace_input_clone = match replace_input.clone() {
                 Some(input) => input,
@@ -236,7 +217,6 @@ impl FindReplaceDialog {
                 }
             };
             let case_check_clone = case_check.clone();
-            let mut buffer_clone = buffer.clone();
 
             replace_all_btn.set_callback(move |_| {
                 let search_text = find_input_clone.value();
@@ -246,52 +226,127 @@ impl FindReplaceDialog {
                     return;
                 }
 
-                let text = buffer_clone.text();
-                let new_text = if case_check_clone.value() {
-                    text.replace(&search_text, &replace_text)
-                } else {
-                    // Case-insensitive replace
-                    let mut result = text.clone();
-                    let lower_text = text.to_lowercase();
-                    let lower_search = search_text.to_lowercase();
-                    let mut offset: i32 = 0;
-
-                    for (pos, _) in lower_text.match_indices(&lower_search) {
-                        let actual_pos = (pos as i32 + offset) as usize;
-                        result = format!(
-                            "{}{}{}",
-                            &result[..actual_pos],
-                            replace_text,
-                            &result[actual_pos + search_text.len()..]
-                        );
-                        offset += replace_text.len() as i32 - search_text.len() as i32;
-                    }
-                    result
-                };
-
-                let count = if case_check_clone.value() {
-                    text.matches(&search_text).count()
-                } else {
-                    text.to_lowercase()
-                        .matches(&search_text.to_lowercase())
-                        .count()
-                };
-
-                buffer_clone.set_text(&new_text);
-                fltk::dialog::message_default(&format!("Replaced {} occurrences", count));
+                let _ = sender_for_replace_all.send(DialogMessage::ReplaceAll {
+                    search_text,
+                    replace_text,
+                    case_sensitive: case_check_clone.value(),
+                });
             });
         }
 
         // Close callback
-        let mut dialog_clone = dialog.clone();
+        let sender_for_close = sender.clone();
         close_btn.set_callback(move |_| {
-            dialog_clone.hide();
+            let _ = sender_for_close.send(DialogMessage::Close);
         });
 
         dialog.show();
 
+        let mut buffer = buffer.clone();
+        let mut editor = editor.clone();
         while dialog.shown() {
             fltk::app::wait();
+            while let Some(message) = receiver.recv() {
+                match message {
+                    DialogMessage::FindNext {
+                        search_text,
+                        case_sensitive,
+                    } => {
+                        let text = buffer.text();
+                        let start_pos = *search_pos.borrow();
+
+                        let found_pos = if case_sensitive {
+                            text[start_pos as usize..].find(&search_text)
+                        } else {
+                            text[start_pos as usize..]
+                                .to_lowercase()
+                                .find(&search_text.to_lowercase())
+                        };
+
+                        if let Some(pos) = found_pos {
+                            let absolute_pos = start_pos as usize + pos;
+                            buffer.select(
+                                absolute_pos as i32,
+                                (absolute_pos + search_text.len()) as i32,
+                            );
+                            editor.set_insert_position((absolute_pos + search_text.len()) as i32);
+                            editor.show_insert_position();
+                            *search_pos.borrow_mut() = (absolute_pos + 1) as i32;
+                        } else if start_pos > 0 {
+                            *search_pos.borrow_mut() = 0;
+                            fltk::dialog::message_default(
+                                "Reached end, searching from beginning...",
+                            );
+                        } else {
+                            fltk::dialog::message_default("Text not found");
+                        }
+                    }
+                    DialogMessage::Replace {
+                        search_text,
+                        replace_text,
+                        case_sensitive,
+                    } => {
+                        if let Some((start, end)) = buffer.selection_position() {
+                            let selected = buffer.text_range(start, end).unwrap_or_default();
+                            let matches = if case_sensitive {
+                                selected == search_text
+                            } else {
+                                selected.to_lowercase() == search_text.to_lowercase()
+                            };
+
+                            if matches {
+                                buffer.remove(start, end);
+                                buffer.insert(start, &replace_text);
+                                editor.set_insert_position(start + replace_text.len() as i32);
+                            }
+                        }
+                    }
+                    DialogMessage::ReplaceAll {
+                        search_text,
+                        replace_text,
+                        case_sensitive,
+                    } => {
+                        let text = buffer.text();
+                        let new_text = if case_sensitive {
+                            text.replace(&search_text, &replace_text)
+                        } else {
+                            let mut result = text.clone();
+                            let lower_text = text.to_lowercase();
+                            let lower_search = search_text.to_lowercase();
+                            let mut offset: i32 = 0;
+
+                            for (pos, _) in lower_text.match_indices(&lower_search) {
+                                let actual_pos = (pos as i32 + offset) as usize;
+                                result = format!(
+                                    "{}{}{}",
+                                    &result[..actual_pos],
+                                    replace_text,
+                                    &result[actual_pos + search_text.len()..]
+                                );
+                                offset += replace_text.len() as i32 - search_text.len() as i32;
+                            }
+                            result
+                        };
+
+                        let count = if case_sensitive {
+                            text.matches(&search_text).count()
+                        } else {
+                            text.to_lowercase()
+                                .matches(&search_text.to_lowercase())
+                                .count()
+                        };
+
+                        buffer.set_text(&new_text);
+                        fltk::dialog::message_default(&format!(
+                            "Replaced {} occurrences",
+                            count
+                        ));
+                    }
+                    DialogMessage::Close => {
+                        dialog.hide();
+                    }
+                }
+            }
         }
     }
 
