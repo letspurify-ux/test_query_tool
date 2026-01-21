@@ -89,23 +89,63 @@ impl QueryResult {
 pub struct QueryExecutor;
 
 impl QueryExecutor {
+    fn strip_leading_comments(sql: &str) -> String {
+        let mut remaining = sql;
+
+        loop {
+            let trimmed = remaining.trim_start();
+
+            if trimmed.starts_with("--") {
+                if let Some(line_end) = trimmed.find('\n') {
+                    remaining = &trimmed[line_end + 1..];
+                    continue;
+                }
+                return String::new();
+            }
+
+            if trimmed.starts_with("/*") {
+                if let Some(block_end) = trimmed.find("*/") {
+                    remaining = &trimmed[block_end + 2..];
+                    continue;
+                }
+                return String::new();
+            }
+
+            return trimmed.to_string();
+        }
+    }
+
+    fn leading_keyword(sql: &str) -> Option<String> {
+        let cleaned = Self::strip_leading_comments(sql);
+        cleaned
+            .split_whitespace()
+            .next()
+            .map(|token| token.to_uppercase())
+    }
+
+    pub fn is_select_statement(sql: &str) -> bool {
+        matches!(Self::leading_keyword(sql).as_deref(), Some("SELECT") | Some("WITH"))
+    }
+
     /// Execute a single SQL statement
     pub fn execute(conn: &Connection, sql: &str) -> Result<QueryResult, OracleError> {
         let sql_trimmed = sql.trim();
         // Remove trailing semicolon if present (but keep for PL/SQL blocks)
-        let sql_clean = if sql_trimmed.to_uppercase().starts_with("BEGIN")
-            || sql_trimmed.to_uppercase().starts_with("DECLARE")
+        let sql_clean = if matches!(
+            Self::leading_keyword(sql_trimmed).as_deref(),
+            Some("BEGIN") | Some("DECLARE")
+        )
         {
             sql_trimmed.to_string()
         } else {
             sql_trimmed.trim_end_matches(';').trim().to_string()
         };
-        let sql_upper = sql_clean.to_uppercase();
+        let sql_upper = Self::strip_leading_comments(&sql_clean).to_uppercase();
 
         let start = Instant::now();
 
         // SELECT or WITH (Common Table Expression)
-        if sql_upper.starts_with("SELECT") || sql_upper.starts_with("WITH") {
+        if Self::is_select_statement(&sql_clean) {
             Self::execute_select(conn, &sql_clean, start)
         }
         // DML statements
@@ -290,9 +330,7 @@ impl QueryExecutor {
 
         if statements.len() == 1 {
             let statement = statements[0].trim();
-            let sql_upper = statement.to_uppercase();
-
-            if sql_upper.starts_with("SELECT") || sql_upper.starts_with("WITH") {
+            if Self::is_select_statement(statement) {
                 return Self::execute_select_streaming(
                     conn,
                     statement,
