@@ -13,8 +13,11 @@ use std::cell::RefCell;
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::thread;
 
-use crate::db::{create_shared_connection, lock_connection, ObjectBrowser, QueryResult, SharedConnection};
+use crate::db::{
+    create_shared_connection, lock_connection, ObjectBrowser, QueryResult, SharedConnection,
+};
 use crate::ui::{
     ConnectionDialog, FeatureCatalogDialog, FindReplaceDialog, HighlightData, IntellisenseData,
     MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, QueryProgress, ResultTabsWidget,
@@ -34,6 +37,12 @@ pub struct MainWindow {
     last_result: Rc<RefCell<Option<QueryResult>>>,
     #[allow(dead_code)]
     query_history: Rc<RefCell<QueryHistory>>,
+}
+
+#[derive(Clone)]
+struct SchemaUpdate {
+    data: IntellisenseData,
+    highlight_data: HighlightData,
 }
 
 impl MainWindow {
@@ -153,46 +162,48 @@ impl MainWindow {
         let style_buffer = self.sql_editor.get_style_buffer();
         let sql_editor = self.sql_editor.clone();
 
-        self.object_browser.set_sql_callback(move |action| match action {
-            SqlAction::Set(sql) => {
-                sql_buffer.set_text(&sql);
-                // Refresh highlighting
-                highlighter
-                    .borrow()
-                    .highlight(&sql, &mut style_buffer.clone());
-            }
-            SqlAction::Insert(text) => {
-                let insert_pos = editor.insert_position();
-                sql_buffer.insert(insert_pos, &text);
-                editor.set_insert_position(insert_pos + text.len() as i32);
-                sql_editor.refresh_highlighting();
-            }
-        });
+        self.object_browser
+            .set_sql_callback(move |action| match action {
+                SqlAction::Set(sql) => {
+                    sql_buffer.set_text(&sql);
+                    // Refresh highlighting
+                    highlighter
+                        .borrow()
+                        .highlight(&sql, &mut style_buffer.clone());
+                }
+                SqlAction::Insert(text) => {
+                    let insert_pos = editor.insert_position();
+                    sql_buffer.insert(insert_pos, &text);
+                    editor.set_insert_position(insert_pos + text.len() as i32);
+                    sql_editor.refresh_highlighting();
+                }
+            });
 
         let mut result_tabs_stream = self.result_tabs.clone();
-        self.sql_editor.set_progress_callback(move |progress| match progress {
-            QueryProgress::BatchStart => {
-                result_tabs_stream.clear();
-            }
-            QueryProgress::StatementStart { index } => {
-                result_tabs_stream.start_statement(index, &format!("Result {}", index + 1));
-            }
-            QueryProgress::SelectStart { index, columns } => {
-                result_tabs_stream.start_streaming(index, &columns);
-            }
-            QueryProgress::Rows { index, rows } => {
-                result_tabs_stream.append_rows(index, rows);
-            }
-            QueryProgress::StatementFinished { index, result } => {
-                if result.is_select {
-                    // Flush any remaining buffered rows for SELECT queries
-                    result_tabs_stream.finish_streaming(index);
-                } else {
-                    result_tabs_stream.display_result(index, &result);
+        self.sql_editor
+            .set_progress_callback(move |progress| match progress {
+                QueryProgress::BatchStart => {
+                    result_tabs_stream.clear();
                 }
-            }
-            QueryProgress::BatchFinished => {}
-        });
+                QueryProgress::StatementStart { index } => {
+                    result_tabs_stream.start_statement(index, &format!("Result {}", index + 1));
+                }
+                QueryProgress::SelectStart { index, columns } => {
+                    result_tabs_stream.start_streaming(index, &columns);
+                }
+                QueryProgress::Rows { index, rows } => {
+                    result_tabs_stream.append_rows(index, rows);
+                }
+                QueryProgress::StatementFinished { index, result } => {
+                    if result.is_select {
+                        // Flush any remaining buffered rows for SELECT queries
+                        result_tabs_stream.finish_streaming(index);
+                    } else {
+                        result_tabs_stream.display_result(index, &result);
+                    }
+                }
+                QueryProgress::BatchFinished => {}
+            });
 
         // Setup menu callbacks
         self.setup_menu_callbacks();
@@ -214,6 +225,18 @@ impl MainWindow {
         let mut sql_editor = self.sql_editor.clone();
         let result_table_export = self.result_tabs.clone();
         let mut status_bar_export = self.status_bar.clone();
+        let (schema_sender, schema_receiver) = app::channel::<SchemaUpdate>();
+
+        let intellisense_data_for_schema = intellisense_data.clone();
+        let highlighter_for_schema = highlighter.clone();
+        app::add_idle3(move |_| {
+            while let Some(update) = schema_receiver.recv() {
+                *intellisense_data_for_schema.borrow_mut() = update.data;
+                highlighter_for_schema
+                    .borrow_mut()
+                    .set_highlight_data(update.highlight_data);
+            }
+        });
 
         // Find menu bar and set callbacks
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
@@ -239,13 +262,27 @@ impl MainWindow {
                                             "Connected: {} | Ctrl+Space for autocomplete",
                                             info.display_string()
                                         ));
+                                        drop(db_conn);
+                                        object_browser.refresh();
+                                        sql_editor.focus();
 
-                                        // Update intellisense and highlight data
-                                        if let Some(conn) = db_conn.get_connection() {
+                                        let schema_sender = schema_sender.clone();
+                                        let connection_for_schema = connection.clone();
+                                        thread::spawn(move || {
+                                            let conn_guard =
+                                                lock_connection(&connection_for_schema);
+                                            if !conn_guard.is_connected() {
+                                                return;
+                                            }
+
+                                            let Some(conn) = conn_guard.get_connection() else {
+                                                return;
+                                            };
+                                            drop(conn_guard);
+
                                             let mut data = IntellisenseData::new();
                                             let mut highlight_data = HighlightData::new();
 
-                                            // Load tables
                                             if let Ok(tables) =
                                                 ObjectBrowser::get_tables(conn.as_ref())
                                             {
@@ -253,39 +290,30 @@ impl MainWindow {
                                                 data.tables = tables;
                                             }
 
-                                            // Load views
-                                            if let Ok(views) = ObjectBrowser::get_views(conn.as_ref())
+                                            if let Ok(views) =
+                                                ObjectBrowser::get_views(conn.as_ref())
                                             {
                                                 highlight_data.views = views.clone();
                                                 data.views = views;
                                             }
 
-                                            // Load procedures
                                             if let Ok(procs) =
                                                 ObjectBrowser::get_procedures(conn.as_ref())
                                             {
                                                 data.procedures = procs;
                                             }
 
-                                            // Load functions
                                             if let Ok(funcs) =
                                                 ObjectBrowser::get_functions(conn.as_ref())
                                             {
                                                 data.functions = funcs;
                                             }
 
-                                            // Note: Column information is loaded on-demand for better performance
-                                            // Instead of loading all columns upfront, they will be loaded when needed
-
-                                            *intellisense_data.borrow_mut() = data;
-                                            highlighter
-                                                .borrow_mut()
-                                                .set_highlight_data(highlight_data);
-                                        }
-
-                                        drop(db_conn);
-                                        object_browser.refresh();
-                                        sql_editor.focus();
+                                            let _ = schema_sender.send(SchemaUpdate {
+                                                data,
+                                                highlight_data,
+                                            });
+                                        });
                                     }
                                     Err(e) => {
                                         fltk::dialog::alert_default(&format!(
