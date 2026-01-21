@@ -212,6 +212,7 @@ impl SqlEditorWidget {
         let highlighter = self.highlighter.clone();
         let style_buffer = self.style_buffer.clone();
         let connection_for_describe = self.connection.clone();
+        let suppress_enter = Rc::new(RefCell::new(false));
 
         // Setup callback for inserting selected text
         let mut buffer_for_insert = buffer.clone();
@@ -242,6 +243,7 @@ impl SqlEditorWidget {
         let highlighter_for_handle = highlighter.clone();
         let mut style_buffer_for_handle = style_buffer.clone();
         let connection_for_f4 = connection_for_describe.clone();
+        let suppress_enter_for_handle = suppress_enter.clone();
 
         editor.handle(move |ed, ev| {
             match ev {
@@ -269,7 +271,7 @@ impl SqlEditorWidget {
                                 intellisense_popup_for_handle.borrow_mut().select_next();
                                 return true;
                             }
-                            Key::Enter | Key::Tab => {
+                            Key::Enter | Key::KPEnter | Key::Tab => {
                                 // Insert selected suggestion, consume event
                                 let selected = intellisense_popup_for_handle.borrow().get_selected();
                                 if let Some(selected) = selected {
@@ -294,6 +296,9 @@ impl SqlEditorWidget {
                                     highlighter_for_handle
                                         .borrow()
                                         .highlight(&new_text, &mut style_buffer_for_handle);
+                                }
+                                if matches!(key, Key::Enter | Key::KPEnter) {
+                                    *suppress_enter_for_handle.borrow_mut() = true;
                                 }
                                 intellisense_popup_for_handle.borrow_mut().hide();
                                 return true;
@@ -349,6 +354,13 @@ impl SqlEditorWidget {
                     let key = fltk::app::event_key();
                     let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
 
+                    if matches!(key, Key::Enter | Key::KPEnter)
+                        && *suppress_enter_for_handle.borrow()
+                    {
+                        *suppress_enter_for_handle.borrow_mut() = false;
+                        return true;
+                    }
+
                     // Navigation keys - hide popup and let editor handle cursor movement
                     if matches!(
                         key,
@@ -361,7 +373,12 @@ impl SqlEditorWidget {
                     }
 
                     // Skip if these keys (already handled in KeyDown)
-                    if popup_visible && matches!(key, Key::Up | Key::Down | Key::Escape | Key::Enter | Key::Tab) {
+                    if popup_visible
+                        && matches!(
+                            key,
+                            Key::Up | Key::Down | Key::Escape | Key::Enter | Key::KPEnter | Key::Tab
+                        )
+                    {
                         return false;
                     }
 

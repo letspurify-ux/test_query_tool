@@ -499,9 +499,13 @@ impl ResultTableWidget {
 
     /// Append rows to the buffer. UI is updated periodically for performance.
     pub fn append_rows(&mut self, rows: Vec<Vec<String>>) {
+        let max_cols = rows.iter().map(|row| row.len()).max().unwrap_or(0);
         // Update pending column widths
         {
             let mut widths = self.pending_widths.borrow_mut();
+            if widths.len() < max_cols {
+                widths.resize(max_cols, 80);
+            }
             for row in &rows {
                 for (col_idx, cell) in row.iter().enumerate() {
                     if col_idx < widths.len() {
@@ -538,9 +542,23 @@ impl ResultTableWidget {
 
         let current_rows = self.table.rows();
         let new_row_count = current_rows + rows_to_add.len() as i32;
-        let cols = self.table.cols();
+        let max_cols_in_rows = rows_to_add
+            .iter()
+            .map(|row| row.len())
+            .max()
+            .unwrap_or(0) as i32;
 
-        // Resize table to accommodate new rows
+        let pending_cols = self.pending_widths.borrow().len() as i32;
+        let mut cols = self.table.cols().max(max_cols_in_rows).max(pending_cols);
+
+        // Resize table to accommodate new rows and columns
+        if cols > self.table.cols() {
+            self.table.set_cols(cols);
+            let mut headers = self.headers.borrow_mut();
+            if headers.len() < cols as usize {
+                headers.resize(cols as usize, String::new());
+            }
+        }
         self.table.set_rows(new_row_count);
 
         // Update column widths first (batch update)
