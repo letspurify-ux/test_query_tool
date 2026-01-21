@@ -47,9 +47,9 @@ struct SchemaUpdate {
 }
 
 impl MainWindow {
-    fn schedule_awake() {
+    fn schedule_awake(handle: app::TimeoutHandle) {
         app::awake();
-        app::repeat_timeout(0.1, Self::schedule_awake);
+        app::repeat_timeout3(0.1, handle);
     }
 
     pub fn new() -> Self {
@@ -591,7 +591,7 @@ impl MainWindow {
         // Set default colors for dark theme
         app::background(45, 45, 48);
         app::foreground(220, 220, 220);
-        app::add_timeout(0.1, Self::schedule_awake);
+        app::add_timeout3(0.1, Self::schedule_awake);
 
         let mut main_window = MainWindow::new();
         main_window.setup_callbacks();

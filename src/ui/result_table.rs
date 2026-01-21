@@ -173,6 +173,15 @@ impl ResultTableWidget {
         }
     }
 
+    fn apply_table_opts(&mut self, rows: i32, cols: i32) {
+        self.table.set_opts(Self::table_opts(rows, cols));
+        self.table.set_row_header(true);
+        self.table.set_row_header_width(55);
+        self.table.set_col_header(true);
+        self.table.set_col_header_height(28);
+        self.table.set_row_height_all(26);
+    }
+
     /// Get cell at mouse position (returns None if outside cells)
     fn get_cell_at_mouse(table: &SmartTable) -> Option<(i32, i32)> {
         let rows = table.rows();
@@ -449,7 +458,7 @@ impl ResultTableWidget {
 
     pub fn display_result(&mut self, result: &QueryResult) {
         if !result.is_select {
-            self.table.set_opts(Self::table_opts(1, 1));
+            self.apply_table_opts(1, 1);
             self.table.set_col_header_value(0, "Result");
             self.table.set_col_width(0, (result.message.len() * 8).max(200) as i32);
             self.table.set_cell_value(0, 0, &result.message);
@@ -474,7 +483,7 @@ impl ResultTableWidget {
         let col_count = col_names.len() as i32;
 
         // Update table dimensions
-        self.table.set_opts(Self::table_opts(row_count, col_count));
+        self.apply_table_opts(row_count, col_count);
 
         // Set column headers
         for (i, name) in col_names.iter().enumerate() {
@@ -531,7 +540,7 @@ impl ResultTableWidget {
             .collect();
         *self.pending_widths.borrow_mut() = initial_widths.clone();
 
-        self.table.set_opts(Self::table_opts(0, col_count));
+        self.apply_table_opts(0, col_count);
 
         for (i, name) in headers.iter().enumerate() {
             self.table.set_col_header_value(i as i32, name);
@@ -595,7 +604,7 @@ impl ResultTableWidget {
             .unwrap_or(0) as i32;
 
         let pending_cols = self.pending_widths.borrow().len() as i32;
-        let mut cols = self.table.cols().max(max_cols_in_rows).max(pending_cols);
+        let cols = self.table.cols().max(max_cols_in_rows).max(pending_cols);
 
         // Resize table to accommodate new rows and columns
         let mut headers = self.headers.borrow_mut();
@@ -604,8 +613,7 @@ impl ResultTableWidget {
         }
         drop(headers);
 
-        self.table
-            .set_opts(Self::table_opts(new_row_count, cols));
+        self.apply_table_opts(new_row_count, cols);
         let headers = self.headers.borrow();
         for (i, header) in headers.iter().enumerate() {
             self.table.set_col_header_value(i as i32, header);
@@ -646,12 +654,17 @@ impl ResultTableWidget {
     /// Call this when streaming is complete to flush any remaining buffered rows
     pub fn finish_streaming(&mut self) {
         self.flush_pending();
+        self.table.redraw();
+        app::flush();
     }
 
     #[allow(dead_code)]
     pub fn clear(&mut self) {
-        self.table.set_opts(Self::table_opts(0, 0));
+        self.apply_table_opts(0, 0);
         self.headers.borrow_mut().clear();
+        self.pending_rows.borrow_mut().clear();
+        self.pending_widths.borrow_mut().clear();
+        *self.last_flush.borrow_mut() = Instant::now();
         self.table.redraw();
     }
 
