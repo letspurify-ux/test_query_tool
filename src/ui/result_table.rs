@@ -604,7 +604,7 @@ impl ResultTableWidget {
             .unwrap_or(0) as i32;
 
         let pending_cols = self.pending_widths.borrow().len() as i32;
-        let mut cols = self.table.cols().max(max_cols_in_rows).max(pending_cols);
+        let cols = self.table.cols().max(max_cols_in_rows).max(pending_cols);
 
         // Resize table to accommodate new rows and columns
         let mut headers = self.headers.borrow_mut();
@@ -662,6 +662,9 @@ impl ResultTableWidget {
     pub fn clear(&mut self) {
         self.apply_table_opts(0, 0);
         self.headers.borrow_mut().clear();
+        self.pending_rows.borrow_mut().clear();
+        self.pending_widths.borrow_mut().clear();
+        *self.last_flush.borrow_mut() = Instant::now();
         self.table.redraw();
     }
 
