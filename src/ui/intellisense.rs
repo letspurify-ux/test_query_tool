@@ -165,8 +165,8 @@ impl IntellisensePopup {
     pub fn new() -> Self {
         // Temporarily suspend current group to prevent popup window from being
         // added to the parent container (which causes layout issues)
-        let current_group = fltk::group::Group::current();
-        fltk::group::Group::set_current::<fltk::group::Group>(None);
+        let current_group = fltk::group::Group::try_current();
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut window = Window::default()
             .with_size(320, 200);
@@ -190,6 +190,8 @@ impl IntellisensePopup {
         let selected_callback: Rc<RefCell<Option<Box<dyn FnMut(String)>>>> =
             Rc::new(RefCell::new(None));
         let visible = Rc::new(RefCell::new(false));
+
+        window.hide();
 
         let mut popup = Self {
             window,

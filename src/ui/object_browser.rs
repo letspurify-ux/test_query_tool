@@ -395,6 +395,8 @@ impl ObjectBrowserWidget {
                     }
                 }
             }
+
+            menu.hide();
         }
     }
 

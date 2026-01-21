@@ -181,6 +181,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "fltk-table"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55090337eef57a1196b2fb6cf59314514de4e34296bf3701e6fd4ed75e6e5c1d"
+dependencies = [
+ "fltk",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -343,6 +352,7 @@ dependencies = [
  "chrono",
  "dirs",
  "fltk",
+ "fltk-table",
  "once_cell",
  "oracle",
  "serde",
