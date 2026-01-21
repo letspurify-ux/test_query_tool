@@ -39,6 +39,23 @@ impl QueryResult {
         }
     }
 
+    pub fn new_select_streamed(
+        sql: &str,
+        columns: Vec<ColumnInfo>,
+        row_count: usize,
+        execution_time: Duration,
+    ) -> Self {
+        Self {
+            sql: sql.to_string(),
+            columns,
+            rows: Vec::new(),
+            row_count,
+            execution_time,
+            message: format!("{} rows fetched", row_count),
+            is_select: true,
+        }
+    }
+
     pub fn new_dml(
         sql: &str,
         affected_rows: u64,
@@ -583,7 +600,7 @@ impl QueryExecutor {
 
         on_select_start(&column_info);
 
-        let mut rows: Vec<Vec<String>> = Vec::new();
+        let mut row_count = 0usize;
 
         for row_result in result_set {
             let row: Row = row_result?;
@@ -594,15 +611,15 @@ impl QueryExecutor {
                 row_data.push(value.unwrap_or_else(|| "NULL".to_string()));
             }
 
-            on_row(row_data.clone());
-            rows.push(row_data);
+            on_row(row_data);
+            row_count += 1;
         }
 
         let execution_time = start.elapsed();
-        Ok(QueryResult::new_select(
+        Ok(QueryResult::new_select_streamed(
             sql,
             column_info,
-            rows,
+            row_count,
             execution_time,
         ))
     }
