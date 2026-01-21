@@ -50,10 +50,19 @@ impl AppConfig {
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(path) = Self::config_path() {
             if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
+                match fs::create_dir_all(parent) {
+                    Ok(()) => {}
+                    Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+                }
             }
-            let content = serde_json::to_string_pretty(self)?;
-            fs::write(path, content)?;
+            let content = match serde_json::to_string_pretty(self) {
+                Ok(content) => content,
+                Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+            };
+            match fs::write(path, content) {
+                Ok(()) => {}
+                Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+            }
         }
         Ok(())
     }
@@ -128,10 +137,19 @@ impl QueryHistory {
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(path) = Self::history_path() {
             if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
+                match fs::create_dir_all(parent) {
+                    Ok(()) => {}
+                    Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+                }
             }
-            let content = serde_json::to_string_pretty(self)?;
-            fs::write(path, content)?;
+            let content = match serde_json::to_string_pretty(self) {
+                Ok(content) => content,
+                Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+            };
+            match fs::write(path, content) {
+                Ok(()) => {}
+                Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+            }
         }
         Ok(())
     }

@@ -184,7 +184,10 @@ impl QueryExecutor {
         }
         // Transaction control
         else if sql_upper.starts_with("COMMIT") {
-            conn.commit()?;
+            match conn.commit() {
+                Ok(()) => {}
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            }
             Ok(QueryResult {
                 sql: sql_clean,
                 columns: vec![],
@@ -195,7 +198,10 @@ impl QueryExecutor {
                 is_select: false,
             })
         } else if sql_upper.starts_with("ROLLBACK") {
-            conn.rollback()?;
+            match conn.rollback() {
+                Ok(()) => {}
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            }
             Ok(QueryResult {
                 sql: sql_clean,
                 columns: vec![],
@@ -480,14 +486,20 @@ impl QueryExecutor {
     #[allow(dead_code)]
     pub fn enable_dbms_output(conn: &Connection, buffer_size: u32) -> Result<(), OracleError> {
         let sql = format!("BEGIN DBMS_OUTPUT.ENABLE({}); END;", buffer_size);
-        conn.execute(&sql, &[])?;
+        match conn.execute(&sql, &[]) {
+            Ok(_stmt) => {}
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        }
         Ok(())
     }
 
     /// Disable DBMS_OUTPUT for the session
     #[allow(dead_code)]
     pub fn disable_dbms_output(conn: &Connection) -> Result<(), OracleError> {
-        conn.execute("BEGIN DBMS_OUTPUT.DISABLE; END;", &[])?;
+        match conn.execute("BEGIN DBMS_OUTPUT.DISABLE; END;", &[]) {
+            Ok(_stmt) => {}
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        }
         Ok(())
     }
 
@@ -565,7 +577,10 @@ impl QueryExecutor {
         let _ = Self::enable_dbms_output(conn, 1000000);
 
         // Execute the query
-        let result = Self::execute_batch(conn, sql)?;
+        let result = match Self::execute_batch(conn, sql) {
+            Ok(result) => result,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
 
         // For now, return empty output - full implementation needs bind variable support
         let output: Vec<String> = Vec::new();
@@ -578,8 +593,14 @@ impl QueryExecutor {
         sql: &str,
         start: Instant,
     ) -> Result<QueryResult, OracleError> {
-        let mut stmt = conn.statement(sql).build()?;
-        let result_set = stmt.query(&[])?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let result_set = match stmt.query(&[]) {
+            Ok(result_set) => result_set,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
 
         let column_info: Vec<ColumnInfo> = result_set
             .column_info()
@@ -593,7 +614,10 @@ impl QueryExecutor {
         let mut rows: Vec<Vec<String>> = Vec::new();
 
         for row_result in result_set {
-            let row: Row = row_result?;
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
             let mut row_data: Vec<String> = Vec::new();
 
             for i in 0..column_info.len() {
@@ -624,8 +648,14 @@ impl QueryExecutor {
         G: FnMut(Vec<String>),
     {
         let start = Instant::now();
-        let mut stmt = conn.statement(sql).build()?;
-        let result_set = stmt.query(&[])?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let result_set = match stmt.query(&[]) {
+            Ok(result_set) => result_set,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
 
         let column_info: Vec<ColumnInfo> = result_set
             .column_info()
@@ -641,7 +671,10 @@ impl QueryExecutor {
         let mut row_count = 0usize;
 
         for row_result in result_set {
-            let row: Row = row_result?;
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
             let mut row_data: Vec<String> = Vec::new();
 
             for i in 0..column_info.len() {
@@ -668,8 +701,14 @@ impl QueryExecutor {
         start: Instant,
         statement_type: &str,
     ) -> Result<QueryResult, OracleError> {
-        let stmt = conn.execute(sql, &[])?;
-        let affected_rows = stmt.row_count()?;
+        let stmt = match conn.execute(sql, &[]) {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let affected_rows = match stmt.row_count() {
+            Ok(affected_rows) => affected_rows,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
         let execution_time = start.elapsed();
         Ok(QueryResult::new_dml(
             sql,
@@ -684,7 +723,10 @@ impl QueryExecutor {
         sql: &str,
         start: Instant,
     ) -> Result<QueryResult, OracleError> {
-        conn.execute(sql, &[])?;
+        match conn.execute(sql, &[]) {
+            Ok(_stmt) => {}
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        }
         let execution_time = start.elapsed();
 
         // Determine the DDL type for better messaging
@@ -746,7 +788,10 @@ impl QueryExecutor {
         sql: &str,
         start: Instant,
     ) -> Result<QueryResult, OracleError> {
-        conn.execute(sql, &[])?;
+        match conn.execute(sql, &[]) {
+            Ok(_stmt) => {}
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        }
         let execution_time = start.elapsed();
         Ok(QueryResult {
             sql: sql.to_string(),
@@ -765,7 +810,10 @@ impl QueryExecutor {
         sql: &str,
         start: Instant,
     ) -> Result<QueryResult, OracleError> {
-        conn.execute(sql, &[])?;
+        match conn.execute(sql, &[]) {
+            Ok(_stmt) => {}
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        }
         let execution_time = start.elapsed();
         Ok(QueryResult {
             sql: sql.to_string(),
@@ -796,7 +844,10 @@ impl QueryExecutor {
         };
 
         let plsql = format!("BEGIN {}; END;", proc_call.trim().trim_end_matches(';'));
-        conn.execute(&plsql, &[])?;
+        match conn.execute(&plsql, &[]) {
+            Ok(_stmt) => {}
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        }
         let execution_time = start.elapsed();
         Ok(QueryResult {
             sql: sql.to_string(),
@@ -811,17 +862,32 @@ impl QueryExecutor {
 
     pub fn get_explain_plan(conn: &Connection, sql: &str) -> Result<Vec<String>, OracleError> {
         let explain_sql = format!("EXPLAIN PLAN FOR {}", sql);
-        conn.execute(&explain_sql, &[])?;
+        match conn.execute(&explain_sql, &[]) {
+            Ok(_stmt) => {}
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        }
 
         let plan_sql =
             "SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', NULL, 'ALL'))";
-        let mut stmt = conn.statement(plan_sql).build()?;
-        let rows = stmt.query(&[])?;
+        let mut stmt = match conn.statement(plan_sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let rows = match stmt.query(&[]) {
+            Ok(rows) => rows,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
 
         let mut plan_lines: Vec<String> = Vec::new();
         for row_result in rows {
-            let row: Row = row_result?;
-            let line: Option<String> = row.get(0)?;
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let line: Option<String> = match row.get(0) {
+                Ok(line) => line,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
             if let Some(l) = line {
                 plan_lines.push(l);
             }
@@ -876,13 +942,25 @@ impl ObjectBrowser {
               AND procedure_name IS NOT NULL
             ORDER BY procedure_name
         "#;
-        let mut stmt = conn.statement(sql).build()?;
-        let rows = stmt.query(&[&package_name.to_uppercase()])?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let rows = match stmt.query(&[&package_name.to_uppercase()]) {
+            Ok(rows) => rows,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
 
         let mut procedures: Vec<String> = Vec::new();
         for row_result in rows {
-            let row: Row = row_result?;
-            let name: String = row.get(0)?;
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let name: String = match row.get(0) {
+                Ok(name) => name,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
             procedures.push(name);
         }
 
@@ -895,14 +973,29 @@ impl ObjectBrowser {
         table_name: &str,
     ) -> Result<Vec<ColumnInfo>, OracleError> {
         let sql = "SELECT column_name, data_type FROM user_tab_columns WHERE table_name = :1 ORDER BY column_id";
-        let mut stmt = conn.statement(sql).build()?;
-        let rows = stmt.query(&[&table_name.to_uppercase()])?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let rows = match stmt.query(&[&table_name.to_uppercase()]) {
+            Ok(rows) => rows,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
 
         let mut columns: Vec<ColumnInfo> = Vec::new();
         for row_result in rows {
-            let row: Row = row_result?;
-            let name: String = row.get(0)?;
-            let data_type: String = row.get(1)?;
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let name: String = match row.get(0) {
+                Ok(name) => name,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let data_type: String = match row.get(1) {
+                Ok(data_type) => data_type,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
             columns.push(ColumnInfo { name, data_type });
         }
 
@@ -910,13 +1003,25 @@ impl ObjectBrowser {
     }
 
     fn get_object_list(conn: &Connection, sql: &str) -> Result<Vec<String>, OracleError> {
-        let mut stmt = conn.statement(sql).build()?;
-        let rows = stmt.query(&[])?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let rows = match stmt.query(&[]) {
+            Ok(rows) => rows,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
 
         let mut objects: Vec<String> = Vec::new();
         for row_result in rows {
-            let row: Row = row_result?;
-            let name: String = row.get(0)?;
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let name: String = match row.get(0) {
+                Ok(name) => name,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
             objects.push(name);
         }
 
@@ -948,21 +1053,62 @@ impl ObjectBrowser {
             ORDER BY c.column_id
         "#;
 
-        let mut stmt = conn.statement(sql).build()?;
-        let rows = stmt.query(&[&table_name.to_uppercase()])?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let rows = match stmt.query(&[&table_name.to_uppercase()]) {
+            Ok(rows) => rows,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
 
         let mut columns: Vec<TableColumnDetail> = Vec::new();
         for row_result in rows {
-            let row: Row = row_result?;
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let name = match row.get(0) {
+                Ok(name) => name,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let data_type = match row.get(1) {
+                Ok(data_type) => data_type,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let data_length = match row.get::<_, Option<i32>>(2) {
+                Ok(value) => value.unwrap_or(0),
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let data_precision = match row.get::<_, Option<i32>>(3) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let data_scale = match row.get::<_, Option<i32>>(4) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let nullable = match row.get::<_, String>(5) {
+                Ok(value) => value == "Y",
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let default_value = match row.get(6) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let is_primary_key = match row.get::<_, Option<String>>(7) {
+                Ok(value) => value.is_some(),
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
             columns.push(TableColumnDetail {
-                name: row.get(0)?,
-                data_type: row.get(1)?,
-                data_length: row.get::<_, Option<i32>>(2)?.unwrap_or(0),
-                data_precision: row.get::<_, Option<i32>>(3)?,
-                data_scale: row.get::<_, Option<i32>>(4)?,
-                nullable: row.get::<_, String>(5)? == "Y",
-                default_value: row.get(6)?,
-                is_primary_key: row.get::<_, Option<String>>(7)?.is_some(),
+                name,
+                data_type,
+                data_length,
+                data_precision,
+                data_scale,
+                nullable,
+                default_value,
+                is_primary_key,
             });
         }
 
@@ -986,16 +1132,37 @@ impl ObjectBrowser {
             ORDER BY i.index_name
         "#;
 
-        let mut stmt = conn.statement(sql).build()?;
-        let rows = stmt.query(&[&table_name.to_uppercase()])?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let rows = match stmt.query(&[&table_name.to_uppercase()]) {
+            Ok(rows) => rows,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
 
         let mut indexes: Vec<IndexInfo> = Vec::new();
         for row_result in rows {
-            let row: Row = row_result?;
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let name = match row.get(0) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let is_unique = match row.get::<_, String>(1) {
+                Ok(value) => value == "UNIQUE",
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let columns = match row.get(2) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
             indexes.push(IndexInfo {
-                name: row.get(0)?,
-                is_unique: row.get::<_, String>(1)? == "UNIQUE",
-                columns: row.get(2)?,
+                name,
+                is_unique,
+                columns,
             });
         }
 
@@ -1021,15 +1188,39 @@ impl ObjectBrowser {
             ORDER BY c.constraint_type, c.constraint_name
         "#;
 
-        let mut stmt = conn.statement(sql).build()?;
-        let rows = stmt.query(&[&table_name.to_uppercase()])?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let rows = match stmt.query(&[&table_name.to_uppercase()]) {
+            Ok(rows) => rows,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
 
         let mut constraints: Vec<ConstraintInfo> = Vec::new();
         for row_result in rows {
-            let row: Row = row_result?;
-            let constraint_type: String = row.get(1)?;
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let constraint_type: String = match row.get(1) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let name = match row.get(0) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let columns = match row.get::<_, Option<String>>(2) {
+                Ok(value) => value.unwrap_or_default(),
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let ref_table = match row.get(4) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
             constraints.push(ConstraintInfo {
-                name: row.get(0)?,
+                name,
                 constraint_type: match constraint_type.as_str() {
                     "P" => "PRIMARY KEY".to_string(),
                     "R" => "FOREIGN KEY".to_string(),
@@ -1037,8 +1228,8 @@ impl ObjectBrowser {
                     "C" => "CHECK".to_string(),
                     _ => constraint_type,
                 },
-                columns: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                ref_table: row.get(4)?,
+                columns,
+                ref_table,
             });
         }
 
@@ -1048,45 +1239,90 @@ impl ObjectBrowser {
     /// Generate DDL for a table
     pub fn get_table_ddl(conn: &Connection, table_name: &str) -> Result<String, OracleError> {
         let sql = "SELECT DBMS_METADATA.GET_DDL('TABLE', :1) FROM DUAL";
-        let mut stmt = conn.statement(sql).build()?;
-        let row = stmt.query_row(&[&table_name.to_uppercase()])?;
-        let ddl: String = row.get(0)?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let row = match stmt.query_row(&[&table_name.to_uppercase()]) {
+            Ok(row) => row,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let ddl: String = match row.get(0) {
+            Ok(ddl) => ddl,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
         Ok(ddl)
     }
 
     /// Generate DDL for a view
     pub fn get_view_ddl(conn: &Connection, view_name: &str) -> Result<String, OracleError> {
         let sql = "SELECT DBMS_METADATA.GET_DDL('VIEW', :1) FROM DUAL";
-        let mut stmt = conn.statement(sql).build()?;
-        let row = stmt.query_row(&[&view_name.to_uppercase()])?;
-        let ddl: String = row.get(0)?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let row = match stmt.query_row(&[&view_name.to_uppercase()]) {
+            Ok(row) => row,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let ddl: String = match row.get(0) {
+            Ok(ddl) => ddl,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
         Ok(ddl)
     }
 
     /// Generate DDL for a procedure
     pub fn get_procedure_ddl(conn: &Connection, proc_name: &str) -> Result<String, OracleError> {
         let sql = "SELECT DBMS_METADATA.GET_DDL('PROCEDURE', :1) FROM DUAL";
-        let mut stmt = conn.statement(sql).build()?;
-        let row = stmt.query_row(&[&proc_name.to_uppercase()])?;
-        let ddl: String = row.get(0)?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let row = match stmt.query_row(&[&proc_name.to_uppercase()]) {
+            Ok(row) => row,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let ddl: String = match row.get(0) {
+            Ok(ddl) => ddl,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
         Ok(ddl)
     }
 
     /// Generate DDL for a function
     pub fn get_function_ddl(conn: &Connection, func_name: &str) -> Result<String, OracleError> {
         let sql = "SELECT DBMS_METADATA.GET_DDL('FUNCTION', :1) FROM DUAL";
-        let mut stmt = conn.statement(sql).build()?;
-        let row = stmt.query_row(&[&func_name.to_uppercase()])?;
-        let ddl: String = row.get(0)?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let row = match stmt.query_row(&[&func_name.to_uppercase()]) {
+            Ok(row) => row,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let ddl: String = match row.get(0) {
+            Ok(ddl) => ddl,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
         Ok(ddl)
     }
 
     /// Generate DDL for a sequence
     pub fn get_sequence_ddl(conn: &Connection, seq_name: &str) -> Result<String, OracleError> {
         let sql = "SELECT DBMS_METADATA.GET_DDL('SEQUENCE', :1) FROM DUAL";
-        let mut stmt = conn.statement(sql).build()?;
-        let row = stmt.query_row(&[&seq_name.to_uppercase()])?;
-        let ddl: String = row.get(0)?;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let row = match stmt.query_row(&[&seq_name.to_uppercase()]) {
+            Ok(row) => row,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        let ddl: String = match row.get(0) {
+            Ok(ddl) => ddl,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
         Ok(ddl)
     }
 }

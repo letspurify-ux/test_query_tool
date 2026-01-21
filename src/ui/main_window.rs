@@ -592,7 +592,12 @@ impl MainWindow {
         main_window.setup_callbacks();
         main_window.show();
 
-        app.run().unwrap();
+        match app.run() {
+            Ok(()) => {}
+            Err(err) => {
+                eprintln!("Failed to run app: {err}");
+            }
+        }
     }
 
     #[allow(dead_code)]
@@ -611,7 +616,10 @@ impl MainWindow {
             output.push('\n');
         }
 
-        fs::write(path, output)?;
+        match fs::write(path, output) {
+            Ok(()) => {}
+            Err(err) => { eprintln!("CSV export error: {err}"); return Err(Box::new(err)); },
+        }
         Ok(())
     }
 

@@ -78,11 +78,14 @@ impl DatabaseConnection {
 
     pub fn connect(&mut self, info: ConnectionInfo) -> Result<(), OracleError> {
         let conn_str = info.connection_string();
-        let connection = Arc::new(Connection::connect(
+        let connection = Arc::new(match Connection::connect(
             &info.username,
             &info.password,
             &conn_str,
-        )?);
+        ) {
+            Ok(connection) => connection,
+            Err(err) => { eprintln!("Connection error: {err}"); return Err(err); },
+        });
 
         self.connection = Some(connection);
         self.info = info;
@@ -118,7 +121,10 @@ impl DatabaseConnection {
 
     pub fn test_connection(info: &ConnectionInfo) -> Result<(), OracleError> {
         let conn_str = info.connection_string();
-        let _connection = Connection::connect(&info.username, &info.password, &conn_str)?;
+        match Connection::connect(&info.username, &info.password, &conn_str) {
+            Ok(_connection) => {}
+            Err(err) => { eprintln!("Connection error: {err}"); return Err(err); },
+        }
         Ok(())
     }
 }

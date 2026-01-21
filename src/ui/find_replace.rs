@@ -188,7 +188,13 @@ impl FindReplaceDialog {
         // Replace callback
         if let Some(mut replace_btn) = replace_btn {
             let find_input_clone = find_input.clone();
-            let replace_input_clone = replace_input.clone().unwrap();
+            let replace_input_clone = match replace_input.clone() {
+                Some(input) => input,
+                None => {
+                    eprintln!("Replace input not available for replace action.");
+                    return;
+                }
+            };
             let case_check_clone = case_check.clone();
             let mut buffer_clone = buffer.clone();
             let mut editor_clone = editor.clone();
@@ -222,7 +228,13 @@ impl FindReplaceDialog {
         // Replace All callback
         if let Some(mut replace_all_btn) = replace_all_btn {
             let find_input_clone = find_input.clone();
-            let replace_input_clone = replace_input.clone().unwrap();
+            let replace_input_clone = match replace_input.clone() {
+                Some(input) => input,
+                None => {
+                    eprintln!("Replace input not available for replace-all action.");
+                    return;
+                }
+            };
             let case_check_clone = case_check.clone();
             let mut buffer_clone = buffer.clone();
 
