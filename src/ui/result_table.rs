@@ -43,16 +43,7 @@ impl ResultTableWidget {
     pub fn with_size(x: i32, y: i32, w: i32, h: i32) -> Self {
         let headers = Rc::new(RefCell::new(Vec::new()));
         // Create SmartTable with dark theme styling
-        let mut table = SmartTable::new(x, y, w, h, None).with_opts(TableOpts {
-            rows: 0,
-            cols: 0,
-            editable: false,
-            cell_selection_color: Color::from_rgb(38, 79, 120),
-            header_frame: FrameType::FlatBox,
-            header_color: Color::from_rgb(45, 45, 48),
-            cell_border_color: Color::from_rgb(50, 50, 52),
-            ..Default::default()
-        });
+        let mut table = SmartTable::new(x, y, w, h, None).with_opts(Self::table_opts(0, 0));
 
         // Apply dark theme colors
         table.set_color(Color::from_rgb(30, 30, 30));
@@ -171,9 +162,12 @@ impl ResultTableWidget {
             rows,
             cols,
             editable: false,
+            cell_color: Color::from_rgb(37, 37, 38),
+            cell_font_color: Color::from_rgb(220, 220, 220),
             cell_selection_color: Color::from_rgb(38, 79, 120),
             header_frame: FrameType::FlatBox,
             header_color: Color::from_rgb(45, 45, 48),
+            header_font_color: Color::from_rgb(240, 240, 240),
             cell_border_color: Color::from_rgb(50, 50, 52),
             ..Default::default()
         }
