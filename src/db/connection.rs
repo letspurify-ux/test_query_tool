@@ -1,6 +1,6 @@
 use oracle::{Connection, Error as OracleError};
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectionInfo {
@@ -133,4 +133,14 @@ pub type SharedConnection = Arc<Mutex<DatabaseConnection>>;
 
 pub fn create_shared_connection() -> SharedConnection {
     Arc::new(Mutex::new(DatabaseConnection::new()))
+}
+
+pub fn lock_connection(connection: &SharedConnection) -> MutexGuard<'_, DatabaseConnection> {
+    match connection.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            eprintln!("Warning: database connection lock was poisoned; recovering.");
+            poisoned.into_inner()
+        }
+    }
 }

@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 
-use crate::db::{QueryExecutor, QueryResult, SharedConnection};
+use crate::db::{lock_connection, QueryExecutor, QueryResult, SharedConnection};
 use crate::ui::intellisense::{get_word_at_cursor, IntellisenseData, IntellisensePopup};
 use crate::ui::query_history::QueryHistoryDialog;
 use crate::ui::syntax_highlight::{create_style_table, HighlightData, SqlHighlighter};
@@ -311,7 +311,7 @@ impl SqlEditorWidget {
                         let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
 
                         if !word.is_empty() {
-                            let conn_guard = connection_for_f4.lock().unwrap();
+                            let conn_guard = lock_connection(&connection_for_f4);
                             if conn_guard.is_connected() {
                                 if let Some(db_conn) = conn_guard.get_connection() {
                                     Self::show_quick_describe(db_conn.as_ref(), &word);
@@ -618,7 +618,7 @@ impl SqlEditorWidget {
             return;
         }
 
-        let conn_guard = self.connection.lock().unwrap();
+        let conn_guard = lock_connection(&self.connection);
         if !conn_guard.is_connected() {
             fltk::dialog::alert_default("Not connected to database");
             return;
@@ -686,7 +686,7 @@ impl SqlEditorWidget {
     }
 
     pub fn commit(&self) {
-        let conn_guard = self.connection.lock().unwrap();
+        let conn_guard = lock_connection(&self.connection);
         if !conn_guard.is_connected() {
             fltk::dialog::alert_default("Not connected to database");
             return;
@@ -700,7 +700,7 @@ impl SqlEditorWidget {
     }
 
     pub fn rollback(&self) {
-        let conn_guard = self.connection.lock().unwrap();
+        let conn_guard = lock_connection(&self.connection);
         if !conn_guard.is_connected() {
             fltk::dialog::alert_default("Not connected to database");
             return;
@@ -719,7 +719,7 @@ impl SqlEditorWidget {
             return;
         }
 
-        let conn_guard = self.connection.lock().unwrap();
+        let conn_guard = lock_connection(&self.connection);
         if !conn_guard.is_connected() {
             fltk::dialog::alert_default("Not connected to database");
             return;
@@ -838,7 +838,7 @@ impl SqlEditorWidget {
             return;
         }
 
-        let conn_guard = self.connection.lock().unwrap();
+        let conn_guard = lock_connection(&self.connection);
         if !conn_guard.is_connected() {
             fltk::dialog::alert_default("Not connected to database");
             return;
