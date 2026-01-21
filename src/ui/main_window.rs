@@ -10,6 +10,7 @@ use fltk::{
     window::Window,
 };
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -180,15 +181,19 @@ impl MainWindow {
             });
 
         let mut result_tabs_stream = self.result_tabs.clone();
+        let streaming_indices = Rc::new(RefCell::new(HashSet::new()));
+        let streaming_indices_for_cb = streaming_indices.clone();
         self.sql_editor
             .set_progress_callback(move |progress| match progress {
                 QueryProgress::BatchStart => {
                     result_tabs_stream.clear();
+                    streaming_indices_for_cb.borrow_mut().clear();
                 }
                 QueryProgress::StatementStart { index } => {
                     result_tabs_stream.start_statement(index, &format!("Result {}", index + 1));
                 }
                 QueryProgress::SelectStart { index, columns } => {
+                    streaming_indices_for_cb.borrow_mut().insert(index);
                     result_tabs_stream.start_streaming(index, &columns);
                 }
                 QueryProgress::Rows { index, rows } => {
@@ -196,8 +201,14 @@ impl MainWindow {
                 }
                 QueryProgress::StatementFinished { index, result } => {
                     if result.is_select {
-                        // Flush any remaining buffered rows for SELECT queries
-                        result_tabs_stream.finish_streaming(index);
+                        let was_streaming =
+                            streaming_indices_for_cb.borrow_mut().remove(&index);
+                        if was_streaming {
+                            // Flush any remaining buffered rows for SELECT queries
+                            result_tabs_stream.finish_streaming(index);
+                        } else {
+                            result_tabs_stream.display_result(index, &result);
+                        }
                     } else {
                         result_tabs_stream.display_result(index, &result);
                     }
