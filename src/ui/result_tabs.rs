@@ -96,10 +96,11 @@ impl ResultTabsWidget {
         self.tabs.end();
 
         self.data.borrow_mut().push(ResultTab { group, table });
+        let new_index = self.data.borrow().len().saturating_sub(1);
         let _ = self
             .tabs
-            .set_value(&self.data.borrow()[index].group);
-        *self.active_index.borrow_mut() = Some(index);
+            .set_value(&self.data.borrow()[new_index].group);
+        *self.active_index.borrow_mut() = Some(new_index);
     }
 
     pub fn start_streaming(&mut self, index: usize, columns: &[String]) {
