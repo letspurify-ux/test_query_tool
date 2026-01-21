@@ -14,7 +14,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use crate::db::{create_shared_connection, ObjectBrowser, QueryResult, SharedConnection};
+use crate::db::{create_shared_connection, lock_connection, ObjectBrowser, QueryResult, SharedConnection};
 use crate::ui::{
     ConnectionDialog, FeatureCatalogDialog, FindReplaceDialog, HighlightData, IntellisenseData,
     MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, QueryProgress, ResultTabsWidget,
@@ -232,7 +232,7 @@ impl MainWindow {
                     match choice.as_str() {
                         "File/Connect..." => {
                             if let Some(info) = ConnectionDialog::show() {
-                                let mut db_conn = connection.lock().unwrap();
+                                let mut db_conn = lock_connection(&connection);
                                 match db_conn.connect(info.clone()) {
                                     Ok(_) => {
                                         status_bar.set_label(&format!(
@@ -297,7 +297,7 @@ impl MainWindow {
                             }
                         }
                         "File/Disconnect" => {
-                            let mut db_conn = connection.lock().unwrap();
+                            let mut db_conn = lock_connection(&connection);
                             db_conn.disconnect();
                             status_bar.set_label("Disconnected | Ctrl+Space for autocomplete");
 
@@ -514,7 +514,7 @@ impl MainWindow {
                         "Tools/Auto-Commit" => {
                             if let Some(item) = m.find_item("Tools/Auto-Commit") {
                                 let enabled = item.value();
-                                let mut db_conn = connection.lock().unwrap();
+                                let mut db_conn = lock_connection(&connection);
                                 db_conn.set_auto_commit(enabled);
                                 let status = if enabled {
                                     "Auto-commit enabled"

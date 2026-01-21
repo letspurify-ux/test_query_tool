@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::db::{ObjectBrowser, SharedConnection};
+use crate::db::{lock_connection, ObjectBrowser, SharedConnection};
 
 #[derive(Clone)]
 pub enum SqlAction {
@@ -351,7 +351,7 @@ impl ObjectBrowserWidget {
             if let Some(choice_item) = menu.popup() {
                 let choice_label = choice_item.label().unwrap_or_default();
 
-                let conn_guard = connection.lock().unwrap();
+                let conn_guard = lock_connection(&connection);
                 if !conn_guard.is_connected() {
                     fltk::dialog::alert_default("Not connected to database");
                     return;
@@ -564,7 +564,7 @@ impl ObjectBrowserWidget {
         self.clear_items();
         self.filter_input.set_value("");
 
-        let conn_guard = self.connection.lock().unwrap();
+        let conn_guard = lock_connection(&self.connection);
 
         if !conn_guard.is_connected() {
             // Clear cache
