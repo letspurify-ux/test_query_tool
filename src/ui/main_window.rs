@@ -204,10 +204,9 @@ impl MainWindow {
                 QueryProgress::Rows { index, rows } => {
                     result_tabs_stream.append_rows(index, rows);
                 }
-                QueryProgress::StatementFinished { index, result } => {
+                QueryProgress::StatementFinished { index, result, .. } => {
                     if result.is_select {
-                        let was_streaming =
-                            streaming_indices_for_cb.borrow_mut().remove(&index);
+                        let was_streaming = streaming_indices_for_cb.borrow_mut().remove(&index);
                         if was_streaming {
                             // Flush any remaining buffered rows for SELECT queries
                             result_tabs_stream.finish_streaming(index);
@@ -623,7 +622,10 @@ impl MainWindow {
 
         match fs::write(path, output) {
             Ok(()) => {}
-            Err(err) => { eprintln!("CSV export error: {err}"); return Err(Box::new(err)); },
+            Err(err) => {
+                eprintln!("CSV export error: {err}");
+                return Err(Box::new(err));
+            }
         }
         Ok(())
     }

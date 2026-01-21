@@ -23,10 +23,22 @@ use crate::ui::syntax_highlight::{create_style_table, HighlightData, SqlHighligh
 #[derive(Clone)]
 pub enum QueryProgress {
     BatchStart,
-    StatementStart { index: usize },
-    SelectStart { index: usize, columns: Vec<String> },
-    Rows { index: usize, rows: Vec<Vec<String>> },
-    StatementFinished { index: usize, result: QueryResult },
+    StatementStart {
+        index: usize,
+    },
+    SelectStart {
+        index: usize,
+        columns: Vec<String>,
+    },
+    Rows {
+        index: usize,
+        rows: Vec<Vec<String>>,
+    },
+    StatementFinished {
+        index: usize,
+        result: QueryResult,
+        connection_name: String,
+    },
     BatchFinished,
 }
 
@@ -182,7 +194,17 @@ impl SqlEditorWidget {
                 }
 
                 match message {
-                    QueryProgress::StatementFinished { result, .. } => {
+                    QueryProgress::StatementFinished {
+                        result,
+                        connection_name,
+                        ..
+                    } => {
+                        QueryHistoryDialog::add_to_history(
+                            &result.sql,
+                            result.execution_time.as_millis() as u64,
+                            result.row_count,
+                            &connection_name,
+                        );
                         if let Some(ref mut cb) = *execute_callback.borrow_mut() {
                             cb(result);
                         }
@@ -274,7 +296,8 @@ impl SqlEditorWidget {
                             }
                             Key::Enter | Key::KPEnter | Key::Tab => {
                                 // Insert selected suggestion, consume event
-                                let selected = intellisense_popup_for_handle.borrow().get_selected();
+                                let selected =
+                                    intellisense_popup_for_handle.borrow().get_selected();
                                 if let Some(selected) = selected {
                                     let cursor_pos = ed.insert_position() as usize;
                                     let text = buffer_for_handle.text();
@@ -289,7 +312,9 @@ impl SqlEditorWidget {
                                         ed.set_insert_position((start + selected.len()) as i32);
                                     } else {
                                         buffer_for_handle.insert(cursor_pos as i32, &selected);
-                                        ed.set_insert_position((cursor_pos + selected.len()) as i32);
+                                        ed.set_insert_position(
+                                            (cursor_pos + selected.len()) as i32,
+                                        );
                                     }
 
                                     // Update syntax highlighting after insertion
@@ -377,7 +402,12 @@ impl SqlEditorWidget {
                     if popup_visible
                         && matches!(
                             key,
-                            Key::Up | Key::Down | Key::Escape | Key::Enter | Key::KPEnter | Key::Tab
+                            Key::Up
+                                | Key::Down
+                                | Key::Escape
+                                | Key::Enter
+                                | Key::KPEnter
+                                | Key::Tab
                         )
                     {
                         return false;
@@ -892,6 +922,7 @@ impl SqlEditorWidget {
                     let _ = sender.send(QueryProgress::StatementFinished {
                         index: 0,
                         result: QueryResult::new_error(&sql_text, &err.to_string()),
+                        connection_name: conn_name.clone(),
                     });
                     let _ = sender.send(QueryProgress::BatchFinished);
                     let _ = conn.set_call_timeout(previous_timeout);
@@ -977,14 +1008,11 @@ impl SqlEditorWidget {
                         }
                     }
 
-                    QueryHistoryDialog::add_to_history(
-                        trimmed,
-                        result.execution_time.as_millis() as u64,
-                        result.row_count,
-                        &conn_name,
-                    );
-
-                    let _ = sender.send(QueryProgress::StatementFinished { index, result });
+                    let _ = sender.send(QueryProgress::StatementFinished {
+                        index,
+                        result,
+                        connection_name: conn_name.clone(),
+                    });
 
                     if timed_out {
                         let _ = conn.set_call_timeout(previous_timeout);
@@ -1037,5 +1065,4 @@ impl SqlEditorWidget {
     {
         *self.progress_callback.borrow_mut() = Some(Box::new(callback));
     }
-
 }
