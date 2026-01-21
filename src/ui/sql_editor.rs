@@ -471,6 +471,8 @@ impl SqlEditorWidget {
         intellisense_popup
             .borrow_mut()
             .show_suggestions(suggestions, popup_x, popup_y);
+        let mut editor = editor.clone();
+        let _ = editor.take_focus();
     }
 
     fn widget_origin_in_window<W: WidgetExt>(widget: &W) -> (i32, i32) {

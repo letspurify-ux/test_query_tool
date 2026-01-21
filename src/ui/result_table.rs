@@ -391,10 +391,15 @@ impl ResultTableWidget {
     pub fn display_result(&mut self, result: &QueryResult) {
         if !result.is_select {
             self.table.set_opts(TableOpts {
-                rows: 0,
-                cols: 0,
+                editable: false,
+                cell_selection_color: Color::from_rgb(38, 79, 120),
+                header_frame: FrameType::FlatBox,
+                header_color: Color::from_rgb(45, 45, 48),
+                cell_border_color: Color::from_rgb(50, 50, 52),
                 ..Default::default()
             });
+            self.table.set_rows(0);
+            self.table.set_cols(0);
             self.headers.borrow_mut().clear();
             self.table.redraw();
             return;
@@ -406,8 +411,6 @@ impl ResultTableWidget {
 
         // Update table dimensions
         self.table.set_opts(TableOpts {
-            rows: row_count,
-            cols: col_count,
             editable: false,
             cell_selection_color: Color::from_rgb(38, 79, 120),
             header_frame: FrameType::FlatBox,
@@ -415,6 +418,8 @@ impl ResultTableWidget {
             cell_border_color: Color::from_rgb(50, 50, 52),
             ..Default::default()
         });
+        self.table.set_rows(row_count);
+        self.table.set_cols(col_count);
 
         // Set column headers
         for (i, name) in col_names.iter().enumerate() {
@@ -472,8 +477,6 @@ impl ResultTableWidget {
         *self.pending_widths.borrow_mut() = initial_widths.clone();
 
         self.table.set_opts(TableOpts {
-            rows: 0,
-            cols: col_count,
             editable: false,
             cell_selection_color: Color::from_rgb(38, 79, 120),
             header_frame: FrameType::FlatBox,
@@ -481,6 +484,8 @@ impl ResultTableWidget {
             cell_border_color: Color::from_rgb(50, 50, 52),
             ..Default::default()
         });
+        self.table.set_rows(0);
+        self.table.set_cols(col_count);
 
         for (i, name) in headers.iter().enumerate() {
             self.table.set_col_header_value(i as i32, name);
@@ -578,10 +583,15 @@ impl ResultTableWidget {
     #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.table.set_opts(TableOpts {
-            rows: 0,
-            cols: 0,
+            editable: false,
+            cell_selection_color: Color::from_rgb(38, 79, 120),
+            header_frame: FrameType::FlatBox,
+            header_color: Color::from_rgb(45, 45, 48),
+            cell_border_color: Color::from_rgb(50, 50, 52),
             ..Default::default()
         });
+        self.table.set_rows(0);
+        self.table.set_cols(0);
         self.headers.borrow_mut().clear();
         self.table.redraw();
     }
