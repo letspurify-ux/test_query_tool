@@ -449,8 +449,11 @@ impl ResultTableWidget {
 
     pub fn display_result(&mut self, result: &QueryResult) {
         if !result.is_select {
-            self.table.set_opts(Self::table_opts(0, 0));
-            self.headers.borrow_mut().clear();
+            self.table.set_opts(Self::table_opts(1, 1));
+            self.table.set_col_header_value(0, "Result");
+            self.table.set_col_width(0, (result.message.len() * 8).max(200) as i32);
+            self.table.set_cell_value(0, 0, &result.message);
+            *self.headers.borrow_mut() = vec!["Result".to_string()];
             self.table.redraw();
             return;
         }
