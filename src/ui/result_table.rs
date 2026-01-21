@@ -20,7 +20,6 @@ const MAX_BUFFERED_ROWS: usize = 1000;
 pub struct ResultTableWidget {
     table: SmartTable,
     headers: Rc<RefCell<Vec<String>>>,
-    drag_state: Rc<RefCell<DragState>>,
     /// Buffer for pending rows during streaming
     pending_rows: Rc<RefCell<Vec<Vec<String>>>>,
     /// Pending column width updates
@@ -43,8 +42,6 @@ impl ResultTableWidget {
 
     pub fn with_size(x: i32, y: i32, w: i32, h: i32) -> Self {
         let headers = Rc::new(RefCell::new(Vec::new()));
-        let drag_state = Rc::new(RefCell::new(DragState::default()));
-
         // Create SmartTable with dark theme styling
         let mut table = SmartTable::new(x, y, w, h, None).with_opts(TableOpts {
             rows: 0,
@@ -67,25 +64,26 @@ impl ResultTableWidget {
 
         // Setup event handler for mouse selection and keyboard shortcuts
         let headers_for_handle = headers.clone();
-        let drag_state_for_handle = drag_state.clone();
+        let drag_state_for_handle = Rc::new(RefCell::new(DragState::default()));
 
-        table.handle(move |t, ev| {
+        let mut table_for_handle = table.clone();
+        table.handle(move |_, ev| {
             match ev {
                 Event::Push => {
                     if app::event_mouse_button() == app::MouseButton::Right {
-                        Self::show_context_menu(t, &headers_for_handle);
+                        Self::show_context_menu(&table_for_handle, &headers_for_handle);
                         return true;
                     }
                     // Left click - start drag selection
                     if app::event_mouse_button() == app::MouseButton::Left {
-                        let _ = t.take_focus();
-                        if let Some((row, col)) = Self::get_cell_at_mouse(t) {
+                        let _ = table_for_handle.take_focus();
+                        if let Some((row, col)) = Self::get_cell_at_mouse(&table_for_handle) {
                             let mut state = drag_state_for_handle.borrow_mut();
                             state.is_dragging = true;
                             state.start_row = row;
                             state.start_col = col;
-                            t.set_selection(row, col, row, col);
-                            t.redraw();
+                            table_for_handle.set_selection(row, col, row, col);
+                            table_for_handle.redraw();
                             return true;
                         }
                     }
@@ -94,15 +92,16 @@ impl ResultTableWidget {
                 Event::Drag => {
                     let is_dragging = drag_state_for_handle.borrow().is_dragging;
                     if is_dragging {
-                        if let Some((row, col)) = Self::get_cell_at_mouse_for_drag(t) {
+                        if let Some((row, col)) = Self::get_cell_at_mouse_for_drag(&table_for_handle)
+                        {
                             let state = drag_state_for_handle.borrow();
                             let r1 = state.start_row.min(row);
                             let r2 = state.start_row.max(row);
                             let c1 = state.start_col.min(col);
                             let c2 = state.start_col.max(col);
                             drop(state);
-                            t.set_selection(r1, c1, r2, c2);
-                            t.redraw();
+                            table_for_handle.set_selection(r1, c1, r2, c2);
+                            table_for_handle.redraw();
                         }
                         return true;
                     }
@@ -125,22 +124,28 @@ impl ResultTableWidget {
                         match key {
                             k if k == Key::from_char('a') => {
                                 // Ctrl+A - Select all
-                                let rows = t.rows();
-                                let cols = t.cols();
+                                let rows = table_for_handle.rows();
+                                let cols = table_for_handle.cols();
                                 if rows > 0 && cols > 0 {
-                                    t.set_selection(0, 0, rows - 1, cols - 1);
-                                    t.redraw();
+                                    table_for_handle.set_selection(0, 0, rows - 1, cols - 1);
+                                    table_for_handle.redraw();
                                 }
                                 return true;
                             }
                             k if k == Key::from_char('c') => {
                                 // Ctrl+C - Copy selected cells
-                                Self::copy_selected_to_clipboard(t, &headers_for_handle);
+                                Self::copy_selected_to_clipboard(
+                                    &table_for_handle,
+                                    &headers_for_handle,
+                                );
                                 return true;
                             }
                             k if k == Key::from_char('h') => {
                                 // Ctrl+H - Copy with headers
-                                Self::copy_selected_with_headers(t, &headers_for_handle);
+                                Self::copy_selected_with_headers(
+                                    &table_for_handle,
+                                    &headers_for_handle,
+                                );
                                 return true;
                             }
                             _ => {}
@@ -155,7 +160,6 @@ impl ResultTableWidget {
         Self {
             table,
             headers,
-            drag_state,
             pending_rows: Rc::new(RefCell::new(Vec::new())),
             pending_widths: Rc::new(RefCell::new(Vec::new())),
             last_flush: Rc::new(RefCell::new(Instant::now())),
@@ -259,8 +263,8 @@ impl ResultTableWidget {
         let mouse_y = app::event_y();
 
         // Prevent menu from being added to parent container
-        let current_group = fltk::group::Group::current();
-        fltk::group::Group::set_current::<fltk::group::Group>(None);
+        let current_group = fltk::group::Group::try_current();
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut menu = MenuButton::new(mouse_x, mouse_y, 0, 0, None);
         menu.set_color(Color::from_rgb(45, 45, 48));

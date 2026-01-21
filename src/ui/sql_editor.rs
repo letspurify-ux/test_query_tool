@@ -454,9 +454,19 @@ impl SqlEditorWidget {
             .map(|win| (win.x_root(), win.y_root()))
             .unwrap_or((0, 0));
 
+        let popup_width = 320;
+        let popup_height = (suggestions.len().min(10) * 20 + 10) as i32;
+
         // Calculate absolute screen position
-        let popup_x = win_x + editor_x + cursor_x;
-        let popup_y = win_y + editor_y + cursor_y + 20;
+        let mut popup_x = win_x + editor_x + cursor_x;
+        let mut popup_y = win_y + editor_y + cursor_y + 20;
+
+        if let Some(win) = editor.window() {
+            let max_x = (win_x + win.w() - popup_width).max(win_x);
+            let max_y = (win_y + win.h() - popup_height).max(win_y);
+            popup_x = popup_x.clamp(win_x, max_x);
+            popup_y = popup_y.clamp(win_y, max_y);
+        }
 
         intellisense_popup
             .borrow_mut()

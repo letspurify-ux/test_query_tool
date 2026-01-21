@@ -91,7 +91,7 @@ impl ResultTabsWidget {
         group.begin();
         let table = ResultTableWidget::with_size(x, y, w, h);
         let widget = table.get_widget();
-        group.resizable(&widget);
+        group.resizable(&*widget);
         group.end();
         self.tabs.end();
 
