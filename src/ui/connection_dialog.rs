@@ -17,6 +17,14 @@ pub struct ConnectionDialog;
 
 impl ConnectionDialog {
     pub fn show() -> Option<ConnectionInfo> {
+        enum DialogMessage {
+            SelectSaved(String),
+            DeleteSelected,
+            Test(ConnectionInfo),
+            Connect(ConnectionInfo, bool),
+            Cancel,
+        }
+
         let result: Rc<RefCell<Option<ConnectionInfo>>> = Rc::new(RefCell::new(None));
         let config = Rc::new(RefCell::new(AppConfig::load()));
 
@@ -195,59 +203,24 @@ impl ConnectionDialog {
         main_flex.end();
         dialog.end();
 
-        // Saved connection selection callback
-        let config_for_select = config.clone();
-        let mut name_input_clone = name_input.clone();
-        let mut user_input_clone = user_input.clone();
-        let mut pass_input_clone = pass_input.clone();
-        let mut host_input_clone = host_input.clone();
-        let mut port_input_clone = port_input.clone();
-        let mut service_input_clone = service_input.clone();
+        let (sender, receiver) = fltk::app::channel::<DialogMessage>();
 
+        // Saved connection selection callback
+        let sender_for_select = sender.clone();
         saved_browser.set_callback(move |browser| {
             if let Some(selected) = browser.selected_text() {
-                let cfg = config_for_select.borrow();
-                if let Some(conn) = cfg.get_connection_by_name(&selected) {
-                    name_input_clone.set_value(&conn.name);
-                    user_input_clone.set_value(&conn.username);
-                    pass_input_clone.set_value(&conn.password);
-                    host_input_clone.set_value(&conn.host);
-                    port_input_clone.set_value(&conn.port.to_string());
-                    service_input_clone.set_value(&conn.service_name);
-                }
+                let _ = sender_for_select.send(DialogMessage::SelectSaved(selected));
             }
         });
 
         // Delete button callback
-        let config_for_delete = config.clone();
-        let mut saved_browser_clone = saved_browser.clone();
-
+        let sender_for_delete = sender.clone();
         delete_btn.set_callback(move |_| {
-            if let Some(selected) = saved_browser_clone.selected_text() {
-                let choice = fltk::dialog::choice2_default(
-                    &format!("Delete connection '{}'?", selected),
-                    "Cancel",
-                    "Delete",
-                    "",
-                );
-                if choice == Some(1) {
-                    let mut cfg = config_for_delete.borrow_mut();
-                    cfg.remove_connection(&selected);
-                    if let Err(e) = cfg.save() {
-                        fltk::dialog::alert_default(&format!("Failed to save config: {}", e));
-                    }
-                    // Refresh browser
-                    saved_browser_clone.clear();
-                    for conn in cfg.get_all_connections() {
-                        saved_browser_clone.add(&conn.name);
-                    }
-                }
-            } else {
-                fltk::dialog::alert_default("Please select a connection to delete");
-            }
+            let _ = sender_for_delete.send(DialogMessage::DeleteSelected);
         });
 
         // Test button callback
+        let sender_for_test = sender.clone();
         let name_input_test = name_input.clone();
         let user_input_test = user_input.clone();
         let pass_input_test = pass_input.clone();
@@ -266,20 +239,11 @@ impl ConnectionDialog {
                 &service_input_test.value(),
             );
 
-            match DatabaseConnection::test_connection(&info) {
-                Ok(_) => {
-                    fltk::dialog::message_default("Connection successful!");
-                }
-                Err(e) => {
-                    fltk::dialog::alert_default(&format!("Connection failed: {}", e));
-                }
-            }
+            let _ = sender_for_test.send(DialogMessage::Test(info));
         });
 
         // Connect button callback
-        let result_clone = result.clone();
-        let config_for_connect = config.clone();
-        let mut dialog_clone = dialog.clone();
+        let sender_for_connect = sender.clone();
         let name_input_conn = name_input.clone();
         let user_input_conn = user_input.clone();
         let pass_input_conn = pass_input.clone();
@@ -299,29 +263,95 @@ impl ConnectionDialog {
                 &service_input_conn.value(),
             );
 
-            // Save connection if checkbox is checked
-            if save_check_conn.value() {
-                let mut cfg = config_for_connect.borrow_mut();
-                cfg.add_recent_connection(info.clone());
-                if let Err(e) = cfg.save() {
-                    fltk::dialog::alert_default(&format!("Failed to save connection: {}", e));
-                }
-            }
-
-            *result_clone.borrow_mut() = Some(info);
-            dialog_clone.hide();
+            let _ = sender_for_connect.send(DialogMessage::Connect(info, save_check_conn.value()));
         });
 
         // Cancel button callback
-        let mut dialog_clone = dialog.clone();
+        let sender_for_cancel = sender.clone();
         cancel_btn.set_callback(move |_| {
-            dialog_clone.hide();
+            let _ = sender_for_cancel.send(DialogMessage::Cancel);
         });
 
         dialog.show();
 
+        let mut saved_browser = saved_browser.clone();
+        let mut name_input = name_input.clone();
+        let mut user_input = user_input.clone();
+        let mut pass_input = pass_input.clone();
+        let mut host_input = host_input.clone();
+        let mut port_input = port_input.clone();
+        let mut service_input = service_input.clone();
         while dialog.shown() {
             fltk::app::wait();
+            while let Some(message) = receiver.recv() {
+                match message {
+                    DialogMessage::SelectSaved(selected) => {
+                        let cfg = config.borrow();
+                        if let Some(conn) = cfg.get_connection_by_name(&selected) {
+                            name_input.set_value(&conn.name);
+                            user_input.set_value(&conn.username);
+                            pass_input.set_value(&conn.password);
+                            host_input.set_value(&conn.host);
+                            port_input.set_value(&conn.port.to_string());
+                            service_input.set_value(&conn.service_name);
+                        }
+                    }
+                    DialogMessage::DeleteSelected => {
+                        if let Some(selected) = saved_browser.selected_text() {
+                            let choice = fltk::dialog::choice2_default(
+                                &format!("Delete connection '{}'?", selected),
+                                "Cancel",
+                                "Delete",
+                                "",
+                            );
+                            if choice == Some(1) {
+                                let mut cfg = config.borrow_mut();
+                                cfg.remove_connection(&selected);
+                                if let Err(e) = cfg.save() {
+                                    fltk::dialog::alert_default(&format!(
+                                        "Failed to save config: {}",
+                                        e
+                                    ));
+                                }
+                                saved_browser.clear();
+                                for conn in cfg.get_all_connections() {
+                                    saved_browser.add(&conn.name);
+                                }
+                            }
+                        } else {
+                            fltk::dialog::alert_default(
+                                "Please select a connection to delete",
+                            );
+                        }
+                    }
+                    DialogMessage::Test(info) => match DatabaseConnection::test_connection(&info) {
+                        Ok(_) => {
+                            fltk::dialog::message_default("Connection successful!");
+                        }
+                        Err(e) => {
+                            fltk::dialog::alert_default(&format!("Connection failed: {}", e));
+                        }
+                    },
+                    DialogMessage::Connect(info, save_connection) => {
+                        if save_connection {
+                            let mut cfg = config.borrow_mut();
+                            cfg.add_recent_connection(info.clone());
+                            if let Err(e) = cfg.save() {
+                                fltk::dialog::alert_default(&format!(
+                                    "Failed to save connection: {}",
+                                    e
+                                ));
+                            }
+                        }
+
+                        *result.borrow_mut() = Some(info);
+                        dialog.hide();
+                    }
+                    DialogMessage::Cancel => {
+                        dialog.hide();
+                    }
+                }
+            }
         }
 
         let final_result = result.borrow().clone();
