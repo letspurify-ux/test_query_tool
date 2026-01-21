@@ -47,6 +47,11 @@ struct SchemaUpdate {
 }
 
 impl MainWindow {
+    fn schedule_awake() {
+        app::awake();
+        app::repeat_timeout(0.1, Self::schedule_awake);
+    }
+
     pub fn new() -> Self {
         let connection = create_shared_connection();
 
@@ -581,6 +586,7 @@ impl MainWindow {
         // Set default colors for dark theme
         app::background(45, 45, 48);
         app::foreground(220, 220, 220);
+        app::add_timeout(0.1, Self::schedule_awake);
 
         let mut main_window = MainWindow::new();
         main_window.setup_callbacks();
