@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::mpsc;
 use std::thread;
 
 use crate::db::{
@@ -245,12 +246,12 @@ impl MainWindow {
         let mut sql_editor = self.sql_editor.clone();
         let result_table_export = self.result_tabs.clone();
         let mut status_bar_export = self.status_bar.clone();
-        let (schema_sender, schema_receiver) = app::channel::<SchemaUpdate>();
+        let (schema_sender, schema_receiver) = mpsc::channel::<SchemaUpdate>();
 
         let intellisense_data_for_schema = intellisense_data.clone();
         let highlighter_for_schema = highlighter.clone();
         app::add_idle3(move |_| {
-            while let Some(update) = schema_receiver.recv() {
+            while let Ok(update) = schema_receiver.try_recv() {
                 *intellisense_data_for_schema.borrow_mut() = update.data;
                 highlighter_for_schema
                     .borrow_mut()
@@ -333,6 +334,7 @@ impl MainWindow {
                                                 data,
                                                 highlight_data,
                                             });
+                                            app::awake();
                                         });
                                     }
                                     Err(e) => {

@@ -193,8 +193,8 @@ impl ObjectBrowserWidget {
                     false
                 }
                 Event::KeyUp => {
-                    // Enter key to generate SELECT
-                    if fltk::app::event_key() == Key::Enter {
+                    // Enter key to generate SELECT - only if tree has focus
+                    if fltk::app::event_key() == Key::Enter && t.has_focus() {
                         if let Some(item) = t.first_selected_item() {
                             if let Some(ObjectItem::Simple {
                                 object_type,
@@ -216,6 +216,7 @@ impl ObjectBrowserWidget {
                     }
                     false
                 }
+
                 _ => false,
             }
         });

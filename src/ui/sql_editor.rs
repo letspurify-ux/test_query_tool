@@ -12,6 +12,7 @@ use fltk::{
 use oracle::Error as OracleError;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -51,7 +52,7 @@ pub struct SqlEditorWidget {
     connection: SharedConnection,
     execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>>,
     progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>>,
-    progress_sender: app::Sender<QueryProgress>,
+    progress_sender: mpsc::Sender<QueryProgress>,
     query_running: Rc<RefCell<bool>>,
     intellisense_data: Rc<RefCell<IntellisenseData>>,
     intellisense_popup: Rc<RefCell<IntellisensePopup>>,
@@ -142,7 +143,7 @@ impl SqlEditorWidget {
             Rc::new(RefCell::new(None));
         let progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>> =
             Rc::new(RefCell::new(None));
-        let (progress_sender, progress_receiver) = app::channel::<QueryProgress>();
+        let (progress_sender, progress_receiver) = mpsc::channel::<QueryProgress>();
         let query_running = Rc::new(RefCell::new(false));
 
         let intellisense_data = Rc::new(RefCell::new(IntellisenseData::new()));
@@ -182,13 +183,13 @@ impl SqlEditorWidget {
 
     fn setup_progress_handler(
         &self,
-        progress_receiver: app::Receiver<QueryProgress>,
+        progress_receiver: mpsc::Receiver<QueryProgress>,
         progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>>,
         query_running: Rc<RefCell<bool>>,
     ) {
         let execute_callback = self.execute_callback.clone();
         app::add_idle3(move |_| {
-            while let Some(message) = progress_receiver.recv() {
+            while let Ok(message) = progress_receiver.try_recv() {
                 if let Some(ref mut cb) = *progress_callback.borrow_mut() {
                     cb(message.clone());
                 }
@@ -524,15 +525,11 @@ impl SqlEditorWidget {
     }
 
     fn widget_origin_in_window<W: WidgetExt>(widget: &W) -> (i32, i32) {
-        let mut x = widget.x();
-        let mut y = widget.y();
-        let mut parent = widget.parent();
-        while let Some(group) = parent {
-            x += group.x();
-            y += group.y();
-            parent = group.parent();
-        }
-        (x, y)
+        // In FLTK, widget.x() and widget.y() are already relative to the parent window
+        // if the widget is a child of the window. If nested, we might need a more
+        // complex calculation, but for our layout, this is usually sufficient.
+        // Let's ensure we get the absolute root window position for the popup.
+        (widget.x(), widget.y())
     }
 
     /// Show quick describe dialog for a table (F4 functionality)
@@ -918,10 +915,12 @@ impl SqlEditorWidget {
                 let statements = QueryExecutor::split_statements_with_blocks(&sql_text);
                 if statements.is_empty() {
                     let _ = sender.send(QueryProgress::BatchFinished);
+                    app::awake();
                     return;
                 }
 
                 let _ = sender.send(QueryProgress::BatchStart);
+                app::awake();
 
                 let previous_timeout = conn.call_timeout().unwrap_or(None);
                 if let Err(err) = conn.set_call_timeout(query_timeout) {
@@ -931,6 +930,7 @@ impl SqlEditorWidget {
                         connection_name: conn_name.clone(),
                     });
                     let _ = sender.send(QueryProgress::BatchFinished);
+                    app::awake();
                     let _ = conn.set_call_timeout(previous_timeout);
                     return;
                 }
@@ -944,6 +944,7 @@ impl SqlEditorWidget {
                     let is_select = QueryExecutor::is_select_statement(trimmed);
 
                     let _ = sender.send(QueryProgress::StatementStart { index });
+                    app::awake();
 
                     let mut buffered_rows: Vec<Vec<String>> = Vec::new();
                     let mut last_flush = std::time::Instant::now();
@@ -962,12 +963,14 @@ impl SqlEditorWidget {
                                     index,
                                     columns: names,
                                 });
+                                app::awake();
                             },
                             &mut |row| {
                                 buffered_rows.push(row);
                                 if last_flush.elapsed() >= Duration::from_secs(1) {
                                     let rows = std::mem::take(&mut buffered_rows);
                                     let _ = sender.send(QueryProgress::Rows { index, rows });
+                                    app::awake();
                                     last_flush = std::time::Instant::now();
                                 }
                             },
@@ -1001,6 +1004,7 @@ impl SqlEditorWidget {
                     if !buffered_rows.is_empty() {
                         let rows = std::mem::take(&mut buffered_rows);
                         let _ = sender.send(QueryProgress::Rows { index, rows });
+                        app::awake();
                     }
 
                     if auto_commit && !result.is_select {
@@ -1019,16 +1023,19 @@ impl SqlEditorWidget {
                         result,
                         connection_name: conn_name.clone(),
                     });
+                    app::awake();
 
                     if timed_out {
                         let _ = conn.set_call_timeout(previous_timeout);
                         let _ = sender.send(QueryProgress::BatchFinished);
+                        app::awake();
                         return;
                     }
                 }
 
                 let _ = conn.set_call_timeout(previous_timeout);
                 let _ = sender.send(QueryProgress::BatchFinished);
+                app::awake();
             });
         }
     }
