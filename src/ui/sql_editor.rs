@@ -275,6 +275,9 @@ impl SqlEditorWidget {
             }
             match ev {
                 Event::KeyDown => {
+                    if !ed.has_focus() {
+                        return false;
+                    }
                     // KeyDown fires BEFORE the character is inserted into the buffer.
                     // Handle navigation and selection keys here to consume them
                     // before they affect the editor.
@@ -374,6 +377,9 @@ impl SqlEditorWidget {
                     false
                 }
                 Event::KeyUp => {
+                    if !ed.has_focus() {
+                        return false;
+                    }
                     // KeyUp fires AFTER the character is inserted into the buffer.
                     // Update syntax highlighting and filter/show intellisense here.
                     let text = buffer_for_handle.text();
