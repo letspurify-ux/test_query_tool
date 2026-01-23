@@ -9,6 +9,7 @@ use fltk::{
 };
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::mpsc;
 
 use crate::utils::config::{QueryHistory, QueryHistoryEntry};
 
@@ -33,9 +34,7 @@ impl QueryHistoryDialog {
         dialog.set_color(Color::from_rgb(45, 45, 48));
         dialog.make_modal(true);
 
-        let mut main_flex = Flex::default()
-            .with_pos(10, 10)
-            .with_size(780, 480);
+        let mut main_flex = Flex::default().with_pos(10, 10).with_size(780, 480);
         main_flex.set_type(fltk::group::FlexType::Column);
         main_flex.set_spacing(10);
 
@@ -49,8 +48,8 @@ impl QueryHistoryDialog {
         list_flex.set_type(fltk::group::FlexType::Column);
         list_flex.set_spacing(5);
 
-        let mut list_label = fltk::frame::Frame::default()
-            .with_label("Query History (Most Recent First):");
+        let mut list_label =
+            fltk::frame::Frame::default().with_label("Query History (Most Recent First):");
         list_label.set_label_color(Color::White);
         list_flex.fixed(&list_label, 20);
 
@@ -78,8 +77,7 @@ impl QueryHistoryDialog {
         preview_flex.set_type(fltk::group::FlexType::Column);
         preview_flex.set_spacing(5);
 
-        let mut preview_label = fltk::frame::Frame::default()
-            .with_label("SQL Preview:");
+        let mut preview_label = fltk::frame::Frame::default().with_label("SQL Preview:");
         preview_label.set_label_color(Color::White);
         preview_flex.fixed(&preview_label, 20);
 
@@ -102,9 +100,7 @@ impl QueryHistoryDialog {
 
         let _spacer = fltk::frame::Frame::default();
 
-        let mut use_btn = Button::default()
-            .with_size(120, 30)
-            .with_label("Use Query");
+        let mut use_btn = Button::default().with_size(120, 30).with_label("Use Query");
         use_btn.set_color(Color::from_rgb(0, 122, 204));
         use_btn.set_label_color(Color::White);
         use_btn.set_frame(FrameType::FlatBox);
@@ -116,9 +112,7 @@ impl QueryHistoryDialog {
         clear_btn.set_label_color(Color::White);
         clear_btn.set_frame(FrameType::FlatBox);
 
-        let mut close_btn = Button::default()
-            .with_size(80, 30)
-            .with_label("Close");
+        let mut close_btn = Button::default().with_size(80, 30).with_label("Close");
         close_btn.set_color(Color::from_rgb(100, 100, 100));
         close_btn.set_label_color(Color::White);
         close_btn.set_frame(FrameType::FlatBox);
@@ -136,14 +130,15 @@ impl QueryHistoryDialog {
         let selected_sql: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let queries: Rc<RefCell<Vec<QueryHistoryEntry>>> = Rc::new(RefCell::new(history.queries));
 
-        let (sender, receiver) = fltk::app::channel::<DialogMessage>();
+        let (sender, receiver) = mpsc::channel::<DialogMessage>();
 
         // Browser selection callback - update preview
         let sender_for_preview = sender.clone();
         browser.set_callback(move |b| {
             let selected = b.value();
             if selected > 0 {
-                let _ = sender_for_preview.send(DialogMessage::UpdatePreview((selected - 1) as usize));
+                let _ =
+                    sender_for_preview.send(DialogMessage::UpdatePreview((selected - 1) as usize));
             }
         });
 
@@ -169,9 +164,8 @@ impl QueryHistoryDialog {
 
         let mut preview_buffer = preview_buffer.clone();
         let mut browser = browser.clone();
-        while dialog.shown() {
-            fltk::app::wait();
-            while let Some(message) = receiver.recv() {
+        while dialog.shown() && fltk::app::wait() {
+            while let Ok(message) = receiver.try_recv() {
                 match message {
                     DialogMessage::UpdatePreview(index) => {
                         let queries = queries.borrow();

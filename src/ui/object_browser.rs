@@ -9,6 +9,7 @@ use fltk::{
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::mpsc;
 use std::thread;
 
 use crate::db::{lock_connection, ObjectBrowser, SharedConnection};
@@ -54,7 +55,7 @@ pub struct ObjectBrowserWidget {
     sql_callback: SqlExecuteCallback,
     filter_input: Input,
     object_cache: Rc<RefCell<ObjectCache>>,
-    refresh_sender: app::Sender<ObjectCache>,
+    refresh_sender: mpsc::Sender<ObjectCache>,
 }
 
 impl ObjectBrowserWidget {
@@ -116,7 +117,7 @@ impl ObjectBrowserWidget {
         let sql_callback: SqlExecuteCallback = Rc::new(RefCell::new(None));
         let object_cache = Rc::new(RefCell::new(ObjectCache::default()));
 
-        let (refresh_sender, refresh_receiver) = app::channel::<ObjectCache>();
+        let (refresh_sender, refresh_receiver) = mpsc::channel::<ObjectCache>();
 
         let mut widget = Self {
             flex,
@@ -149,13 +150,13 @@ impl ObjectBrowserWidget {
         });
     }
 
-    fn setup_refresh_handler(&mut self, refresh_receiver: app::Receiver<ObjectCache>) {
+    fn setup_refresh_handler(&mut self, refresh_receiver: mpsc::Receiver<ObjectCache>) {
         let mut tree = self.tree.clone();
         let object_cache = self.object_cache.clone();
         let filter_input = self.filter_input.clone();
 
         app::add_idle3(move |_| {
-            while let Some(cache) = refresh_receiver.recv() {
+            while let Ok(cache) = refresh_receiver.try_recv() {
                 *object_cache.borrow_mut() = cache.clone();
                 let filter_text = filter_input.value().to_lowercase();
                 ObjectBrowserWidget::populate_tree(&mut tree, &cache, &filter_text);
@@ -169,6 +170,9 @@ impl ObjectBrowserWidget {
         let sql_callback = self.sql_callback.clone();
 
         self.tree.handle(move |t, ev| {
+            if !t.active() {
+                return false;
+            }
             match ev {
                 Event::Push => {
                     let mouse_button = fltk::app::event_mouse_button();
@@ -505,7 +509,7 @@ impl ObjectBrowserWidget {
         close_btn.set_color(Color::from_rgb(0, 122, 204));
         close_btn.set_label_color(Color::White);
 
-        let (sender, receiver) = fltk::app::channel::<()>();
+        let (sender, receiver) = mpsc::channel::<()>();
         close_btn.set_callback(move |_| {
             let _ = sender.send(());
         });
@@ -513,9 +517,8 @@ impl ObjectBrowserWidget {
         dialog.end();
         dialog.show();
 
-        while dialog.shown() {
-            fltk::app::wait();
-            if receiver.recv().is_some() {
+        while dialog.shown() && fltk::app::wait() {
+            if receiver.try_recv().is_ok() {
                 dialog.hide();
             }
         }
@@ -592,6 +595,7 @@ impl ObjectBrowserWidget {
             }
 
             let _ = sender.send(cache);
+            app::awake();
         });
     }
 

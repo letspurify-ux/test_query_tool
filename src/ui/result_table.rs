@@ -63,6 +63,9 @@ impl ResultTableWidget {
         let mut table_for_handle = table.clone();
         let full_data_for_handle = full_data.clone();
         table.handle(move |_, ev| {
+            if !table_for_handle.active() {
+                return false;
+            }
             match ev {
                 Event::Push => {
                     if app::event_mouse_button() == app::MouseButton::Right {
@@ -91,7 +94,8 @@ impl ResultTableWidget {
                 Event::Drag => {
                     let is_dragging = drag_state_for_handle.borrow().is_dragging;
                     if is_dragging {
-                        if let Some((row, col)) = Self::get_cell_at_mouse_for_drag(&table_for_handle)
+                        if let Some((row, col)) =
+                            Self::get_cell_at_mouse_for_drag(&table_for_handle)
                         {
                             let state = drag_state_for_handle.borrow();
                             let r1 = state.start_row.min(row);
@@ -213,7 +217,10 @@ impl ResultTableWidget {
         let data_right = table_x + table_w;
         let data_bottom = table_y + table_h;
 
-        if mouse_x < data_left || mouse_y < data_top || mouse_x >= data_right || mouse_y >= data_bottom
+        if mouse_x < data_left
+            || mouse_y < data_top
+            || mouse_x >= data_right
+            || mouse_y >= data_bottom
         {
             return None;
         }
@@ -374,9 +381,7 @@ impl ResultTableWidget {
             let choice_label = choice.label().unwrap_or_default();
             match choice_label.as_str() {
                 "Copy" => Self::copy_selected_to_clipboard(&table, headers, full_data),
-                "Copy with Headers" => {
-                    Self::copy_selected_with_headers(&table, headers, full_data)
-                }
+                "Copy with Headers" => Self::copy_selected_with_headers(&table, headers, full_data),
                 "Copy Cell" => Self::copy_current_cell(&table, full_data),
                 "Copy All" => Self::copy_all_to_clipboard(&table, headers, full_data),
                 _ => {}
@@ -529,7 +534,8 @@ impl ResultTableWidget {
         if !result.is_select {
             self.apply_table_opts(1, 1);
             self.table.set_col_header_value(0, "Result");
-            self.table.set_col_width(0, (result.message.len() * 8).max(200) as i32);
+            self.table
+                .set_col_width(0, (result.message.len() * 8).max(200) as i32);
             self.table.set_cell_value(0, 0, &result.message);
             *self.headers.borrow_mut() = vec!["Result".to_string()];
             *self.full_data.borrow_mut() = vec![vec![result.message.clone()]];
@@ -538,8 +544,7 @@ impl ResultTableWidget {
         }
 
         if result.rows.is_empty() && result.row_count > 0 && self.table.rows() > 0 {
-            let col_names: Vec<String> =
-                result.columns.iter().map(|c| c.name.clone()).collect();
+            let col_names: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
             let col_count = col_names.len() as i32;
             if self.table.cols() < col_count {
                 self.apply_table_opts(self.table.rows(), col_count);
@@ -592,7 +597,8 @@ impl ResultTableWidget {
                 } else {
                     cell.clone()
                 };
-                self.table.set_cell_value(row_idx as i32, col_idx as i32, &display_text);
+                self.table
+                    .set_cell_value(row_idx as i32, col_idx as i32, &display_text);
             }
         }
 
@@ -673,11 +679,7 @@ impl ResultTableWidget {
 
         let current_rows = self.table.rows();
         let new_row_count = current_rows + rows_to_add.len() as i32;
-        let max_cols_in_rows = rows_to_add
-            .iter()
-            .map(|row| row.len())
-            .max()
-            .unwrap_or(0) as i32;
+        let max_cols_in_rows = rows_to_add.iter().map(|row| row.len()).max().unwrap_or(0) as i32;
 
         let pending_cols = self.pending_widths.borrow().len() as i32;
         let cols = self.table.cols().max(max_cols_in_rows).max(pending_cols);
@@ -718,7 +720,8 @@ impl ResultTableWidget {
                     } else {
                         cell.clone()
                     };
-                    self.table.set_cell_value(row_idx, col_idx as i32, &display_text);
+                    self.table
+                        .set_cell_value(row_idx, col_idx as i32, &display_text);
                 }
             }
         }
