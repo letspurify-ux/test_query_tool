@@ -247,6 +247,31 @@ impl SqlEditorWidget {
             false
         });
 
+        let buffer_for_modify = buffer.clone();
+        let intellisense_data_for_modify = intellisense_data.clone();
+        let intellisense_popup_for_modify = intellisense_popup.clone();
+        let mut editor_for_modify = editor.clone();
+        buffer.add_modify_callback(move |_, _, _, _, _| {
+            if !editor_for_modify.has_focus() || !Self::editor_has_focus(&editor_for_modify) {
+                return;
+            }
+
+            let cursor_pos = editor_for_modify.insert_position() as usize;
+            let text = buffer_for_modify.text();
+            let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
+
+            if word.len() >= 2 {
+                Self::trigger_intellisense(
+                    &editor_for_modify,
+                    &buffer_for_modify,
+                    &intellisense_data_for_modify,
+                    &intellisense_popup_for_modify,
+                );
+            } else {
+                intellisense_popup_for_modify.borrow_mut().hide();
+            }
+        });
+
         // Setup callback for inserting selected text
         let mut buffer_for_insert = buffer.clone();
         let mut editor_for_insert = editor.clone();
