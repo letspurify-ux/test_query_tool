@@ -30,7 +30,7 @@ impl ConnectionDialog {
             Cancel,
         }
 
-        let (sender, receiver) = std::sync::mpsc::channel::<DialogMessage>();
+        let (sender, receiver) = app::channel::<DialogMessage>();
 
         let result: Rc<RefCell<Option<ConnectionInfo>>> = Rc::new(RefCell::new(None));
         let config = Rc::new(RefCell::new(AppConfig::load()));
@@ -212,18 +212,47 @@ impl ConnectionDialog {
 
         popups.borrow_mut().push(dialog.clone());
 
-        // Saved connection selection callback
-        let sender_for_select = sender.clone();
+        // Saved connection selection callback - update fields directly for immediate feedback
+        let config_cb = config.clone();
+        let mut name_input_cb = name_input.clone();
+        let mut user_input_cb = user_input.clone();
+        let mut pass_input_cb = pass_input.clone();
+        let mut host_input_cb = host_input.clone();
+        let mut port_input_cb = port_input.clone();
+        let mut service_input_cb = service_input.clone();
+        let sender_for_click = sender.clone();
+        
         saved_browser.set_callback(move |browser| {
             if let Some(selected) = browser.selected_text() {
-                let _ = sender_for_select.send(DialogMessage::SelectSaved(selected));
+                let cfg = config_cb.borrow();
+                if let Some(conn) = cfg.get_connection_by_name(&selected) {
+                    name_input_cb.set_value(&conn.name);
+                    user_input_cb.set_value(&conn.username);
+                    pass_input_cb.set_value(&conn.password);
+                    host_input_cb.set_value(&conn.host);
+                    port_input_cb.set_value(&conn.port.to_string());
+                    service_input_cb.set_value(&conn.service_name);
+
+                    // Check for double click to connect immediately
+                    if app::event_clicks() {
+                        let info = ConnectionInfo::new(
+                            &conn.name,
+                            &conn.username,
+                            &conn.password,
+                            &conn.host,
+                            conn.port,
+                            &conn.service_name,
+                        );
+                        sender_for_click.send(DialogMessage::Connect(info, true));
+                    }
+                }
             }
         });
 
         // Delete button callback
         let sender_for_delete = sender.clone();
         delete_btn.set_callback(move |_| {
-            let _ = sender_for_delete.send(DialogMessage::DeleteSelected);
+            sender_for_delete.send(DialogMessage::DeleteSelected);
         });
 
         // Test button callback
@@ -246,8 +275,7 @@ impl ConnectionDialog {
                 &service_input_test.value(),
             );
 
-            let _ = sender_for_test.send(DialogMessage::Test(info));
-            app::awake();
+            sender_for_test.send(DialogMessage::Test(info));
         });
 
         // Connect button callback
@@ -271,15 +299,13 @@ impl ConnectionDialog {
                 &service_input_conn.value(),
             );
 
-            let _ = sender_for_connect.send(DialogMessage::Connect(info, save_check_conn.value()));
-            app::awake();
+            sender_for_connect.send(DialogMessage::Connect(info, save_check_conn.value()));
         });
 
         // Cancel button callback
         let sender_for_cancel = sender.clone();
         cancel_btn.set_callback(move |_| {
-            let _ = sender_for_cancel.send(DialogMessage::Cancel);
-            app::awake();
+            sender_for_cancel.send(DialogMessage::Cancel);
         });
 
         dialog.show();
@@ -292,20 +318,10 @@ impl ConnectionDialog {
         let mut port_input = port_input.clone();
         let mut service_input = service_input.clone();
         while dialog.shown() {
-            fltk::app::wait();
-            while let Ok(message) = receiver.try_recv() {
+            app::wait();
+            while let Some(message) = receiver.recv() {
                 match message {
-                    DialogMessage::SelectSaved(selected) => {
-                        let cfg = config.borrow();
-                        if let Some(conn) = cfg.get_connection_by_name(&selected) {
-                            name_input.set_value(&conn.name);
-                            user_input.set_value(&conn.username);
-                            pass_input.set_value(&conn.password);
-                            host_input.set_value(&conn.host);
-                            port_input.set_value(&conn.port.to_string());
-                            service_input.set_value(&conn.service_name);
-                        }
-                    }
+                    DialogMessage::SelectSaved(_) => {} // Handled directly in callback now
                     DialogMessage::DeleteSelected => {
                         if let Some(selected) = saved_browser.selected_text() {
                             let choice = fltk::dialog::choice2_default(
