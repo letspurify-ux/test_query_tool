@@ -63,6 +63,9 @@ impl ResultTableWidget {
         let mut table_for_handle = table.clone();
         let full_data_for_handle = full_data.clone();
         table.handle(move |_, ev| {
+            if !table_for_handle.active() {
+                return false;
+            }
             match ev {
                 Event::Push => {
                     if app::event_mouse_button() == app::MouseButton::Right {
@@ -116,10 +119,10 @@ impl ResultTableWidget {
                 }
                 Event::KeyDown => {
                     let key = app::event_key();
-                    let ctrl = app::event_state().contains(Shortcut::Ctrl)
-                        || app::event_state().contains(Shortcut::Command);
+                    let state = app::event_state();
+                    let ctrl_or_cmd = state.contains(Shortcut::Ctrl) || state.contains(Shortcut::Command);
 
-                    if ctrl {
+                    if ctrl_or_cmd {
                         match key {
                             k if k == Key::from_char('a') || k == Key::from_char('A') => {
                                 // Ctrl+A - Select all
@@ -154,6 +157,30 @@ impl ResultTableWidget {
                     }
                     false
                 }
+                Event::Shortcut => {
+                    let key = app::event_key();
+                    let state = app::event_state();
+                    let ctrl_or_cmd = state.contains(Shortcut::Ctrl) || state.contains(Shortcut::Command);
+                    
+                    if ctrl_or_cmd && (key == Key::from_char('c') || key == Key::from_char('C')) {
+                        Self::copy_selected_to_clipboard(
+                            &table_for_handle,
+                            &headers_for_handle,
+                            &full_data_for_handle,
+                        );
+                        return true;
+                    }
+                    if ctrl_or_cmd && (key == Key::from_char('a') || key == Key::from_char('A')) {
+                        let rows = table_for_handle.rows();
+                        let cols = table_for_handle.cols();
+                        if rows > 0 && cols > 0 {
+                            table_for_handle.set_selection(0, 0, rows - 1, cols - 1);
+                            table_for_handle.redraw();
+                        }
+                        return true;
+                    }
+                    false
+                }
                 _ => false,
             }
         });
@@ -185,12 +212,8 @@ impl ResultTableWidget {
     }
 
     fn apply_table_opts(&mut self, rows: i32, cols: i32) {
-        self.table.set_opts(Self::table_opts(rows, cols));
-        self.table.set_row_header(true);
-        self.table.set_row_header_width(55);
-        self.table.set_col_header(true);
-        self.table.set_col_header_height(28);
-        self.table.set_row_height_all(26);
+        let opts = Self::table_opts(rows, cols);
+        self.table.set_opts(opts);
     }
 
     /// Get cell at mouse position (returns None if outside cells)
@@ -373,9 +396,9 @@ impl ResultTableWidget {
         if let Some(choice) = menu.popup() {
             let choice_label = choice.label().unwrap_or_default();
             match choice_label.as_str() {
-                "Copy" => Self::copy_selected_to_clipboard(&table, headers, full_data),
+                "Copy" => { Self::copy_selected_to_clipboard(&table, headers, full_data); }
                 "Copy with Headers" => {
-                    Self::copy_selected_with_headers(&table, headers, full_data)
+                    Self::copy_selected_with_headers(&table, headers, full_data);
                 }
                 "Copy Cell" => Self::copy_current_cell(&table, full_data),
                 "Copy All" => Self::copy_all_to_clipboard(&table, headers, full_data),
@@ -390,11 +413,15 @@ impl ResultTableWidget {
         table: &SmartTable,
         _headers: &Rc<RefCell<Vec<String>>>,
         full_data: &Rc<RefCell<Vec<Vec<String>>>>,
-    ) {
-        let (row_top, row_bot, col_left, col_right) = table.get_selection();
+    ) -> usize {
+        let (row_top, col_left, row_bot, col_right) = table.get_selection();
         if row_top < 0 || col_left < 0 {
-            return;
+            return 0;
         }
+
+        let rows = (row_bot - row_top + 1) as usize;
+        let cols = (col_right - col_left + 1) as usize;
+        let cell_count = rows * cols;
 
         let full_data = full_data.borrow();
         let mut result = String::new();
@@ -419,6 +446,9 @@ impl ResultTableWidget {
 
         if !result.is_empty() {
             app::copy(&result);
+            cell_count
+        } else {
+            0
         }
     }
 
@@ -426,11 +456,15 @@ impl ResultTableWidget {
         table: &SmartTable,
         headers: &Rc<RefCell<Vec<String>>>,
         full_data: &Rc<RefCell<Vec<Vec<String>>>>,
-    ) {
-        let (row_top, row_bot, col_left, col_right) = table.get_selection();
+    ) -> usize {
+        let (row_top, col_left, row_bot, col_right) = table.get_selection();
         if row_top < 0 || col_left < 0 {
-            return;
+            return 0;
         }
+
+        let rows = (row_bot - row_top + 1) as usize;
+        let cols = (col_right - col_left + 1) as usize;
+        let cell_count = rows * cols;
 
         let headers = headers.borrow();
         let full_data = full_data.borrow();
@@ -469,11 +503,14 @@ impl ResultTableWidget {
 
         if !result.is_empty() {
             app::copy(&result);
+            cell_count
+        } else {
+            0
         }
     }
 
     fn copy_current_cell(table: &SmartTable, full_data: &Rc<RefCell<Vec<Vec<String>>>>) {
-        let (row_top, _, col_left, _) = table.get_selection();
+        let (row_top, col_left, _, _) = table.get_selection();
         if row_top >= 0 && col_left >= 0 {
             let val = full_data
                 .borrow()
@@ -746,9 +783,32 @@ impl ResultTableWidget {
         self.table.redraw();
     }
 
+    pub fn copy(&self) -> usize {
+        let count = Self::copy_selected_to_clipboard(&self.table, &self.headers, &self.full_data);
+        if count > 0 {
+            let rows = (self.table.get_selection().2 - self.table.get_selection().0 + 1) as usize;
+            let cols = (self.table.get_selection().3 - self.table.get_selection().1 + 1) as usize;
+            println!("Copied {} cells ({} rows × {} cols)", count, rows, cols);
+        }
+        count
+    }
+
+    pub fn copy_with_headers(&self) {
+        Self::copy_selected_with_headers(&self.table, &self.headers, &self.full_data);
+    }
+
+    pub fn select_all(&mut self) {
+        let rows = self.table.rows();
+        let cols = self.table.cols();
+        if rows > 0 && cols > 0 {
+            self.table.set_selection(0, 0, rows - 1, cols - 1);
+            self.table.redraw();
+        }
+    }
+
     #[allow(dead_code)]
     pub fn get_selected_data(&self) -> Option<String> {
-        let (row_top, row_bot, col_left, col_right) = self.table.get_selection();
+        let (row_top, col_left, row_bot, col_right) = self.table.get_selection();
 
         if row_top < 0 || col_left < 0 {
             return None;

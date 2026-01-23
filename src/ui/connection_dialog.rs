@@ -1,4 +1,5 @@
 use fltk::{
+    app,
     browser::HoldBrowser,
     button::{Button, CheckButton},
     enums::{Color, FrameType},
@@ -17,6 +18,10 @@ pub struct ConnectionDialog;
 
 impl ConnectionDialog {
     pub fn show() -> Option<ConnectionInfo> {
+        Self::show_with_registry(Rc::new(RefCell::new(Vec::new())))
+    }
+
+    pub fn show_with_registry(popups: Rc<RefCell<Vec<Window>>>) -> Option<ConnectionInfo> {
         enum DialogMessage {
             SelectSaved(String),
             DeleteSelected,
@@ -24,6 +29,8 @@ impl ConnectionDialog {
             Connect(ConnectionInfo, bool),
             Cancel,
         }
+
+        let (sender, receiver) = std::sync::mpsc::channel::<DialogMessage>();
 
         let result: Rc<RefCell<Option<ConnectionInfo>>> = Rc::new(RefCell::new(None));
         let config = Rc::new(RefCell::new(AppConfig::load()));
@@ -203,7 +210,7 @@ impl ConnectionDialog {
         main_flex.end();
         dialog.end();
 
-        let (sender, receiver) = fltk::app::channel::<DialogMessage>();
+        popups.borrow_mut().push(dialog.clone());
 
         // Saved connection selection callback
         let sender_for_select = sender.clone();
@@ -240,6 +247,7 @@ impl ConnectionDialog {
             );
 
             let _ = sender_for_test.send(DialogMessage::Test(info));
+            app::awake();
         });
 
         // Connect button callback
@@ -264,12 +272,14 @@ impl ConnectionDialog {
             );
 
             let _ = sender_for_connect.send(DialogMessage::Connect(info, save_check_conn.value()));
+            app::awake();
         });
 
         // Cancel button callback
         let sender_for_cancel = sender.clone();
         cancel_btn.set_callback(move |_| {
             let _ = sender_for_cancel.send(DialogMessage::Cancel);
+            app::awake();
         });
 
         dialog.show();
@@ -283,7 +293,7 @@ impl ConnectionDialog {
         let mut service_input = service_input.clone();
         while dialog.shown() {
             fltk::app::wait();
-            while let Some(message) = receiver.recv() {
+            while let Ok(message) = receiver.try_recv() {
                 match message {
                     DialogMessage::SelectSaved(selected) => {
                         let cfg = config.borrow();

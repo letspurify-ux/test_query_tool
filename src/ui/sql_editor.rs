@@ -272,6 +272,9 @@ impl SqlEditorWidget {
         editor.handle(move |ed, ev| {
             match ev {
                 Event::KeyDown => {
+                    if !ed.active() || !ed.has_focus() {
+                        return false;
+                    }
                     // KeyDown fires BEFORE the character is inserted into the buffer.
                     // Handle navigation and selection keys here to consume them
                     // before they affect the editor.
@@ -297,8 +300,7 @@ impl SqlEditorWidget {
                             }
                             Key::Enter | Key::KPEnter | Key::Tab => {
                                 // Insert selected suggestion, consume event
-                                let selected =
-                                    intellisense_popup_for_handle.borrow().get_selected();
+                                let selected = intellisense_popup_for_handle.borrow().get_selected();
                                 if let Some(selected) = selected {
                                     let cursor_pos = ed.insert_position() as usize;
                                     let text = buffer_for_handle.text();
@@ -333,6 +335,43 @@ impl SqlEditorWidget {
                             _ => {
                                 // Let other keys pass through to editor
                             }
+                        }
+                    }
+
+                    // Handle basic editing shortcuts
+                    let state = fltk::app::event_state();
+                    let ctrl_or_cmd = state.contains(fltk::enums::Shortcut::Ctrl) 
+                        || state.contains(fltk::enums::Shortcut::Command);
+                    
+                    if ctrl_or_cmd {
+                        match key {
+                            k if k == Key::from_char('c') || k == Key::from_char('C') => {
+                                ed.copy();
+                                return true;
+                            }
+                            k if k == Key::from_char('x') || k == Key::from_char('X') => {
+                                ed.cut();
+                                return true;
+                            }
+                            k if k == Key::from_char('v') || k == Key::from_char('V') => {
+                                ed.paste();
+                                return true;
+                            }
+                            k if k == Key::from_char('a') || k == Key::from_char('A') => {
+                                buffer_for_handle.select(0, buffer_for_handle.length());
+                                return true;
+                            }
+                            k if k == Key::from_char(' ') => {
+                                // Ctrl+Space - Trigger intellisense
+                                Self::trigger_intellisense(
+                                    ed,
+                                    &buffer_for_handle,
+                                    &intellisense_data_for_handle,
+                                    &intellisense_popup_for_handle,
+                                );
+                                return true;
+                            }
+                            _ => {}
                         }
                     }
 
@@ -371,6 +410,9 @@ impl SqlEditorWidget {
                     false
                 }
                 Event::KeyUp => {
+                    if !ed.active() || !ed.has_focus() {
+                        return false;
+                    }
                     // KeyUp fires AFTER the character is inserted into the buffer.
                     // Update syntax highlighting and filter/show intellisense here.
                     let text = buffer_for_handle.text();
@@ -453,7 +495,15 @@ impl SqlEditorWidget {
                     false
                 }
                 Event::Shortcut => {
-                    // Prevent shortcut from being processed twice
+                    let key = fltk::app::event_key();
+                    let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
+                    
+                    // If intellisense is visible, consume Enter/Tab to prevent them from reaching other handlers
+                    if popup_visible && matches!(key, Key::Enter | Key::KPEnter | Key::Tab) {
+                        return true;
+                    }
+                    
+                    // Otherwise default behavior
                     ed.has_focus()
                 }
                 Event::Paste => {
@@ -491,11 +541,8 @@ impl SqlEditorWidget {
             return;
         }
 
-        // Get cursor position in editor's local coordinates
+        // Get cursor position in editor's local coordinates (already window-relative in FLTK)
         let (cursor_x, cursor_y) = editor.position_to_xy(editor.insert_position());
-
-        // Get editor's position within the window
-        let (editor_x, editor_y) = Self::widget_origin_in_window(editor);
 
         // Get window's screen coordinates
         let (win_x, win_y) = editor
@@ -507,12 +554,14 @@ impl SqlEditorWidget {
         let popup_height = (suggestions.len().min(10) * 20 + 10) as i32;
 
         // Calculate absolute screen position
-        let mut popup_x = win_x + editor_x + cursor_x;
-        let mut popup_y = win_y + editor_y + cursor_y + 20;
+        let mut popup_x = win_x + cursor_x;
+        let mut popup_y = win_y + cursor_y + 20;
 
         if let Some(win) = editor.window() {
-            let max_x = (win_x + win.w() - popup_width).max(win_x);
-            let max_y = (win_y + win.h() - popup_height).max(win_y);
+            let win_w = win.w();
+            let win_h = win.h();
+            let max_x = (win_x + win_w - popup_width).max(win_x);
+            let max_y = (win_y + win_h - popup_height).max(win_y);
             popup_x = popup_x.clamp(win_x, max_x);
             popup_y = popup_y.clamp(win_y, max_y);
         }
@@ -524,13 +573,7 @@ impl SqlEditorWidget {
         let _ = editor.take_focus();
     }
 
-    fn widget_origin_in_window<W: WidgetExt>(widget: &W) -> (i32, i32) {
-        // In FLTK, widget.x() and widget.y() are already relative to the parent window
-        // if the widget is a child of the window. If nested, we might need a more
-        // complex calculation, but for our layout, this is usually sufficient.
-        // Let's ensure we get the absolute root window position for the popup.
-        (widget.x(), widget.y())
-    }
+
 
     /// Show quick describe dialog for a table (F4 functionality)
     fn show_quick_describe(conn: &oracle::Connection, object_name: &str) {

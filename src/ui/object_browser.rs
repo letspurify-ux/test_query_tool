@@ -54,7 +54,7 @@ pub struct ObjectBrowserWidget {
     sql_callback: SqlExecuteCallback,
     filter_input: Input,
     object_cache: Rc<RefCell<ObjectCache>>,
-    refresh_sender: app::Sender<ObjectCache>,
+    refresh_sender: std::sync::mpsc::Sender<ObjectCache>,
 }
 
 impl ObjectBrowserWidget {
@@ -116,7 +116,7 @@ impl ObjectBrowserWidget {
         let sql_callback: SqlExecuteCallback = Rc::new(RefCell::new(None));
         let object_cache = Rc::new(RefCell::new(ObjectCache::default()));
 
-        let (refresh_sender, refresh_receiver) = app::channel::<ObjectCache>();
+        let (refresh_sender, refresh_receiver) = std::sync::mpsc::channel::<ObjectCache>();
 
         let mut widget = Self {
             flex,
@@ -149,13 +149,13 @@ impl ObjectBrowserWidget {
         });
     }
 
-    fn setup_refresh_handler(&mut self, refresh_receiver: app::Receiver<ObjectCache>) {
+    fn setup_refresh_handler(&mut self, refresh_receiver: std::sync::mpsc::Receiver<ObjectCache>) {
         let mut tree = self.tree.clone();
         let object_cache = self.object_cache.clone();
         let filter_input = self.filter_input.clone();
 
         app::add_idle3(move |_| {
-            while let Some(cache) = refresh_receiver.recv() {
+            while let Ok(cache) = refresh_receiver.try_recv() {
                 *object_cache.borrow_mut() = cache.clone();
                 let filter_text = filter_input.value().to_lowercase();
                 ObjectBrowserWidget::populate_tree(&mut tree, &cache, &filter_text);
@@ -169,6 +169,9 @@ impl ObjectBrowserWidget {
         let sql_callback = self.sql_callback.clone();
 
         self.tree.handle(move |t, ev| {
+            if !t.active() {
+                return false;
+            }
             match ev {
                 Event::Push => {
                     let mouse_button = fltk::app::event_mouse_button();
@@ -534,16 +537,6 @@ impl ObjectBrowserWidget {
         self.filter_input.set_value("");
         *self.object_cache.borrow_mut() = ObjectCache::default();
 
-        let conn_guard = lock_connection(&self.connection);
-
-        if !conn_guard.is_connected() {
-            // Clear cache
-            *self.object_cache.borrow_mut() = ObjectCache::default();
-            return;
-        }
-
-        drop(conn_guard);
-
         let sender = self.refresh_sender.clone();
         let connection = self.connection.clone();
 
@@ -592,6 +585,7 @@ impl ObjectBrowserWidget {
             }
 
             let _ = sender.send(cache);
+            app::awake();
         });
     }
 

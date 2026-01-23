@@ -18,6 +18,10 @@ pub struct QueryHistoryDialog;
 impl QueryHistoryDialog {
     /// Show the query history dialog and return selected SQL if any
     pub fn show() -> Option<String> {
+        Self::show_with_registry(Rc::new(RefCell::new(Vec::new())))
+    }
+
+    pub fn show_with_registry(popups: Rc<RefCell<Vec<Window>>>) -> Option<String> {
         enum DialogMessage {
             UpdatePreview(usize),
             UseSelected,
@@ -132,11 +136,12 @@ impl QueryHistoryDialog {
         main_flex.end();
         dialog.end();
 
+        popups.borrow_mut().push(dialog.clone());
         // State for selected query
         let selected_sql: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let queries: Rc<RefCell<Vec<QueryHistoryEntry>>> = Rc::new(RefCell::new(history.queries));
 
-        let (sender, receiver) = fltk::app::channel::<DialogMessage>();
+        let (sender, receiver) = std::sync::mpsc::channel::<DialogMessage>();
 
         // Browser selection callback - update preview
         let sender_for_preview = sender.clone();
@@ -171,7 +176,7 @@ impl QueryHistoryDialog {
         let mut browser = browser.clone();
         while dialog.shown() {
             fltk::app::wait();
-            while let Some(message) = receiver.recv() {
+            while let Ok(message) = receiver.try_recv() {
                 match message {
                     DialogMessage::UpdatePreview(index) => {
                         let queries = queries.borrow();

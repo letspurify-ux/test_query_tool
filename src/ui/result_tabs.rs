@@ -124,6 +124,14 @@ impl ResultTabsWidget {
         }
     }
 
+    pub fn finish_all_streaming(&mut self) {
+        let tables = self.data.borrow();
+        for tab in tables.iter() {
+            let mut table = tab.table.clone();
+            table.finish_streaming();
+        }
+    }
+
     pub fn display_result(&mut self, index: usize, result: &crate::db::QueryResult) {
         if let Some(tab) = self.data.borrow().get(index) {
             let mut table = tab.table.clone();
@@ -154,6 +162,26 @@ impl ResultTabsWidget {
         index
             .and_then(|idx| self.data.borrow().get(idx).cloned())
             .map(|tab| tab.table)
+    }
+
+    pub fn copy(&self) -> usize {
+        if let Some(table) = self.current_table() {
+            table.copy()
+        } else {
+            0
+        }
+    }
+
+    pub fn copy_with_headers(&self) {
+        if let Some(table) = self.current_table() {
+            table.copy_with_headers();
+        }
+    }
+
+    pub fn select_all(&self) {
+        if let Some(mut table) = self.current_table() {
+            table.select_all();
+        }
     }
 }
 

@@ -16,15 +16,23 @@ pub struct FindReplaceDialog;
 impl FindReplaceDialog {
     /// Show find dialog
     pub fn show_find(editor: &mut TextEditor, buffer: &mut TextBuffer) {
-        Self::show_dialog(editor, buffer, false);
+        Self::show_dialog(editor, buffer, false, Rc::new(RefCell::new(Vec::new())));
+    }
+
+    pub fn show_find_with_registry(editor: &mut TextEditor, buffer: &mut TextBuffer, popups: Rc<RefCell<Vec<Window>>>) {
+        Self::show_dialog(editor, buffer, false, popups);
     }
 
     /// Show find and replace dialog
     pub fn show_replace(editor: &mut TextEditor, buffer: &mut TextBuffer) {
-        Self::show_dialog(editor, buffer, true);
+        Self::show_dialog(editor, buffer, true, Rc::new(RefCell::new(Vec::new())));
     }
 
-    fn show_dialog(editor: &mut TextEditor, buffer: &mut TextBuffer, show_replace: bool) {
+    pub fn show_replace_with_registry(editor: &mut TextEditor, buffer: &mut TextBuffer, popups: Rc<RefCell<Vec<Window>>>) {
+        Self::show_dialog(editor, buffer, true, popups);
+    }
+
+    fn show_dialog(editor: &mut TextEditor, buffer: &mut TextBuffer, show_replace: bool, popups: Rc<RefCell<Vec<Window>>>) {
         enum DialogMessage {
             FindNext {
                 search_text: String,
@@ -155,10 +163,11 @@ impl FindReplaceDialog {
         main_flex.end();
         dialog.end();
 
+        popups.borrow_mut().push(dialog.clone());
         // State for search
         let search_pos = Rc::new(RefCell::new(0i32));
 
-        let (sender, receiver) = fltk::app::channel::<DialogMessage>();
+        let (sender, receiver) = std::sync::mpsc::channel::<DialogMessage>();
 
         // Find Next callback
         let sender_for_find = sender.clone();
@@ -246,7 +255,7 @@ impl FindReplaceDialog {
         let mut editor = editor.clone();
         while dialog.shown() {
             fltk::app::wait();
-            while let Some(message) = receiver.recv() {
+            while let Ok(message) = receiver.try_recv() {
                 match message {
                     DialogMessage::FindNext {
                         search_text,

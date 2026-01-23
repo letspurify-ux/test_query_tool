@@ -257,6 +257,7 @@ impl IntellisensePopup {
 
         self.window.set_pos(x, y);
         self.window.show();
+        self.window.set_on_top();
         *self.visible.borrow_mut() = true;
     }
 
