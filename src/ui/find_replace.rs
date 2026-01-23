@@ -9,6 +9,7 @@ use fltk::{
 };
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::mpsc;
 
 /// Find/Replace dialog
 pub struct FindReplaceDialog;
@@ -50,14 +51,10 @@ impl FindReplaceDialog {
         };
         let height = if show_replace { 180 } else { 130 };
 
-        let mut dialog = Window::default()
-            .with_size(450, height)
-            .with_label(title);
+        let mut dialog = Window::default().with_size(450, height).with_label(title);
         dialog.set_color(Color::from_rgb(45, 45, 48));
 
-        let mut main_flex = Flex::default()
-            .with_pos(10, 10)
-            .with_size(430, height - 20);
+        let mut main_flex = Flex::default().with_pos(10, 10).with_size(430, height - 20);
         main_flex.set_type(fltk::group::FlexType::Column);
         main_flex.set_spacing(8);
 
@@ -107,17 +104,13 @@ impl FindReplaceDialog {
 
         let _spacer = fltk::frame::Frame::default();
 
-        let mut find_next_btn = Button::default()
-            .with_size(90, 30)
-            .with_label("Find Next");
+        let mut find_next_btn = Button::default().with_size(90, 30).with_label("Find Next");
         find_next_btn.set_color(Color::from_rgb(0, 122, 204));
         find_next_btn.set_label_color(Color::White);
         find_next_btn.set_frame(FrameType::FlatBox);
 
         let replace_btn = if show_replace {
-            let mut btn = Button::default()
-                .with_size(90, 30)
-                .with_label("Replace");
+            let mut btn = Button::default().with_size(90, 30).with_label("Replace");
             btn.set_color(Color::from_rgb(104, 33, 122));
             btn.set_label_color(Color::White);
             btn.set_frame(FrameType::FlatBox);
@@ -140,9 +133,7 @@ impl FindReplaceDialog {
             None
         };
 
-        let mut close_btn = Button::default()
-            .with_size(70, 30)
-            .with_label("Close");
+        let mut close_btn = Button::default().with_size(70, 30).with_label("Close");
         close_btn.set_color(Color::from_rgb(100, 100, 100));
         close_btn.set_label_color(Color::White);
         close_btn.set_frame(FrameType::FlatBox);
@@ -158,7 +149,7 @@ impl FindReplaceDialog {
         // State for search
         let search_pos = Rc::new(RefCell::new(0i32));
 
-        let (sender, receiver) = fltk::app::channel::<DialogMessage>();
+        let (sender, receiver) = mpsc::channel::<DialogMessage>();
 
         // Find Next callback
         let sender_for_find = sender.clone();
@@ -244,9 +235,8 @@ impl FindReplaceDialog {
 
         let mut buffer = buffer.clone();
         let mut editor = editor.clone();
-        while dialog.shown() {
-            fltk::app::wait();
-            while let Some(message) = receiver.recv() {
+        while dialog.shown() && fltk::app::wait() {
+            while let Ok(message) = receiver.try_recv() {
                 match message {
                     DialogMessage::FindNext {
                         search_text,
@@ -337,10 +327,7 @@ impl FindReplaceDialog {
                         };
 
                         buffer.set_text(&new_text);
-                        fltk::dialog::message_default(&format!(
-                            "Replaced {} occurrences",
-                            count
-                        ));
+                        fltk::dialog::message_default(&format!("Replaced {} occurrences", count));
                     }
                     DialogMessage::Close => {
                         dialog.hide();

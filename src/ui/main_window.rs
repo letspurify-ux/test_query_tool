@@ -145,6 +145,12 @@ impl MainWindow {
     pub fn setup_callbacks(&mut self) {
         let mut status_bar = self.status_bar.clone();
         let last_result = self.last_result.clone();
+        let sql_editor_for_close = self.sql_editor.clone();
+        let mut window_for_close = self.window.clone();
+        window_for_close.set_callback(move |_| {
+            sql_editor_for_close.hide_popups();
+            app::quit();
+        });
 
         // Setup SQL editor execute callback
         self.sql_editor.set_execute_callback(move |query_result| {

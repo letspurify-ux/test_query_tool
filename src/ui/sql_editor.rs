@@ -270,6 +270,9 @@ impl SqlEditorWidget {
         let suppress_enter_for_handle = suppress_enter.clone();
 
         editor.handle(move |ed, ev| {
+            if !ed.active() {
+                return false;
+            }
             match ev {
                 Event::KeyDown => {
                     // KeyDown fires BEFORE the character is inserted into the buffer.
@@ -590,7 +593,7 @@ impl SqlEditorWidget {
                 close_btn.set_color(Color::from_rgb(0, 122, 204));
                 close_btn.set_label_color(Color::White);
 
-                let (sender, receiver) = fltk::app::channel::<()>();
+                let (sender, receiver) = mpsc::channel::<()>();
                 close_btn.set_callback(move |_| {
                     let _ = sender.send(());
                 });
@@ -598,9 +601,8 @@ impl SqlEditorWidget {
                 dialog.end();
                 dialog.show();
 
-                while dialog.shown() {
-                    fltk::app::wait();
-                    if receiver.recv().is_some() {
+                while dialog.shown() && fltk::app::wait() {
+                    if receiver.try_recv().is_ok() {
                         dialog.hide();
                     }
                 }
@@ -715,7 +717,7 @@ impl SqlEditorWidget {
         close_btn.set_color(Color::from_rgb(0, 122, 204));
         close_btn.set_label_color(Color::White);
 
-        let (sender, receiver) = fltk::app::channel::<()>();
+        let (sender, receiver) = mpsc::channel::<()>();
         close_btn.set_callback(move |_| {
             let _ = sender.send(());
         });
@@ -723,9 +725,8 @@ impl SqlEditorWidget {
         dialog.end();
         dialog.show();
 
-        while dialog.shown() {
-            fltk::app::wait();
-            if receiver.recv().is_some() {
+        while dialog.shown() && fltk::app::wait() {
+            if receiver.try_recv().is_ok() {
                 dialog.hide();
             }
         }
@@ -861,6 +862,10 @@ impl SqlEditorWidget {
     pub fn focus(&mut self) {
         self.group.show();
         let _ = self.editor.take_focus();
+    }
+
+    pub fn hide_popups(&self) {
+        self.intellisense_popup.borrow_mut().hide();
     }
 
     pub fn execute_current(&self) {
