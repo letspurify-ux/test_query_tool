@@ -237,6 +237,15 @@ impl SqlEditorWidget {
         let style_buffer = self.style_buffer.clone();
         let connection_for_describe = self.connection.clone();
         let suppress_enter = Rc::new(RefCell::new(false));
+        let mut timeout_input = self.timeout_input.clone();
+
+        let intellisense_popup_for_timeout = intellisense_popup.clone();
+        timeout_input.handle(move |_, ev| {
+            if matches!(ev, Event::Focus | Event::Push | Event::KeyDown | Event::KeyUp) {
+                intellisense_popup_for_timeout.borrow_mut().hide();
+            }
+            false
+        });
 
         // Setup callback for inserting selected text
         let mut buffer_for_insert = buffer.clone();
@@ -270,7 +279,7 @@ impl SqlEditorWidget {
         let suppress_enter_for_handle = suppress_enter.clone();
 
         editor.handle(move |ed, ev| {
-            if !ed.active() {
+            if !ed.active() || !Self::editor_has_focus(ed) {
                 return false;
             }
             match ev {
@@ -531,6 +540,12 @@ impl SqlEditorWidget {
             .show_suggestions(suggestions, popup_x, popup_y);
         let mut editor = editor.clone();
         let _ = editor.take_focus();
+    }
+
+    fn editor_has_focus(editor: &TextEditor) -> bool {
+        app::focus()
+            .map(|widget| widget.as_widget_ptr() == editor.as_widget_ptr())
+            .unwrap_or(false)
     }
 
     fn widget_origin_in_window<W: WidgetExt>(widget: &W) -> (i32, i32) {
