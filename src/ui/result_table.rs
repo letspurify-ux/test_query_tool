@@ -118,46 +118,16 @@ impl ResultTableWidget {
                     }
                     false
                 }
-                Event::KeyDown => {
-                    let key = app::event_key();
-                    let ctrl = app::event_state().contains(Shortcut::Ctrl)
-                        || app::event_state().contains(Shortcut::Command);
-
-                    if ctrl {
-                        match key {
-                            k if k == Key::from_char('a') || k == Key::from_char('A') => {
-                                // Ctrl+A - Select all
-                                let rows = table_for_handle.rows();
-                                let cols = table_for_handle.cols();
-                                if rows > 0 && cols > 0 {
-                                    table_for_handle.set_selection(0, 0, rows - 1, cols - 1);
-                                    table_for_handle.redraw();
-                                }
-                                return true;
-                            }
-                            k if k == Key::from_char('c') || k == Key::from_char('C') => {
-                                // Ctrl+C - Copy selected cells
-                                Self::copy_selected_to_clipboard(
-                                    &table_for_handle,
-                                    &headers_for_handle,
-                                    &full_data_for_handle,
-                                );
-                                return true;
-                            }
-                            k if k == Key::from_char('h') || k == Key::from_char('H') => {
-                                // Ctrl+H - Copy with headers
-                                Self::copy_selected_with_headers(
-                                    &table_for_handle,
-                                    &headers_for_handle,
-                                    &full_data_for_handle,
-                                );
-                                return true;
-                            }
-                            _ => {}
-                        }
-                    }
-                    false
-                }
+                Event::KeyDown => Self::handle_shortcuts(
+                    &table_for_handle,
+                    &headers_for_handle,
+                    &full_data_for_handle,
+                ),
+                Event::Shortcut => Self::handle_shortcuts(
+                    &table_for_handle,
+                    &headers_for_handle,
+                    &full_data_for_handle,
+                ),
                 _ => false,
             }
         });
@@ -195,6 +165,44 @@ impl ResultTableWidget {
         self.table.set_col_header(true);
         self.table.set_col_header_height(28);
         self.table.set_row_height_all(26);
+    }
+
+    fn handle_shortcuts(
+        table: &SmartTable,
+        headers: &Rc<RefCell<Vec<String>>>,
+        full_data: &Rc<RefCell<Vec<Vec<String>>>>,
+    ) -> bool {
+        let key = app::event_key();
+        let ctrl = app::event_state().contains(Shortcut::Ctrl)
+            || app::event_state().contains(Shortcut::Command);
+
+        if !ctrl {
+            return false;
+        }
+
+        match key {
+            k if k == Key::from_char('a') || k == Key::from_char('A') => {
+                // Ctrl+A - Select all
+                let rows = table.rows();
+                let cols = table.cols();
+                if rows > 0 && cols > 0 {
+                    table.set_selection(0, 0, rows - 1, cols - 1);
+                    table.redraw();
+                }
+                true
+            }
+            k if k == Key::from_char('c') || k == Key::from_char('C') => {
+                // Ctrl+C - Copy selected cells
+                Self::copy_selected_to_clipboard(table, headers, full_data);
+                true
+            }
+            k if k == Key::from_char('h') || k == Key::from_char('H') => {
+                // Ctrl+H - Copy with headers
+                Self::copy_selected_with_headers(table, headers, full_data);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Get cell at mouse position (returns None if outside cells)
