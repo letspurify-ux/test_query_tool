@@ -119,12 +119,12 @@ impl ResultTableWidget {
                     false
                 }
                 Event::KeyDown => Self::handle_shortcuts(
-                    &table_for_handle,
+                    &mut table_for_handle,
                     &headers_for_handle,
                     &full_data_for_handle,
                 ),
                 Event::Shortcut => Self::handle_shortcuts(
-                    &table_for_handle,
+                    &mut table_for_handle,
                     &headers_for_handle,
                     &full_data_for_handle,
                 ),
@@ -168,7 +168,7 @@ impl ResultTableWidget {
     }
 
     fn handle_shortcuts(
-        table: &SmartTable,
+        table: &mut SmartTable,
         headers: &Rc<RefCell<Vec<String>>>,
         full_data: &Rc<RefCell<Vec<Vec<String>>>>,
     ) -> bool {
