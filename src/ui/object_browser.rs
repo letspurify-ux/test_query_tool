@@ -508,7 +508,7 @@ impl ObjectBrowserWidget {
         close_btn.set_color(Color::from_rgb(0, 122, 204));
         close_btn.set_label_color(Color::White);
 
-        let (sender, receiver) = fltk::app::channel::<()>();
+        let (sender, receiver) = std::sync::mpsc::channel::<()>();
         close_btn.set_callback(move |_| {
             let _ = sender.send(());
         });
@@ -518,7 +518,7 @@ impl ObjectBrowserWidget {
 
         while dialog.shown() {
             fltk::app::wait();
-            if receiver.recv().is_some() {
+            if receiver.try_recv().is_ok() {
                 dialog.hide();
             }
         }

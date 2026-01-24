@@ -14,20 +14,11 @@ use std::rc::Rc;
 pub struct FindReplaceDialog;
 
 impl FindReplaceDialog {
-    /// Show find dialog
-    pub fn show_find(editor: &mut TextEditor, buffer: &mut TextBuffer) {
-        Self::show_dialog(editor, buffer, false, Rc::new(RefCell::new(Vec::new())));
-    }
-
     pub fn show_find_with_registry(editor: &mut TextEditor, buffer: &mut TextBuffer, popups: Rc<RefCell<Vec<Window>>>) {
         Self::show_dialog(editor, buffer, false, popups);
     }
 
     /// Show find and replace dialog
-    pub fn show_replace(editor: &mut TextEditor, buffer: &mut TextBuffer) {
-        Self::show_dialog(editor, buffer, true, Rc::new(RefCell::new(Vec::new())));
-    }
-
     pub fn show_replace_with_registry(editor: &mut TextEditor, buffer: &mut TextBuffer, popups: Rc<RefCell<Vec<Window>>>) {
         Self::show_dialog(editor, buffer, true, popups);
     }

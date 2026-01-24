@@ -633,7 +633,7 @@ impl SqlEditorWidget {
                 close_btn.set_color(Color::from_rgb(0, 122, 204));
                 close_btn.set_label_color(Color::White);
 
-                let (sender, receiver) = fltk::app::channel::<()>();
+                let (sender, receiver) = mpsc::channel::<()>();
                 close_btn.set_callback(move |_| {
                     let _ = sender.send(());
                 });
@@ -643,7 +643,7 @@ impl SqlEditorWidget {
 
                 while dialog.shown() {
                     fltk::app::wait();
-                    if receiver.recv().is_some() {
+                    if receiver.try_recv().is_ok() {
                         dialog.hide();
                     }
                 }
@@ -740,6 +740,7 @@ impl SqlEditorWidget {
             .with_label("Explain Plan");
         dialog.set_color(Color::from_rgb(45, 45, 48));
         dialog.make_modal(true);
+        dialog.begin();
 
         let mut display = TextDisplay::default().with_pos(10, 10).with_size(780, 440);
         display.set_color(Color::from_rgb(30, 30, 30));
@@ -758,17 +759,22 @@ impl SqlEditorWidget {
         close_btn.set_color(Color::from_rgb(0, 122, 204));
         close_btn.set_label_color(Color::White);
 
-        let (sender, receiver) = fltk::app::channel::<()>();
+        let (sender, receiver) = mpsc::channel::<()>();
         close_btn.set_callback(move |_| {
             let _ = sender.send(());
+            app::awake();
         });
 
         dialog.end();
         dialog.show();
+        let _ = dialog.take_focus();
+        let _ = close_btn.take_focus();
 
         while dialog.shown() {
-            fltk::app::wait();
-            if receiver.recv().is_some() {
+            if app::wait_for(0.05).is_err() {
+                app::wait();
+            }
+            if receiver.try_recv().is_ok() {
                 dialog.hide();
             }
         }

@@ -19,7 +19,7 @@ use crate::db::{
     create_shared_connection, lock_connection, ObjectBrowser, QueryResult, SharedConnection,
 };
 use crate::ui::{
-    ConnectionDialog, FindReplaceDialog, HighlightData, IntellisenseData,
+    ConnectionDialog, FeatureCatalogDialog, FindReplaceDialog, HighlightData, IntellisenseData,
     MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, QueryProgress, ResultTabsWidget,
     SqlAction, SqlEditorWidget,
 };
@@ -40,7 +40,6 @@ pub struct AppState {
     pub status_bar: Frame,
     pub current_file: Rc<RefCell<Option<PathBuf>>>,
     pub last_result: Rc<RefCell<Option<QueryResult>>>,
-    pub query_history: Rc<RefCell<QueryHistory>>,
     pub popups: Rc<RefCell<Vec<Window>>>,
     pub window: Window,
 }
@@ -117,7 +116,6 @@ impl MainWindow {
             status_bar,
             current_file: Rc::new(RefCell::new(None)),
             last_result: Rc::new(RefCell::new(None)),
-            query_history: Rc::new(RefCell::new(QueryHistory::load())),
             popups: Rc::new(RefCell::new(Vec::new())),
             window,
         }));
@@ -320,6 +318,23 @@ impl MainWindow {
                                 s.sql_editor.get_editor().copy();
                             }
                         }
+                        "Edit/Copy with Headers" => {
+                            let mut s = state_for_menu.borrow_mut();
+                            let result_tabs_widget = s.result_tabs.get_widget();
+                            let focus_in_results = if let Some(focus) = app::focus() {
+                                focus.as_widget_ptr() == result_tabs_widget.as_widget_ptr() ||
+                                focus.inside(&result_tabs_widget)
+                            } else {
+                                false
+                            };
+
+                            if focus_in_results {
+                                s.result_tabs.copy_with_headers();
+                                s.status_bar.set_label("Copied selection with headers");
+                            } else {
+                                s.sql_editor.get_editor().copy();
+                            }
+                        }
                         "Edit/Paste" => state_for_menu.borrow_mut().sql_editor.get_editor().paste(),
                         "Edit/Select All" => {
                             let mut s = state_for_menu.borrow_mut();
@@ -339,9 +354,44 @@ impl MainWindow {
                             }
                         }
                         "Query/Execute" => state_for_menu.borrow_mut().sql_editor.execute_current(),
+                        "Query/Execute Selected" => state_for_menu.borrow_mut().sql_editor.execute_selected(),
                         "Query/Commit" => state_for_menu.borrow_mut().sql_editor.commit(),
                         "Query/Rollback" => state_for_menu.borrow_mut().sql_editor.rollback(),
                         "Tools/Refresh Objects" => state_for_menu.borrow_mut().object_browser.refresh(),
+                        "Tools/Export Results..." => {
+                            let has_data = state_for_menu.borrow().result_tabs.has_data();
+                            if !has_data {
+                                fltk::dialog::alert_default("No results to export");
+                                return;
+                            }
+
+                            let mut dialog = FileDialog::new(FileDialogType::BrowseSaveFile);
+                            dialog.set_filter("CSV Files\t*.csv");
+                            dialog.show();
+                            let filename = dialog.filename();
+                            if filename.as_os_str().is_empty() {
+                                return;
+                            }
+
+                            let csv = state_for_menu.borrow().result_tabs.export_to_csv();
+                            if let Err(err) = fs::write(&filename, csv) {
+                                fltk::dialog::alert_default(&format!(
+                                    "Failed to export CSV: {}",
+                                    err
+                                ));
+                            } else {
+                                let row_count = state_for_menu.borrow().result_tabs.row_count();
+                                let mut s = state_for_menu.borrow_mut();
+                                let file_label = filename
+                                    .file_name()
+                                    .unwrap_or_default()
+                                    .to_string_lossy();
+                                s.status_bar.set_label(&format!(
+                                    "Exported {} rows to {}",
+                                    row_count, file_label
+                                ));
+                            }
+                        }
                         "Edit/Find..." => {
                             let (mut editor, mut buffer, popups) = {
                                 let s = state_for_menu.borrow_mut();
@@ -364,7 +414,27 @@ impl MainWindow {
                             if let Some(sql) = QueryHistoryDialog::show_with_registry(popups) {
                                 buffer.set_text(&sql);
                             }
-                        },
+                        }
+                        "Tools/Feature Catalog..." => {
+                            FeatureCatalogDialog::show();
+                        }
+                        "Tools/Auto-Commit" => {
+                            let enabled = m
+                                .find_item("&Tools/&Auto-Commit\t")
+                                .map(|item| item.value())
+                                .unwrap_or(false);
+                            let status = if enabled {
+                                "Auto-commit enabled"
+                            } else {
+                                "Auto-commit disabled"
+                            };
+                            {
+                                let s = state_for_menu.borrow_mut();
+                                let mut connection = lock_connection(&s.connection);
+                                connection.set_auto_commit(enabled);
+                            }
+                            state_for_menu.borrow_mut().status_bar.set_label(status);
+                        }
                         _ => {}
                     }
                 }

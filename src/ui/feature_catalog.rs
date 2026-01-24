@@ -8,6 +8,7 @@ use fltk::{
     text::{TextBuffer, TextDisplay},
     window::Window,
 };
+use std::sync::mpsc;
 
 use crate::utils::feature_catalog::{build_catalog_text_filtered, load_feature_catalog};
 
@@ -103,7 +104,7 @@ impl FeatureCatalogDialog {
 
         dialog.end();
 
-        let (sender, receiver) = fltk::app::channel::<DialogMessage>();
+        let (sender, receiver) = mpsc::channel::<DialogMessage>();
 
         let update_for_filter = sender.clone();
         filter_input.set_callback(move |_| {
@@ -143,7 +144,7 @@ impl FeatureCatalogDialog {
         let mut display_buffer = display_buffer.clone();
         while dialog.shown() {
             fltk::app::wait();
-            while let Some(message) = receiver.recv() {
+            while let Ok(message) = receiver.try_recv() {
                 match message {
                     DialogMessage::UpdateDisplay => {
                         let text = build_catalog_text_filtered(

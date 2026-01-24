@@ -93,6 +93,12 @@ impl MenuBarBuilder {
             forward_menu_callback,
         );
         menu.add(
+            "&Edit/Copy with &Headers\t",
+            Shortcut::None,
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
             "&Edit/&Paste\t",
             Shortcut::None,
             MenuFlag::Normal,

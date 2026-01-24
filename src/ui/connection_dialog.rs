@@ -10,6 +10,7 @@ use fltk::{
 };
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::mpsc;
 
 use crate::db::{ConnectionInfo, DatabaseConnection};
 use crate::utils::AppConfig;
@@ -17,20 +18,15 @@ use crate::utils::AppConfig;
 pub struct ConnectionDialog;
 
 impl ConnectionDialog {
-    pub fn show() -> Option<ConnectionInfo> {
-        Self::show_with_registry(Rc::new(RefCell::new(Vec::new())))
-    }
-
     pub fn show_with_registry(popups: Rc<RefCell<Vec<Window>>>) -> Option<ConnectionInfo> {
         enum DialogMessage {
-            SelectSaved(String),
             DeleteSelected,
             Test(ConnectionInfo),
             Connect(ConnectionInfo, bool),
             Cancel,
         }
 
-        let (sender, receiver) = app::channel::<DialogMessage>();
+        let (sender, receiver) = mpsc::channel::<DialogMessage>();
 
         let result: Rc<RefCell<Option<ConnectionInfo>>> = Rc::new(RefCell::new(None));
         let config = Rc::new(RefCell::new(AppConfig::load()));
@@ -243,7 +239,8 @@ impl ConnectionDialog {
                             conn.port,
                             &conn.service_name,
                         );
-                        sender_for_click.send(DialogMessage::Connect(info, true));
+                        let _ = sender_for_click.send(DialogMessage::Connect(info, true));
+                        app::awake();
                     }
                 }
             }
@@ -252,7 +249,8 @@ impl ConnectionDialog {
         // Delete button callback
         let sender_for_delete = sender.clone();
         delete_btn.set_callback(move |_| {
-            sender_for_delete.send(DialogMessage::DeleteSelected);
+            let _ = sender_for_delete.send(DialogMessage::DeleteSelected);
+            app::awake();
         });
 
         // Test button callback
@@ -275,7 +273,8 @@ impl ConnectionDialog {
                 &service_input_test.value(),
             );
 
-            sender_for_test.send(DialogMessage::Test(info));
+            let _ = sender_for_test.send(DialogMessage::Test(info));
+            app::awake();
         });
 
         // Connect button callback
@@ -299,29 +298,31 @@ impl ConnectionDialog {
                 &service_input_conn.value(),
             );
 
-            sender_for_connect.send(DialogMessage::Connect(info, save_check_conn.value()));
+            let _ = sender_for_connect.send(DialogMessage::Connect(
+                info,
+                save_check_conn.value(),
+            ));
+            app::awake();
         });
 
         // Cancel button callback
         let sender_for_cancel = sender.clone();
         cancel_btn.set_callback(move |_| {
-            sender_for_cancel.send(DialogMessage::Cancel);
+            let _ = sender_for_cancel.send(DialogMessage::Cancel);
+            app::awake();
         });
 
         dialog.show();
+        let _ = dialog.take_focus();
+        let _ = connect_btn.take_focus();
 
         let mut saved_browser = saved_browser.clone();
-        let mut name_input = name_input.clone();
-        let mut user_input = user_input.clone();
-        let mut pass_input = pass_input.clone();
-        let mut host_input = host_input.clone();
-        let mut port_input = port_input.clone();
-        let mut service_input = service_input.clone();
         while dialog.shown() {
-            app::wait();
-            while let Some(message) = receiver.recv() {
+            if app::wait_for(0.05).is_err() {
+                app::wait();
+            }
+            while let Ok(message) = receiver.try_recv() {
                 match message {
-                    DialogMessage::SelectSaved(_) => {} // Handled directly in callback now
                     DialogMessage::DeleteSelected => {
                         if let Some(selected) = saved_browser.selected_text() {
                             let choice = fltk::dialog::choice2_default(

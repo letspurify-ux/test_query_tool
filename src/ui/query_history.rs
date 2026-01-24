@@ -16,11 +16,6 @@ use crate::utils::config::{QueryHistory, QueryHistoryEntry};
 pub struct QueryHistoryDialog;
 
 impl QueryHistoryDialog {
-    /// Show the query history dialog and return selected SQL if any
-    pub fn show() -> Option<String> {
-        Self::show_with_registry(Rc::new(RefCell::new(Vec::new())))
-    }
-
     pub fn show_with_registry(popups: Rc<RefCell<Vec<Window>>>) -> Option<String> {
         enum DialogMessage {
             UpdatePreview(usize),
