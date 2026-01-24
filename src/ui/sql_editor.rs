@@ -237,26 +237,37 @@ impl SqlEditorWidget {
         let style_buffer = self.style_buffer.clone();
         let connection_for_describe = self.connection.clone();
         let suppress_enter = Rc::new(RefCell::new(false));
+        let completion_range = Rc::new(RefCell::new(None::<(usize, usize)>));
 
         // Setup callback for inserting selected text
         let mut buffer_for_insert = buffer.clone();
         let mut editor_for_insert = editor.clone();
+        let completion_range_for_insert = completion_range.clone();
         {
             let mut popup = intellisense_popup.borrow_mut();
             popup.set_selected_callback(move |selected| {
-                // Get current word position
                 let cursor_pos = editor_for_insert.insert_position() as usize;
                 let text = buffer_for_insert.text();
-                let (word, start, _end) = get_word_at_cursor(&text, cursor_pos);
+                let range = *completion_range_for_insert.borrow();
+                let (start, end) = if let Some((range_start, range_end)) = range {
+                    (range_start, range_end)
+                } else {
+                    let (word, start, _end) = get_word_at_cursor(&text, cursor_pos);
+                    if word.is_empty() {
+                        (cursor_pos, cursor_pos)
+                    } else {
+                        (start, cursor_pos)
+                    }
+                };
 
-                // Replace the word with selected suggestion
-                if !word.is_empty() {
-                    buffer_for_insert.replace(start as i32, cursor_pos as i32, &selected);
+                if start != end {
+                    buffer_for_insert.replace(start as i32, end as i32, &selected);
                     editor_for_insert.set_insert_position((start + selected.len()) as i32);
                 } else {
                     buffer_for_insert.insert(cursor_pos as i32, &selected);
                     editor_for_insert.set_insert_position((cursor_pos + selected.len()) as i32);
                 }
+                *completion_range_for_insert.borrow_mut() = None;
             });
         }
 
@@ -268,24 +279,26 @@ impl SqlEditorWidget {
         let mut style_buffer_for_handle = style_buffer.clone();
         let connection_for_f4 = connection_for_describe.clone();
         let suppress_enter_for_handle = suppress_enter.clone();
+        let completion_range_for_handle = completion_range.clone();
 
         editor.handle(move |ed, ev| {
             match ev {
                 Event::KeyDown => {
-                    if !ed.active() || !ed.has_focus() {
+                    let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
+                    if !ed.active() || (!ed.has_focus() && !popup_visible) {
                         return false;
                     }
                     // KeyDown fires BEFORE the character is inserted into the buffer.
                     // Handle navigation and selection keys here to consume them
                     // before they affect the editor.
                     let key = fltk::app::event_key();
-                    let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
 
                     if popup_visible {
                         match key {
                             Key::Escape => {
                                 // Close popup, consume event
                                 intellisense_popup_for_handle.borrow_mut().hide();
+                                *completion_range_for_handle.borrow_mut() = None;
                                 return true;
                             }
                             Key::Up => {
@@ -304,12 +317,23 @@ impl SqlEditorWidget {
                                 if let Some(selected) = selected {
                                     let cursor_pos = ed.insert_position() as usize;
                                     let text = buffer_for_handle.text();
-                                    let (word, start, _) = get_word_at_cursor(&text, cursor_pos);
+                                    let range = *completion_range_for_handle.borrow();
+                                    let (start, end) = if let Some((range_start, range_end)) = range {
+                                        (range_start, range_end)
+                                    } else {
+                                        let (word, start, _end) =
+                                            get_word_at_cursor(&text, cursor_pos);
+                                        if word.is_empty() {
+                                            (cursor_pos, cursor_pos)
+                                        } else {
+                                            (start, cursor_pos)
+                                        }
+                                    };
 
-                                    if !word.is_empty() {
+                                    if start != end {
                                         buffer_for_handle.replace(
                                             start as i32,
-                                            cursor_pos as i32,
+                                            end as i32,
                                             &selected,
                                         );
                                         ed.set_insert_position((start + selected.len()) as i32);
@@ -319,6 +343,7 @@ impl SqlEditorWidget {
                                             (cursor_pos + selected.len()) as i32,
                                         );
                                     }
+                                    *completion_range_for_handle.borrow_mut() = None;
 
                                     // Update syntax highlighting after insertion
                                     let new_text = buffer_for_handle.text();
@@ -368,6 +393,7 @@ impl SqlEditorWidget {
                                     &buffer_for_handle,
                                     &intellisense_data_for_handle,
                                     &intellisense_popup_for_handle,
+                                    &completion_range_for_handle,
                                 );
                                 return true;
                             }
@@ -403,6 +429,7 @@ impl SqlEditorWidget {
                             &buffer_for_handle,
                             &intellisense_data_for_handle,
                             &intellisense_popup_for_handle,
+                            &completion_range_for_handle,
                         );
                         return true;
                     }
@@ -410,7 +437,8 @@ impl SqlEditorWidget {
                     false
                 }
                 Event::KeyUp => {
-                    if !ed.active() || !ed.has_focus() {
+                    let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
+                    if !ed.active() || (!ed.has_focus() && !popup_visible) {
                         return false;
                     }
                     // KeyUp fires AFTER the character is inserted into the buffer.
@@ -421,7 +449,6 @@ impl SqlEditorWidget {
                         .highlight(&text, &mut style_buffer_for_handle);
 
                     let key = fltk::app::event_key();
-                    let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
 
                     if matches!(key, Key::Enter | Key::KPEnter)
                         && *suppress_enter_for_handle.borrow()
@@ -437,6 +464,7 @@ impl SqlEditorWidget {
                     ) {
                         if popup_visible {
                             intellisense_popup_for_handle.borrow_mut().hide();
+                            *completion_range_for_handle.borrow_mut() = None;
                         }
                         return false;
                     }
@@ -468,27 +496,43 @@ impl SqlEditorWidget {
                                 &buffer_for_handle,
                                 &intellisense_data_for_handle,
                                 &intellisense_popup_for_handle,
+                                &completion_range_for_handle,
                             );
                         } else {
                             intellisense_popup_for_handle.borrow_mut().hide();
+                            *completion_range_for_handle.borrow_mut() = None;
                         }
-                    } else if let Some(ch) = fltk::app::event_text().chars().next() {
-                        if ch.is_alphanumeric() || ch == '_' {
-                            // Alphanumeric typed - show/update popup if word is long enough
-                            if word.len() >= 2 {
-                                Self::trigger_intellisense(
-                                    ed,
-                                    &buffer_for_handle,
-                                    &intellisense_data_for_handle,
-                                    &intellisense_popup_for_handle,
-                                );
+                    } else {
+                        let typed_char = fltk::app::event_text().chars().next().or_else(|| {
+                            let bits = key.bits();
+                            if bits >= 0x20 && bits <= 0x7e {
+                                key.to_char()
                             } else {
-                                intellisense_popup_for_handle.borrow_mut().hide();
+                                None
                             }
-                        } else {
-                            // Non-identifier character (space, punctuation, etc.)
-                            // Close popup - user is done with this word
-                            intellisense_popup_for_handle.borrow_mut().hide();
+                        });
+
+                        if let Some(ch) = typed_char {
+                            if ch.is_alphanumeric() || ch == '_' {
+                                // Alphanumeric typed - show/update popup if word is long enough
+                                if word.len() >= 2 {
+                                    Self::trigger_intellisense(
+                                        ed,
+                                        &buffer_for_handle,
+                                        &intellisense_data_for_handle,
+                                        &intellisense_popup_for_handle,
+                                        &completion_range_for_handle,
+                                    );
+                                } else {
+                                    intellisense_popup_for_handle.borrow_mut().hide();
+                                    *completion_range_for_handle.borrow_mut() = None;
+                                }
+                            } else {
+                                // Non-identifier character (space, punctuation, etc.)
+                                // Close popup - user is done with this word
+                                intellisense_popup_for_handle.borrow_mut().hide();
+                                *completion_range_for_handle.borrow_mut() = None;
+                            }
                         }
                     }
 
@@ -524,12 +568,14 @@ impl SqlEditorWidget {
         buffer: &TextBuffer,
         intellisense_data: &Rc<RefCell<IntellisenseData>>,
         intellisense_popup: &Rc<RefCell<IntellisensePopup>>,
+        completion_range: &Rc<RefCell<Option<(usize, usize)>>>,
     ) {
         let cursor_pos = editor.insert_position() as usize;
         let text = buffer.text();
-        let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
+        let (word, start, _) = get_word_at_cursor(&text, cursor_pos);
 
         if word.is_empty() {
+            *completion_range.borrow_mut() = None;
             return;
         }
 
@@ -538,6 +584,7 @@ impl SqlEditorWidget {
 
         if suggestions.is_empty() {
             intellisense_popup.borrow_mut().hide();
+            *completion_range.borrow_mut() = None;
             return;
         }
 
@@ -569,6 +616,7 @@ impl SqlEditorWidget {
         intellisense_popup
             .borrow_mut()
             .show_suggestions(suggestions, popup_x, popup_y);
+        *completion_range.borrow_mut() = Some((start, cursor_pos));
         let mut editor = editor.clone();
         let _ = editor.take_focus();
     }
@@ -610,11 +658,15 @@ impl SqlEditorWidget {
                 }
 
                 // Show in a dialog
+                let current_group = fltk::group::Group::try_current();
+                fltk::group::Group::set_current(None::<&fltk::group::Group>);
+                
                 let mut dialog = Window::default()
                     .with_size(600, 400)
                     .with_label(&format!("Describe: {}", object_name.to_uppercase()));
                 dialog.set_color(Color::from_rgb(45, 45, 48));
                 dialog.make_modal(true);
+                dialog.begin();
 
                 let mut display = TextDisplay::default().with_pos(10, 10).with_size(580, 340);
                 display.set_color(Color::from_rgb(30, 30, 30));
@@ -640,6 +692,7 @@ impl SqlEditorWidget {
 
                 dialog.end();
                 dialog.show();
+                fltk::group::Group::set_current(current_group.as_ref());
 
                 while dialog.shown() {
                     fltk::app::wait();
@@ -735,6 +788,9 @@ impl SqlEditorWidget {
     fn show_plan_dialog(plan_text: &str) {
         use fltk::{enums::Color, prelude::*, text::TextDisplay, window::Window};
 
+        let current_group = fltk::group::Group::try_current();
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
+
         let mut dialog = Window::default()
             .with_size(800, 500)
             .with_label("Explain Plan");
@@ -767,6 +823,7 @@ impl SqlEditorWidget {
 
         dialog.end();
         dialog.show();
+        fltk::group::Group::set_current(current_group.as_ref());
         let _ = dialog.take_focus();
         let _ = close_btn.take_focus();
 

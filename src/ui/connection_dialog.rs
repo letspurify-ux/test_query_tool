@@ -32,14 +32,14 @@ impl ConnectionDialog {
         let config = Rc::new(RefCell::new(AppConfig::load()));
 
         let mut dialog = Window::default()
-            .with_size(500, 420)
+            .with_size(500, 460)
             .with_label("Connect to Oracle Database");
         dialog.set_color(Color::from_rgb(45, 45, 48));
         dialog.make_modal(true);
 
         let mut main_flex = Flex::default()
             .with_pos(20, 20)
-            .with_size(460, 380);
+            .with_size(460, 420);
         main_flex.set_type(fltk::group::FlexType::Column);
         main_flex.set_margin(10);
         main_flex.set_spacing(8);
