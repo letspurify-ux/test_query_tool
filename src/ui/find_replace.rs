@@ -1,6 +1,6 @@
 use fltk::{
     button::{Button, CheckButton},
-    enums::{Color, FrameType},
+    enums::FrameType,
     group::Flex,
     input::Input,
     prelude::*,
@@ -9,6 +9,7 @@ use fltk::{
 };
 use std::cell::RefCell;
 use std::rc::Rc;
+use crate::ui::theme;
 
 /// Find/Replace dialog
 pub struct FindReplaceDialog;
@@ -52,7 +53,7 @@ impl FindReplaceDialog {
         let mut dialog = Window::default()
             .with_size(450, height)
             .with_label(title);
-        dialog.set_color(Color::from_rgb(45, 45, 48));
+        dialog.set_color(theme::panel_raised());
 
         let mut main_flex = Flex::default()
             .with_pos(10, 10)
@@ -64,11 +65,11 @@ impl FindReplaceDialog {
         let mut find_flex = Flex::default();
         find_flex.set_type(fltk::group::FlexType::Row);
         let mut find_label = fltk::frame::Frame::default().with_label("Find:");
-        find_label.set_label_color(Color::White);
+        find_label.set_label_color(theme::text_primary());
         find_flex.fixed(&find_label, 80);
         let mut find_input = Input::default();
-        find_input.set_color(Color::from_rgb(60, 60, 63));
-        find_input.set_text_color(Color::White);
+        find_input.set_color(theme::input_bg());
+        find_input.set_text_color(theme::text_primary());
         find_flex.end();
         main_flex.fixed(&find_flex, 30);
 
@@ -77,11 +78,11 @@ impl FindReplaceDialog {
             let mut replace_flex = Flex::default();
             replace_flex.set_type(fltk::group::FlexType::Row);
             let mut replace_label = fltk::frame::Frame::default().with_label("Replace:");
-            replace_label.set_label_color(Color::White);
+            replace_label.set_label_color(theme::text_primary());
             replace_flex.fixed(&replace_label, 80);
             let mut input = Input::default();
-            input.set_color(Color::from_rgb(60, 60, 63));
-            input.set_text_color(Color::White);
+            input.set_color(theme::input_bg());
+            input.set_text_color(theme::text_primary());
             replace_flex.end();
             main_flex.fixed(&replace_flex, 30);
             Some(input)
@@ -93,9 +94,9 @@ impl FindReplaceDialog {
         let mut options_flex = Flex::default();
         options_flex.set_type(fltk::group::FlexType::Row);
         let mut case_check = CheckButton::default().with_label("Case sensitive");
-        case_check.set_label_color(Color::White);
+        case_check.set_label_color(theme::text_secondary());
         let mut whole_word_check = CheckButton::default().with_label("Whole word");
-        whole_word_check.set_label_color(Color::White);
+        whole_word_check.set_label_color(theme::text_secondary());
         options_flex.end();
         main_flex.fixed(&options_flex, 25);
 
@@ -109,17 +110,17 @@ impl FindReplaceDialog {
         let mut find_next_btn = Button::default()
             .with_size(90, 30)
             .with_label("Find Next");
-        find_next_btn.set_color(Color::from_rgb(0, 122, 204));
-        find_next_btn.set_label_color(Color::White);
-        find_next_btn.set_frame(FrameType::FlatBox);
+        find_next_btn.set_color(theme::button_primary());
+        find_next_btn.set_label_color(theme::text_primary());
+        find_next_btn.set_frame(FrameType::RFlatBox);
 
         let replace_btn = if show_replace {
             let mut btn = Button::default()
                 .with_size(90, 30)
                 .with_label("Replace");
-            btn.set_color(Color::from_rgb(104, 33, 122));
-            btn.set_label_color(Color::White);
-            btn.set_frame(FrameType::FlatBox);
+            btn.set_color(theme::button_secondary());
+            btn.set_label_color(theme::text_primary());
+            btn.set_frame(FrameType::RFlatBox);
             button_flex.fixed(&btn, 90);
             Some(btn)
         } else {
@@ -130,9 +131,9 @@ impl FindReplaceDialog {
             let mut btn = Button::default()
                 .with_size(90, 30)
                 .with_label("Replace All");
-            btn.set_color(Color::from_rgb(104, 33, 122));
-            btn.set_label_color(Color::White);
-            btn.set_frame(FrameType::FlatBox);
+            btn.set_color(theme::button_secondary());
+            btn.set_label_color(theme::text_primary());
+            btn.set_frame(FrameType::RFlatBox);
             button_flex.fixed(&btn, 90);
             Some(btn)
         } else {
@@ -142,9 +143,9 @@ impl FindReplaceDialog {
         let mut close_btn = Button::default()
             .with_size(70, 30)
             .with_label("Close");
-        close_btn.set_color(Color::from_rgb(100, 100, 100));
-        close_btn.set_label_color(Color::White);
-        close_btn.set_frame(FrameType::FlatBox);
+        close_btn.set_color(theme::button_subtle());
+        close_btn.set_label_color(theme::text_primary());
+        close_btn.set_frame(FrameType::RFlatBox);
 
         button_flex.fixed(&find_next_btn, 90);
         button_flex.fixed(&close_btn, 70);

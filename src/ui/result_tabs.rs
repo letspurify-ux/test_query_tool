@@ -1,5 +1,4 @@
 use fltk::{
-    enums::Color,
     group::{Group, Tabs, TabsOverflow},
     prelude::*,
 };
@@ -7,6 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ui::ResultTableWidget;
+use crate::ui::theme;
 
 #[derive(Clone)]
 pub struct ResultTabsWidget {
@@ -26,9 +26,9 @@ impl ResultTabsWidget {
         // Use explicit dimensions to avoid "center of requires the size of the
         // widget to be known" panic that occurs with default_fill()
         let mut tabs = Tabs::new(x, y, w, h, None);
-        tabs.set_color(Color::from_rgb(37, 37, 38)); // Modern panel background
-        tabs.set_selection_color(Color::from_rgb(0, 120, 212)); // Active tab accent
-        tabs.set_label_color(Color::from_rgb(200, 200, 200)); // Tab text color
+        tabs.set_color(theme::panel_bg());
+        tabs.set_selection_color(theme::selection_strong());
+        tabs.set_label_color(theme::text_secondary());
         tabs.handle_overflow(TabsOverflow::Compress);
 
         let data = Rc::new(RefCell::new(Vec::<ResultTab>::new()));
@@ -85,8 +85,8 @@ impl ResultTabsWidget {
         let w = self.tabs.w().max(100);
         let h = (self.tabs.h() - 25).max(100);
         let mut group = Group::new(x, y, w, h, None).with_label(label);
-        group.set_color(Color::from_rgb(30, 30, 30)); // Tab content background
-        group.set_label_color(Color::from_rgb(200, 200, 200)); // Tab label
+        group.set_color(theme::panel_bg());
+        group.set_label_color(theme::text_secondary());
 
         group.begin();
         let table = ResultTableWidget::with_size(x, y, w, h);

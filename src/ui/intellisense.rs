@@ -1,11 +1,11 @@
 use fltk::{
     browser::HoldBrowser,
-    enums::Color,
     prelude::*,
     window::Window,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
+use crate::ui::theme;
 
 // SQL Keywords for autocomplete
 pub const SQL_KEYWORDS: &[&str] = &[
@@ -171,13 +171,13 @@ impl IntellisensePopup {
         let mut window = Window::default()
             .with_size(320, 200);
         window.set_border(false);
-        window.set_color(Color::from_rgb(45, 45, 48)); // Modern popup background
+        window.set_color(theme::panel_raised());
 
         let mut browser = HoldBrowser::default()
             .with_size(320, 200)
             .with_pos(0, 0);
-        browser.set_color(Color::from_rgb(45, 45, 48)); // Match popup
-        browser.set_selection_color(Color::from_rgb(0, 120, 212)); // Modern accent
+        browser.set_color(theme::panel_alt());
+        browser.set_selection_color(theme::selection_strong());
 
         window.end();
 
@@ -268,6 +268,14 @@ impl IntellisensePopup {
 
     pub fn is_visible(&self) -> bool {
         *self.visible.borrow()
+    }
+
+    pub fn contains_point(&self, x: i32, y: i32) -> bool {
+        let left = self.window.x();
+        let top = self.window.y();
+        let right = left + self.window.w();
+        let bottom = top + self.window.h();
+        x >= left && x < right && y >= top && y < bottom
     }
 
     pub fn set_selected_callback<F>(&mut self, callback: F)

@@ -1,6 +1,6 @@
 use fltk::{
     button::{Button, CheckButton},
-    enums::{CallbackTrigger, Color, Font, FrameType},
+    enums::{CallbackTrigger, Font, FrameType},
     frame::Frame,
     group::{Flex, FlexType},
     input::Input,
@@ -11,6 +11,7 @@ use fltk::{
 use std::sync::mpsc;
 
 use crate::utils::feature_catalog::{build_catalog_text_filtered, load_feature_catalog};
+use crate::ui::theme;
 
 pub struct FeatureCatalogDialog;
 
@@ -26,7 +27,7 @@ impl FeatureCatalogDialog {
         let mut dialog = Window::default()
             .with_size(900, 700)
             .with_label("Feature Catalog");
-        dialog.set_color(Color::from_rgb(45, 45, 48));
+        dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 
         let mut main_flex = Flex::default().with_pos(10, 10).with_size(880, 680);
@@ -38,30 +39,30 @@ impl FeatureCatalogDialog {
         controls_row.set_spacing(10);
 
         let mut filter_label = Frame::default().with_label("Filter:");
-        filter_label.set_label_color(Color::White);
+        filter_label.set_label_color(theme::text_primary());
 
         let mut filter_input = Input::default();
-        filter_input.set_color(Color::from_rgb(60, 60, 63));
-        filter_input.set_text_color(Color::White);
+        filter_input.set_color(theme::input_bg());
+        filter_input.set_text_color(theme::text_primary());
         filter_input.set_trigger(CallbackTrigger::Changed);
 
         let mut show_implemented = CheckButton::default().with_label("Implemented");
-        show_implemented.set_label_color(Color::White);
+        show_implemented.set_label_color(theme::text_secondary());
         show_implemented.set_value(true);
 
         let mut show_planned = CheckButton::default().with_label("Planned");
-        show_planned.set_label_color(Color::White);
+        show_planned.set_label_color(theme::text_secondary());
         show_planned.set_value(true);
 
         let mut reload_btn = Button::default().with_size(90, 30).with_label("Reload");
-        reload_btn.set_color(Color::from_rgb(0, 122, 204));
-        reload_btn.set_label_color(Color::White);
-        reload_btn.set_frame(FrameType::FlatBox);
+        reload_btn.set_color(theme::button_secondary());
+        reload_btn.set_label_color(theme::text_primary());
+        reload_btn.set_frame(FrameType::RFlatBox);
 
         let mut clear_btn = Button::default().with_size(80, 30).with_label("Clear");
-        clear_btn.set_color(Color::from_rgb(100, 100, 100));
-        clear_btn.set_label_color(Color::White);
-        clear_btn.set_frame(FrameType::FlatBox);
+        clear_btn.set_color(theme::button_subtle());
+        clear_btn.set_label_color(theme::text_primary());
+        clear_btn.set_frame(FrameType::RFlatBox);
 
         controls_row.fixed(&filter_label, 50);
         controls_row.fixed(&show_implemented, 120);
@@ -82,8 +83,8 @@ impl FeatureCatalogDialog {
 
         let mut display = TextDisplay::default();
         display.set_buffer(display_buffer.clone());
-        display.set_color(Color::from_rgb(30, 30, 30));
-        display.set_text_color(Color::from_rgb(220, 220, 220));
+        display.set_color(theme::editor_bg());
+        display.set_text_color(theme::text_primary());
         display.set_text_font(Font::Courier);
         display.set_text_size(12);
 
@@ -92,9 +93,9 @@ impl FeatureCatalogDialog {
 
         let _spacer = fltk::frame::Frame::default();
         let mut close_btn = Button::default().with_size(80, 30).with_label("Close");
-        close_btn.set_color(Color::from_rgb(100, 100, 100));
-        close_btn.set_label_color(Color::White);
-        close_btn.set_frame(FrameType::FlatBox);
+        close_btn.set_color(theme::button_subtle());
+        close_btn.set_label_color(theme::text_primary());
+        close_btn.set_frame(FrameType::RFlatBox);
 
         button_row.fixed(&close_btn, 80);
         button_row.end();

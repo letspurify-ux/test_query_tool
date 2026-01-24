@@ -10,6 +10,7 @@ pub mod result_table;
 pub mod result_tabs;
 pub mod sql_editor;
 pub mod syntax_highlight;
+pub mod theme;
 
 pub use connection_dialog::*;
 pub use feature_catalog::*;

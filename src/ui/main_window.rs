@@ -1,7 +1,7 @@
 use fltk::{
     app,
     dialog::{FileDialog, FileDialogType},
-    enums::{Color, FrameType},
+    enums::FrameType,
     frame::Frame,
     group::{Flex, FlexType},
     menu::MenuBar,
@@ -23,6 +23,7 @@ use crate::ui::{
     MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, QueryProgress, ResultTabsWidget,
     SqlAction, SqlEditorWidget,
 };
+use crate::ui::theme;
 use crate::utils::QueryHistory;
 
 #[derive(Clone)]
@@ -65,7 +66,7 @@ impl MainWindow {
         let mut window = Window::default()
             .with_size(1200, 800)
             .with_label("Oracle Query Tool - Rust Edition");
-        window.set_color(Color::from_rgb(30, 30, 30));
+        window.set_color(theme::window_bg());
 
         let mut main_flex = Flex::default_fill();
         main_flex.set_type(FlexType::Column);
@@ -99,8 +100,8 @@ impl MainWindow {
 
         let mut status_bar = Frame::default().with_label("Not connected | Ctrl+Space for autocomplete");
         status_bar.set_frame(FrameType::FlatBox);
-        status_bar.set_color(Color::from_rgb(0, 120, 212));
-        status_bar.set_label_color(Color::White);
+        status_bar.set_color(theme::accent());
+        status_bar.set_label_color(theme::text_primary());
         main_flex.fixed(&status_bar, 25);
         main_flex.end();
         window.end();
@@ -140,6 +141,29 @@ impl MainWindow {
             s.status_bar.set_label(&status_text);
         });
 
+        let state_for_status = state.clone();
+        state_borrow.sql_editor.set_status_callback(move |message| {
+            state_for_status.borrow_mut().status_bar.set_label(message);
+        });
+
+        let state_for_find = state.clone();
+        state_borrow.sql_editor.set_find_callback(move || {
+            let (mut editor, mut buffer, popups) = {
+                let s = state_for_find.borrow_mut();
+                (s.sql_editor.get_editor(), s.sql_buffer.clone(), s.popups.clone())
+            };
+            FindReplaceDialog::show_find_with_registry(&mut editor, &mut buffer, popups);
+        });
+
+        let state_for_replace = state.clone();
+        state_borrow.sql_editor.set_replace_callback(move || {
+            let (mut editor, mut buffer, popups) = {
+                let s = state_for_replace.borrow_mut();
+                (s.sql_editor.get_editor(), s.sql_buffer.clone(), s.popups.clone())
+            };
+            FindReplaceDialog::show_replace_with_registry(&mut editor, &mut buffer, popups);
+        });
+
         // Setup object browser callback
         let state_for_browser = state.clone();
         state_borrow.object_browser.set_sql_callback(move |action| {
@@ -157,6 +181,16 @@ impl MainWindow {
                     s.sql_editor.refresh_highlighting();
                 }
             }
+        });
+
+        let state_for_window = state.clone();
+        state_borrow.window.handle(move |_w, ev| {
+            if ev == fltk::enums::Event::Push {
+                let s = state_for_window.borrow();
+                s.sql_editor
+                    .hide_intellisense_if_outside(app::event_x_root(), app::event_y_root());
+            }
+            false
         });
 
         let state_for_progress = state.clone();
@@ -354,7 +388,12 @@ impl MainWindow {
                             }
                         }
                         "Query/Execute" => state_for_menu.borrow_mut().sql_editor.execute_current(),
+                        "Query/Execute Statement" => state_for_menu
+                            .borrow_mut()
+                            .sql_editor
+                            .execute_statement_at_cursor(),
                         "Query/Execute Selected" => state_for_menu.borrow_mut().sql_editor.execute_selected(),
+                        "Query/Explain Plan" => state_for_menu.borrow_mut().sql_editor.explain_current(),
                         "Query/Commit" => state_for_menu.borrow_mut().sql_editor.commit(),
                         "Query/Rollback" => state_for_menu.borrow_mut().sql_editor.rollback(),
                         "Tools/Refresh Objects" => state_for_menu.borrow_mut().object_browser.refresh(),
@@ -446,12 +485,15 @@ impl MainWindow {
         let state = self.state.clone();
         let mut s = state.borrow_mut();
         let popups = s.popups.clone();
+        let sql_editor = s.sql_editor.clone();
         s.window.set_callback(move |w| {
             let mut popups = popups.borrow_mut();
             for mut popup in popups.drain(..) {
                 popup.hide();
             }
+            sql_editor.hide_intellisense();
             w.hide();
+            app::quit();
         });
         s.window.show();
         s.sql_editor.focus();
@@ -460,9 +502,11 @@ impl MainWindow {
     pub fn run() {
         let app = app::App::default().with_scheme(app::Scheme::Gtk);
 
-        // Set default colors for dark theme
-        app::background(45, 45, 48);
-        app::foreground(220, 220, 220);
+        // Set default colors for Windows 11-inspired theme
+        let (bg_r, bg_g, bg_b) = theme::app_background().to_rgb();
+        app::background(bg_r, bg_g, bg_b);
+        let (fg_r, fg_g, fg_b) = theme::app_foreground().to_rgb();
+        app::foreground(fg_r, fg_g, fg_b);
         app::add_timeout3(0.1, Self::schedule_awake);
 
         let mut main_window = MainWindow::new();

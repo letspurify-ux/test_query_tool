@@ -2,7 +2,7 @@ use fltk::{
     app,
     browser::HoldBrowser,
     button::{Button, CheckButton},
-    enums::{Color, FrameType},
+    enums::FrameType,
     group::Flex,
     input::{Input, SecretInput},
     prelude::*,
@@ -14,6 +14,7 @@ use std::sync::mpsc;
 
 use crate::db::{ConnectionInfo, DatabaseConnection};
 use crate::utils::AppConfig;
+use crate::ui::theme;
 
 pub struct ConnectionDialog;
 
@@ -34,7 +35,7 @@ impl ConnectionDialog {
         let mut dialog = Window::default()
             .with_size(500, 460)
             .with_label("Connect to Oracle Database");
-        dialog.set_color(Color::from_rgb(45, 45, 48));
+        dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 
         let mut main_flex = Flex::default()
@@ -49,12 +50,12 @@ impl ConnectionDialog {
         saved_flex.set_type(fltk::group::FlexType::Row);
         let mut saved_label = fltk::frame::Frame::default()
             .with_label("Saved:");
-        saved_label.set_label_color(Color::White);
+        saved_label.set_label_color(theme::text_primary());
         saved_flex.fixed(&saved_label, 100);
 
         let mut saved_browser = HoldBrowser::default();
-        saved_browser.set_color(Color::from_rgb(60, 60, 63));
-        saved_browser.set_selection_color(Color::from_rgb(0, 122, 204));
+        saved_browser.set_color(theme::input_bg());
+        saved_browser.set_selection_color(theme::selection_strong());
 
         // Load saved connections
         {
@@ -67,9 +68,9 @@ impl ConnectionDialog {
         let mut delete_btn = Button::default()
             .with_size(60, 25)
             .with_label("Delete");
-        delete_btn.set_color(Color::from_rgb(150, 50, 50));
-        delete_btn.set_label_color(Color::White);
-        delete_btn.set_frame(FrameType::FlatBox);
+        delete_btn.set_color(theme::button_danger());
+        delete_btn.set_label_color(theme::text_primary());
+        delete_btn.set_frame(FrameType::RFlatBox);
 
         saved_flex.fixed(&delete_btn, 60);
         saved_flex.end();
@@ -80,12 +81,12 @@ impl ConnectionDialog {
         name_flex.set_type(fltk::group::FlexType::Row);
         let mut name_label = fltk::frame::Frame::default()
             .with_label("Name:");
-        name_label.set_label_color(Color::White);
+        name_label.set_label_color(theme::text_primary());
         name_flex.fixed(&name_label, 100);
         let mut name_input = Input::default();
         name_input.set_value("My Connection");
-        name_input.set_color(Color::from_rgb(60, 60, 63));
-        name_input.set_text_color(Color::White);
+        name_input.set_color(theme::input_bg());
+        name_input.set_text_color(theme::text_primary());
         name_flex.end();
         main_flex.fixed(&name_flex, 30);
 
@@ -94,11 +95,11 @@ impl ConnectionDialog {
         user_flex.set_type(fltk::group::FlexType::Row);
         let mut user_label = fltk::frame::Frame::default()
             .with_label("Username:");
-        user_label.set_label_color(Color::White);
+        user_label.set_label_color(theme::text_primary());
         user_flex.fixed(&user_label, 100);
         let mut user_input = Input::default();
-        user_input.set_color(Color::from_rgb(60, 60, 63));
-        user_input.set_text_color(Color::White);
+        user_input.set_color(theme::input_bg());
+        user_input.set_text_color(theme::text_primary());
         user_flex.end();
         main_flex.fixed(&user_flex, 30);
 
@@ -107,11 +108,11 @@ impl ConnectionDialog {
         pass_flex.set_type(fltk::group::FlexType::Row);
         let mut pass_label = fltk::frame::Frame::default()
             .with_label("Password:");
-        pass_label.set_label_color(Color::White);
+        pass_label.set_label_color(theme::text_primary());
         pass_flex.fixed(&pass_label, 100);
         let mut pass_input = SecretInput::default();
-        pass_input.set_color(Color::from_rgb(60, 60, 63));
-        pass_input.set_text_color(Color::White);
+        pass_input.set_color(theme::input_bg());
+        pass_input.set_text_color(theme::text_primary());
         pass_flex.end();
         main_flex.fixed(&pass_flex, 30);
 
@@ -120,12 +121,12 @@ impl ConnectionDialog {
         host_flex.set_type(fltk::group::FlexType::Row);
         let mut host_label = fltk::frame::Frame::default()
             .with_label("Host:");
-        host_label.set_label_color(Color::White);
+        host_label.set_label_color(theme::text_primary());
         host_flex.fixed(&host_label, 100);
         let mut host_input = Input::default();
         host_input.set_value("localhost");
-        host_input.set_color(Color::from_rgb(60, 60, 63));
-        host_input.set_text_color(Color::White);
+        host_input.set_color(theme::input_bg());
+        host_input.set_text_color(theme::text_primary());
         host_flex.end();
         main_flex.fixed(&host_flex, 30);
 
@@ -134,12 +135,12 @@ impl ConnectionDialog {
         port_flex.set_type(fltk::group::FlexType::Row);
         let mut port_label = fltk::frame::Frame::default()
             .with_label("Port:");
-        port_label.set_label_color(Color::White);
+        port_label.set_label_color(theme::text_primary());
         port_flex.fixed(&port_label, 100);
         let mut port_input = Input::default();
         port_input.set_value("1521");
-        port_input.set_color(Color::from_rgb(60, 60, 63));
-        port_input.set_text_color(Color::White);
+        port_input.set_color(theme::input_bg());
+        port_input.set_text_color(theme::text_primary());
         port_flex.end();
         main_flex.fixed(&port_flex, 30);
 
@@ -148,12 +149,12 @@ impl ConnectionDialog {
         service_flex.set_type(fltk::group::FlexType::Row);
         let mut service_label = fltk::frame::Frame::default()
             .with_label("Service:");
-        service_label.set_label_color(Color::White);
+        service_label.set_label_color(theme::text_primary());
         service_flex.fixed(&service_label, 100);
         let mut service_input = Input::default();
         service_input.set_value("ORCL");
-        service_input.set_color(Color::from_rgb(60, 60, 63));
-        service_input.set_text_color(Color::White);
+        service_input.set_color(theme::input_bg());
+        service_input.set_text_color(theme::text_primary());
         service_flex.end();
         main_flex.fixed(&service_flex, 30);
 
@@ -164,7 +165,7 @@ impl ConnectionDialog {
         save_flex.fixed(&_spacer, 100);
         let mut save_check = CheckButton::default()
             .with_label("Save this connection");
-        save_check.set_label_color(Color::White);
+        save_check.set_label_color(theme::text_secondary());
         save_check.set_value(true);
         save_flex.end();
         main_flex.fixed(&save_flex, 25);
@@ -179,23 +180,23 @@ impl ConnectionDialog {
         let mut test_btn = Button::default()
             .with_size(80, 30)
             .with_label("Test");
-        test_btn.set_color(Color::from_rgb(104, 33, 122));
-        test_btn.set_label_color(Color::White);
-        test_btn.set_frame(FrameType::FlatBox);
+        test_btn.set_color(theme::button_secondary());
+        test_btn.set_label_color(theme::text_primary());
+        test_btn.set_frame(FrameType::RFlatBox);
 
         let mut connect_btn = Button::default()
             .with_size(80, 30)
             .with_label("Connect");
-        connect_btn.set_color(Color::from_rgb(0, 122, 204));
-        connect_btn.set_label_color(Color::White);
-        connect_btn.set_frame(FrameType::FlatBox);
+        connect_btn.set_color(theme::button_primary());
+        connect_btn.set_label_color(theme::text_primary());
+        connect_btn.set_frame(FrameType::RFlatBox);
 
         let mut cancel_btn = Button::default()
             .with_size(80, 30)
             .with_label("Cancel");
-        cancel_btn.set_color(Color::from_rgb(100, 100, 100));
-        cancel_btn.set_label_color(Color::White);
-        cancel_btn.set_frame(FrameType::FlatBox);
+        cancel_btn.set_color(theme::button_subtle());
+        cancel_btn.set_label_color(theme::text_primary());
+        cancel_btn.set_frame(FrameType::RFlatBox);
 
         button_flex.fixed(&test_btn, 80);
         button_flex.fixed(&connect_btn, 80);

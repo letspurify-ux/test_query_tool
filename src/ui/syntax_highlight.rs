@@ -4,6 +4,7 @@ use fltk::{
 };
 
 use super::intellisense::{ORACLE_FUNCTIONS, SQL_KEYWORDS};
+use crate::ui::theme;
 
 // Style characters for different token types
 pub const STYLE_DEFAULT: char = 'A';
@@ -20,7 +21,7 @@ pub fn create_style_table() -> Vec<StyleTableEntry> {
     vec![
         // A - Default text (light gray)
         StyleTableEntry {
-            color: Color::from_rgb(220, 220, 220),
+            color: theme::text_primary(),
             font: Font::Courier,
             size: 14,
         },
@@ -56,7 +57,7 @@ pub fn create_style_table() -> Vec<StyleTableEntry> {
         },
         // G - Operators (white)
         StyleTableEntry {
-            color: Color::from_rgb(212, 212, 212),
+            color: theme::text_secondary(),
             font: Font::Courier,
             size: 14,
         },

@@ -482,6 +482,329 @@ impl QueryExecutor {
         statements
     }
 
+    /// Return the statement containing the cursor position (character index).
+    pub fn statement_at_cursor(sql: &str, cursor_pos: usize) -> Option<String> {
+        if sql.trim().is_empty() {
+            return None;
+        }
+
+        #[derive(Clone)]
+        struct StatementSpan {
+            start_idx: usize,
+            end_idx: usize,
+            start_line: usize,
+            end_line: usize,
+            text: String,
+        }
+
+        let chars: Vec<char> = sql.chars().collect();
+        let len = chars.len();
+        let cursor_pos = cursor_pos.min(len);
+        let cursor_line = chars
+            .iter()
+            .take(cursor_pos)
+            .filter(|c| **c == '\n')
+            .count();
+
+        let mut statements: Vec<StatementSpan> = Vec::new();
+        let mut current = String::new();
+
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
+        let mut block_depth = 0usize;
+        let mut token = String::new();
+
+        let mut line = 0usize;
+        let mut statement_start = 0usize;
+        let mut statement_start_line = 0usize;
+        let mut first_non_ws_idx: Option<usize> = None;
+        let mut first_non_ws_line: Option<usize> = None;
+        let mut last_non_ws_idx: Option<usize> = None;
+        let mut last_non_ws_line: Option<usize> = None;
+
+        let flush_token = |token: &mut String, block_depth: &mut usize| {
+            if token.is_empty() {
+                return;
+            }
+            let upper = token.to_uppercase();
+            if upper == "BEGIN" || upper == "DECLARE" {
+                *block_depth += 1;
+            } else if upper == "END" && *block_depth > 0 {
+                *block_depth -= 1;
+            }
+            token.clear();
+        };
+
+        let mark_non_ws = |c: char,
+                           idx: usize,
+                           line: usize,
+                           first_non_ws_idx: &mut Option<usize>,
+                           first_non_ws_line: &mut Option<usize>,
+                           last_non_ws_idx: &mut Option<usize>,
+                           last_non_ws_line: &mut Option<usize>| {
+            if !c.is_whitespace() {
+                if first_non_ws_idx.is_none() {
+                    *first_non_ws_idx = Some(idx);
+                    *first_non_ws_line = Some(line);
+                }
+                *last_non_ws_idx = Some(idx);
+                *last_non_ws_line = Some(line);
+            }
+        };
+
+        let mut i = 0;
+        while i < len {
+            let c = chars[i];
+            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+
+            // Handle line comment
+            if !in_single_quote && !in_double_quote && !in_block_comment {
+                if c == '-' && next == Some('-') {
+                    in_line_comment = true;
+                    current.push(c);
+                    mark_non_ws(
+                        c,
+                        i,
+                        line,
+                        &mut first_non_ws_idx,
+                        &mut first_non_ws_line,
+                        &mut last_non_ws_idx,
+                        &mut last_non_ws_line,
+                    );
+                    i += 1;
+                    continue;
+                }
+            }
+
+            if in_line_comment {
+                current.push(c);
+                mark_non_ws(
+                    c,
+                    i,
+                    line,
+                    &mut first_non_ws_idx,
+                    &mut first_non_ws_line,
+                    &mut last_non_ws_idx,
+                    &mut last_non_ws_line,
+                );
+                if c == '\n' {
+                    in_line_comment = false;
+                    line += 1;
+                }
+                i += 1;
+                continue;
+            }
+
+            if !in_single_quote
+                && !in_double_quote
+                && !in_block_comment
+                && (c.is_alphanumeric() || c == '_')
+            {
+                token.push(c);
+                current.push(c);
+                mark_non_ws(
+                    c,
+                    i,
+                    line,
+                    &mut first_non_ws_idx,
+                    &mut first_non_ws_line,
+                    &mut last_non_ws_idx,
+                    &mut last_non_ws_line,
+                );
+                i += 1;
+                continue;
+            }
+
+            flush_token(&mut token, &mut block_depth);
+
+            // Handle block comment
+            if !in_single_quote && !in_double_quote && !in_line_comment {
+                if c == '/' && next == Some('*') {
+                    in_block_comment = true;
+                    current.push(c);
+                    mark_non_ws(
+                        c,
+                        i,
+                        line,
+                        &mut first_non_ws_idx,
+                        &mut first_non_ws_line,
+                        &mut last_non_ws_idx,
+                        &mut last_non_ws_line,
+                    );
+                    i += 1;
+                    continue;
+                }
+            }
+
+            if in_block_comment {
+                current.push(c);
+                mark_non_ws(
+                    c,
+                    i,
+                    line,
+                    &mut first_non_ws_idx,
+                    &mut first_non_ws_line,
+                    &mut last_non_ws_idx,
+                    &mut last_non_ws_line,
+                );
+                if c == '\n' {
+                    line += 1;
+                }
+                if c == '*' && next == Some('/') {
+                    let next_char = chars[i + 1];
+                    current.push(next_char);
+                    mark_non_ws(
+                        next_char,
+                        i + 1,
+                        line,
+                        &mut first_non_ws_idx,
+                        &mut first_non_ws_line,
+                        &mut last_non_ws_idx,
+                        &mut last_non_ws_line,
+                    );
+                    in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            // Handle quotes
+            if c == '\'' && !in_double_quote {
+                in_single_quote = !in_single_quote;
+                current.push(c);
+                mark_non_ws(
+                    c,
+                    i,
+                    line,
+                    &mut first_non_ws_idx,
+                    &mut first_non_ws_line,
+                    &mut last_non_ws_idx,
+                    &mut last_non_ws_line,
+                );
+                if c == '\n' {
+                    line += 1;
+                }
+                i += 1;
+                continue;
+            }
+
+            if c == '"' && !in_single_quote {
+                in_double_quote = !in_double_quote;
+                current.push(c);
+                mark_non_ws(
+                    c,
+                    i,
+                    line,
+                    &mut first_non_ws_idx,
+                    &mut first_non_ws_line,
+                    &mut last_non_ws_idx,
+                    &mut last_non_ws_line,
+                );
+                if c == '\n' {
+                    line += 1;
+                }
+                i += 1;
+                continue;
+            }
+
+            // Handle semicolon (statement separator)
+            if c == ';' && !in_single_quote && !in_double_quote && block_depth == 0 {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    let start_idx = first_non_ws_idx.unwrap_or(statement_start);
+                    let start_line = first_non_ws_line.unwrap_or(statement_start_line);
+                    statements.push(StatementSpan {
+                        start_idx,
+                        end_idx: i,
+                        start_line,
+                        end_line: line,
+                        text: trimmed.to_string(),
+                    });
+                }
+
+                current.clear();
+                first_non_ws_idx = None;
+                first_non_ws_line = None;
+                last_non_ws_idx = None;
+                last_non_ws_line = None;
+                statement_start = i + 1;
+                statement_start_line = line;
+                i += 1;
+                continue;
+            }
+
+            current.push(c);
+            mark_non_ws(
+                c,
+                i,
+                line,
+                &mut first_non_ws_idx,
+                &mut first_non_ws_line,
+                &mut last_non_ws_idx,
+                &mut last_non_ws_line,
+            );
+            if c == '\n' {
+                line += 1;
+            }
+            i += 1;
+        }
+
+        flush_token(&mut token, &mut block_depth);
+
+        let trimmed = current.trim();
+        if !trimmed.is_empty() {
+            let start_idx = first_non_ws_idx.unwrap_or(statement_start);
+            let start_line = first_non_ws_line.unwrap_or(statement_start_line);
+            let end_idx = last_non_ws_idx.unwrap_or_else(|| len.saturating_sub(1));
+            let end_line = last_non_ws_line.unwrap_or(start_line);
+            statements.push(StatementSpan {
+                start_idx,
+                end_idx,
+                start_line,
+                end_line,
+                text: trimmed.to_string(),
+            });
+        }
+
+        let mut candidates: Vec<&StatementSpan> = statements
+            .iter()
+            .filter(|s| s.start_line <= cursor_line && cursor_line <= s.end_line)
+            .collect();
+        if candidates.is_empty() {
+            return None;
+        }
+
+        if let Some(hit) = candidates
+            .iter()
+            .find(|s| s.start_idx <= cursor_pos && cursor_pos <= s.end_idx)
+        {
+            return Some(hit.text.clone());
+        }
+
+        let mut previous: Option<&StatementSpan> = None;
+        for candidate in &candidates {
+            if candidate.end_idx < cursor_pos {
+                if previous
+                    .map(|p| candidate.end_idx > p.end_idx)
+                    .unwrap_or(true)
+                {
+                    previous = Some(*candidate);
+                }
+            }
+        }
+
+        if let Some(prev) = previous {
+            return Some(prev.text.clone());
+        }
+
+        candidates.sort_by_key(|s| s.start_idx);
+        candidates.first().map(|s| s.text.clone())
+    }
+
     /// Enable DBMS_OUTPUT for the session
     #[allow(dead_code)]
     pub fn enable_dbms_output(conn: &Connection, buffer_size: u32) -> Result<(), OracleError> {

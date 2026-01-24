@@ -2,7 +2,7 @@ use fltk::{
     app,
     button::Button,
     draw::set_cursor,
-    enums::{Color, Cursor, Event, Font, FrameType, Key},
+    enums::{Cursor, Event, Font, FrameType, Key},
     frame::Frame,
     group::{Flex, FlexType, Pack, PackType},
     input::IntInput,
@@ -20,6 +20,15 @@ use crate::db::{lock_connection, QueryExecutor, QueryResult, SharedConnection};
 use crate::ui::intellisense::{get_word_at_cursor, IntellisenseData, IntellisensePopup};
 use crate::ui::query_history::QueryHistoryDialog;
 use crate::ui::syntax_highlight::{create_style_table, HighlightData, SqlHighlighter};
+use crate::ui::theme;
+
+#[derive(Clone)]
+enum SqlToken {
+    Word(String),
+    String(String),
+    Comment(String),
+    Symbol(String),
+}
 
 #[derive(Clone)]
 pub enum QueryProgress {
@@ -58,6 +67,10 @@ pub struct SqlEditorWidget {
     intellisense_popup: Rc<RefCell<IntellisensePopup>>,
     highlighter: Rc<RefCell<SqlHighlighter>>,
     timeout_input: IntInput,
+    status_callback: Rc<RefCell<Option<Box<dyn FnMut(&str)>>>>,
+    find_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>>,
+    replace_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>>,
+    completion_range: Rc<RefCell<Option<(usize, usize)>>>,
 }
 
 impl SqlEditorWidget {
@@ -67,7 +80,7 @@ impl SqlEditorWidget {
         group.set_margin(0);
         group.set_spacing(0);
         group.set_frame(FrameType::FlatBox);
-        group.set_color(Color::from_rgb(37, 37, 38)); // Modern panel background
+        group.set_color(theme::panel_bg()); // Windows 11-inspired panel background
 
         // Button toolbar with modern styling
         let mut button_pack = Pack::default();
@@ -75,42 +88,42 @@ impl SqlEditorWidget {
         button_pack.set_spacing(6);
 
         let mut execute_btn = Button::default().with_size(90, 28).with_label("@> Execute");
-        execute_btn.set_color(Color::from_rgb(0, 120, 212)); // Modern blue
-        execute_btn.set_label_color(Color::White);
+        execute_btn.set_color(theme::button_primary());
+        execute_btn.set_label_color(theme::text_primary());
         execute_btn.set_frame(FrameType::RFlatBox);
 
         let mut cancel_btn = Button::default().with_size(80, 28).with_label("Cancel");
-        cancel_btn.set_color(Color::from_rgb(196, 107, 34)); // Modern orange
-        cancel_btn.set_label_color(Color::White);
+        cancel_btn.set_color(theme::button_warning());
+        cancel_btn.set_label_color(theme::text_primary());
         cancel_btn.set_frame(FrameType::RFlatBox);
 
         let mut explain_btn = Button::default().with_size(80, 28).with_label("Explain");
-        explain_btn.set_color(Color::from_rgb(130, 80, 150)); // Modern purple
-        explain_btn.set_label_color(Color::White);
+        explain_btn.set_color(theme::button_secondary());
+        explain_btn.set_label_color(theme::text_primary());
         explain_btn.set_frame(FrameType::RFlatBox);
 
         let mut clear_btn = Button::default().with_size(70, 28).with_label("Clear");
-        clear_btn.set_color(Color::from_rgb(55, 55, 58)); // Subtle gray
-        clear_btn.set_label_color(Color::from_rgb(180, 180, 180));
+        clear_btn.set_color(theme::button_subtle());
+        clear_btn.set_label_color(theme::text_secondary());
         clear_btn.set_frame(FrameType::RFlatBox);
 
         let mut commit_btn = Button::default().with_size(80, 28).with_label("Commit");
-        commit_btn.set_color(Color::from_rgb(34, 139, 34)); // Modern green
-        commit_btn.set_label_color(Color::White);
+        commit_btn.set_color(theme::button_success());
+        commit_btn.set_label_color(theme::text_primary());
         commit_btn.set_frame(FrameType::RFlatBox);
 
         let mut rollback_btn = Button::default().with_size(80, 28).with_label("Rollback");
-        rollback_btn.set_color(Color::from_rgb(200, 60, 60)); // Modern red
-        rollback_btn.set_label_color(Color::White);
+        rollback_btn.set_color(theme::button_danger());
+        rollback_btn.set_label_color(theme::text_primary());
         rollback_btn.set_frame(FrameType::RFlatBox);
 
         let mut timeout_label = Frame::default().with_size(85, 28);
         timeout_label.set_label("Timeout(s)");
-        timeout_label.set_label_color(Color::from_rgb(160, 160, 160));
+        timeout_label.set_label_color(theme::text_muted());
 
         let mut timeout_input = IntInput::default().with_size(55, 28);
-        timeout_input.set_color(Color::from_rgb(45, 45, 48)); // Input background
-        timeout_input.set_text_color(Color::from_rgb(212, 212, 212));
+        timeout_input.set_color(theme::input_bg());
+        timeout_input.set_text_color(theme::text_primary());
         timeout_input.set_tooltip("Call timeout in seconds (empty = no timeout)");
 
         button_pack.end();
@@ -121,15 +134,16 @@ impl SqlEditorWidget {
         let style_buffer = TextBuffer::default();
         let mut editor = TextEditor::default();
         editor.set_buffer(buffer.clone());
-        editor.set_color(Color::from_rgb(30, 30, 30)); // Editor background
-        editor.set_text_color(Color::from_rgb(212, 212, 212)); // Modern text
+        editor.set_color(theme::editor_bg());
+        editor.set_text_color(theme::text_primary());
         editor.set_text_font(Font::Courier);
         editor.set_text_size(14);
-        editor.set_cursor_color(Color::from_rgb(220, 220, 220));
+        editor.set_cursor_color(theme::text_primary());
         editor.wrap_mode(WrapMode::AtBounds, 0);
+        editor.super_handle_first(false);
 
-        // Modern selection color
-        editor.set_selection_color(Color::from_rgb(38, 79, 120));
+        // Windows 11 selection color
+        editor.set_selection_color(theme::selection_soft());
 
         // Setup syntax highlighting
         let style_table = create_style_table();
@@ -149,6 +163,11 @@ impl SqlEditorWidget {
         let intellisense_data = Rc::new(RefCell::new(IntellisenseData::new()));
         let intellisense_popup = Rc::new(RefCell::new(IntellisensePopup::new()));
         let highlighter = Rc::new(RefCell::new(SqlHighlighter::new()));
+        let status_callback: Rc<RefCell<Option<Box<dyn FnMut(&str)>>>> =
+            Rc::new(RefCell::new(None));
+        let find_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+        let replace_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+        let completion_range = Rc::new(RefCell::new(None::<(usize, usize)>));
 
         let mut widget = Self {
             group,
@@ -164,6 +183,10 @@ impl SqlEditorWidget {
             intellisense_popup,
             highlighter,
             timeout_input: timeout_input.clone(),
+            status_callback,
+            find_callback,
+            replace_callback,
+            completion_range,
         };
 
         widget.setup_button_callbacks(
@@ -237,7 +260,10 @@ impl SqlEditorWidget {
         let style_buffer = self.style_buffer.clone();
         let connection_for_describe = self.connection.clone();
         let suppress_enter = Rc::new(RefCell::new(false));
-        let completion_range = Rc::new(RefCell::new(None::<(usize, usize)>));
+        let suppress_nav = Rc::new(RefCell::new(false));
+        let nav_anchor = Rc::new(RefCell::new(None::<i32>));
+        let completion_range = self.completion_range.clone();
+        let ctrl_enter_handled = Rc::new(RefCell::new(false));
 
         // Setup callback for inserting selected text
         let mut buffer_for_insert = buffer.clone();
@@ -279,19 +305,19 @@ impl SqlEditorWidget {
         let mut style_buffer_for_handle = style_buffer.clone();
         let connection_for_f4 = connection_for_describe.clone();
         let suppress_enter_for_handle = suppress_enter.clone();
+        let suppress_nav_for_handle = suppress_nav.clone();
+        let nav_anchor_for_handle = nav_anchor.clone();
         let completion_range_for_handle = completion_range.clone();
+        let widget_for_shortcuts = self.clone();
+        let find_callback_for_handle = self.find_callback.clone();
+        let replace_callback_for_handle = self.replace_callback.clone();
+        let ctrl_enter_handled_for_handle = ctrl_enter_handled.clone();
 
         editor.handle(move |ed, ev| {
             match ev {
                 Event::KeyDown => {
-                    let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
-                    if !ed.active() || (!ed.has_focus() && !popup_visible) {
-                        return false;
-                    }
-                    // KeyDown fires BEFORE the character is inserted into the buffer.
-                    // Handle navigation and selection keys here to consume them
-                    // before they affect the editor.
                     let key = fltk::app::event_key();
+                    let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
 
                     if popup_visible {
                         match key {
@@ -303,12 +329,22 @@ impl SqlEditorWidget {
                             }
                             Key::Up => {
                                 // Navigate popup up, consume event
+                                let pos = ed.insert_position();
+                                *nav_anchor_for_handle.borrow_mut() = Some(pos);
                                 intellisense_popup_for_handle.borrow_mut().select_prev();
+                                ed.set_insert_position(pos);
+                                ed.show_insert_position();
+                                *suppress_nav_for_handle.borrow_mut() = true;
                                 return true;
                             }
                             Key::Down => {
                                 // Navigate popup down, consume event
+                                let pos = ed.insert_position();
+                                *nav_anchor_for_handle.borrow_mut() = Some(pos);
                                 intellisense_popup_for_handle.borrow_mut().select_next();
+                                ed.set_insert_position(pos);
+                                ed.show_insert_position();
+                                *suppress_nav_for_handle.borrow_mut() = true;
                                 return true;
                             }
                             Key::Enter | Key::KPEnter | Key::Tab => {
@@ -363,29 +399,20 @@ impl SqlEditorWidget {
                         }
                     }
 
+                    if !ed.active() || (!ed.has_focus() && !popup_visible) {
+                        return false;
+                    }
+                    // KeyDown fires BEFORE the character is inserted into the buffer.
+                    // Handle navigation and selection keys here to consume them
+                    // before they affect the editor.
+
                     // Handle basic editing shortcuts
                     let state = fltk::app::event_state();
-                    let ctrl_or_cmd = state.contains(fltk::enums::Shortcut::Ctrl) 
+                    let ctrl_or_cmd = state.contains(fltk::enums::Shortcut::Ctrl)
                         || state.contains(fltk::enums::Shortcut::Command);
                     
                     if ctrl_or_cmd {
                         match key {
-                            k if k == Key::from_char('c') || k == Key::from_char('C') => {
-                                ed.copy();
-                                return true;
-                            }
-                            k if k == Key::from_char('x') || k == Key::from_char('X') => {
-                                ed.cut();
-                                return true;
-                            }
-                            k if k == Key::from_char('v') || k == Key::from_char('V') => {
-                                ed.paste();
-                                return true;
-                            }
-                            k if k == Key::from_char('a') || k == Key::from_char('A') => {
-                                buffer_for_handle.select(0, buffer_for_handle.length());
-                                return true;
-                            }
                             k if k == Key::from_char(' ') => {
                                 // Ctrl+Space - Trigger intellisense
                                 Self::trigger_intellisense(
@@ -395,6 +422,42 @@ impl SqlEditorWidget {
                                     &intellisense_popup_for_handle,
                                     &completion_range_for_handle,
                                 );
+                                return true;
+                            }
+                            Key::Enter | Key::KPEnter => {
+                                if *ctrl_enter_handled_for_handle.borrow() {
+                                    return true;
+                                }
+                                *ctrl_enter_handled_for_handle.borrow_mut() = true;
+                                widget_for_shortcuts.execute_statement_at_cursor();
+                                return true;
+                            }
+                            k if k == Key::from_char('f') || k == Key::from_char('F') => {
+                                if let Some(ref mut cb) = *find_callback_for_handle.borrow_mut() {
+                                    cb();
+                                }
+                                return true;
+                            }
+                            k if k == Key::from_char('b') || k == Key::from_char('B') => {
+                                widget_for_shortcuts.format_selected_sql();
+                                return true;
+                            }
+                            k if k == Key::from_char('/') || k == Key::from_char('?') => {
+                                widget_for_shortcuts.toggle_comment();
+                                return true;
+                            }
+                            k if k == Key::from_char('u') || k == Key::from_char('U') => {
+                                widget_for_shortcuts.convert_selection_case(true);
+                                return true;
+                            }
+                            k if k == Key::from_char('l') || k == Key::from_char('L') => {
+                                widget_for_shortcuts.convert_selection_case(false);
+                                return true;
+                            }
+                            k if k == Key::from_char('h') || k == Key::from_char('H') => {
+                                if let Some(ref mut cb) = *replace_callback_for_handle.borrow_mut() {
+                                    cb();
+                                }
                                 return true;
                             }
                             _ => {}
@@ -417,6 +480,31 @@ impl SqlEditorWidget {
                                 fltk::dialog::alert_default("Not connected to database");
                             }
                         }
+                        return true;
+                    }
+
+                    if key == Key::F5 {
+                        widget_for_shortcuts.execute_current();
+                        return true;
+                    }
+
+                    if key == Key::F9 {
+                        widget_for_shortcuts.execute_selected();
+                        return true;
+                    }
+
+                    if key == Key::F6 {
+                        widget_for_shortcuts.explain_current();
+                        return true;
+                    }
+
+                    if key == Key::F7 {
+                        widget_for_shortcuts.commit();
+                        return true;
+                    }
+
+                    if key == Key::F8 {
+                        widget_for_shortcuts.rollback();
                         return true;
                     }
 
@@ -450,10 +538,28 @@ impl SqlEditorWidget {
 
                     let key = fltk::app::event_key();
 
+                    if matches!(key, Key::Up | Key::Down)
+                        && *suppress_nav_for_handle.borrow()
+                    {
+                        if let Some(pos) = *nav_anchor_for_handle.borrow() {
+                            ed.set_insert_position(pos);
+                            ed.show_insert_position();
+                        }
+                        *nav_anchor_for_handle.borrow_mut() = None;
+                        *suppress_nav_for_handle.borrow_mut() = false;
+                        return true;
+                    }
+
                     if matches!(key, Key::Enter | Key::KPEnter)
                         && *suppress_enter_for_handle.borrow()
                     {
                         *suppress_enter_for_handle.borrow_mut() = false;
+                        return true;
+                    }
+                    if matches!(key, Key::Enter | Key::KPEnter)
+                        && *ctrl_enter_handled_for_handle.borrow()
+                    {
+                        *ctrl_enter_handled_for_handle.borrow_mut() = false;
                         return true;
                     }
 
@@ -481,7 +587,7 @@ impl SqlEditorWidget {
                                 | Key::Tab
                         )
                     {
-                        return false;
+                        return true;
                     }
 
                     // Handle typing - update intellisense filter
@@ -541,14 +647,30 @@ impl SqlEditorWidget {
                 Event::Shortcut => {
                     let key = fltk::app::event_key();
                     let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
+                    let state = fltk::app::event_state();
+                    let ctrl_or_cmd = state.contains(fltk::enums::Shortcut::Ctrl)
+                        || state.contains(fltk::enums::Shortcut::Command);
                     
                     // If intellisense is visible, consume Enter/Tab to prevent them from reaching other handlers
-                    if popup_visible && matches!(key, Key::Enter | Key::KPEnter | Key::Tab) {
+                    if popup_visible
+                        && matches!(
+                            key,
+                            Key::Up | Key::Down | Key::Enter | Key::KPEnter | Key::Tab
+                        )
+                    {
                         return true;
                     }
-                    
-                    // Otherwise default behavior
-                    ed.has_focus()
+
+                    if ctrl_or_cmd && matches!(key, Key::Enter | Key::KPEnter) {
+                        if *ctrl_enter_handled_for_handle.borrow() {
+                            return true;
+                        }
+                        *ctrl_enter_handled_for_handle.borrow_mut() = true;
+                        widget_for_shortcuts.execute_statement_at_cursor();
+                        return true;
+                    }
+
+                    false
                 }
                 Event::Paste => {
                     // Update syntax highlighting after paste
@@ -561,6 +683,7 @@ impl SqlEditorWidget {
                 _ => false,
             }
         });
+
     }
 
     fn trigger_intellisense(
@@ -626,7 +749,7 @@ impl SqlEditorWidget {
     /// Show quick describe dialog for a table (F4 functionality)
     fn show_quick_describe(conn: &oracle::Connection, object_name: &str) {
         use crate::db::ObjectBrowser;
-        use fltk::{enums::Color, prelude::*, text::TextDisplay, window::Window};
+        use fltk::{prelude::*, text::TextDisplay, window::Window};
 
         // Try to get table structure
         match ObjectBrowser::get_table_structure(conn, object_name) {
@@ -664,13 +787,13 @@ impl SqlEditorWidget {
                 let mut dialog = Window::default()
                     .with_size(600, 400)
                     .with_label(&format!("Describe: {}", object_name.to_uppercase()));
-                dialog.set_color(Color::from_rgb(45, 45, 48));
+                dialog.set_color(theme::panel_raised());
                 dialog.make_modal(true);
                 dialog.begin();
 
                 let mut display = TextDisplay::default().with_pos(10, 10).with_size(580, 340);
-                display.set_color(Color::from_rgb(30, 30, 30));
-                display.set_text_color(Color::from_rgb(220, 220, 220));
+                display.set_color(theme::editor_bg());
+                display.set_text_color(theme::text_primary());
                 display.set_text_font(fltk::enums::Font::Courier);
                 display.set_text_size(12);
 
@@ -682,8 +805,8 @@ impl SqlEditorWidget {
                     .with_pos(250, 360)
                     .with_size(100, 30)
                     .with_label("Close");
-                close_btn.set_color(Color::from_rgb(0, 122, 204));
-                close_btn.set_label_color(Color::White);
+                close_btn.set_color(theme::button_secondary());
+                close_btn.set_label_color(theme::text_primary());
 
                 let (sender, receiver) = mpsc::channel::<()>();
                 close_btn.set_callback(move |_| {
@@ -786,7 +909,7 @@ impl SqlEditorWidget {
     }
 
     fn show_plan_dialog(plan_text: &str) {
-        use fltk::{enums::Color, prelude::*, text::TextDisplay, window::Window};
+        use fltk::{prelude::*, text::TextDisplay, window::Window};
 
         let current_group = fltk::group::Group::try_current();
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
@@ -794,13 +917,13 @@ impl SqlEditorWidget {
         let mut dialog = Window::default()
             .with_size(800, 500)
             .with_label("Explain Plan");
-        dialog.set_color(Color::from_rgb(45, 45, 48));
+        dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
         dialog.begin();
 
         let mut display = TextDisplay::default().with_pos(10, 10).with_size(780, 440);
-        display.set_color(Color::from_rgb(30, 30, 30));
-        display.set_text_color(Color::from_rgb(220, 220, 220));
+        display.set_color(theme::editor_bg());
+        display.set_text_color(theme::text_primary());
         display.set_text_font(fltk::enums::Font::Courier);
         display.set_text_size(12);
 
@@ -812,8 +935,8 @@ impl SqlEditorWidget {
             .with_pos(690, 455)
             .with_size(100, 30)
             .with_label("Close");
-        close_btn.set_color(Color::from_rgb(0, 122, 204));
-        close_btn.set_label_color(Color::White);
+        close_btn.set_color(theme::button_secondary());
+        close_btn.set_label_color(theme::text_primary());
 
         let (sender, receiver) = mpsc::channel::<()>();
         close_btn.set_callback(move |_| {
@@ -837,6 +960,12 @@ impl SqlEditorWidget {
         }
     }
 
+    fn emit_status(&self, message: &str) {
+        if let Some(ref mut callback) = *self.status_callback.borrow_mut() {
+            callback(message);
+        }
+    }
+
     pub fn clear(&self) {
         let mut buffer = self.buffer.clone();
         buffer.set_text("");
@@ -846,13 +975,19 @@ impl SqlEditorWidget {
         let conn_guard = lock_connection(&self.connection);
         if !conn_guard.is_connected() {
             fltk::dialog::alert_default("Not connected to database");
+            self.emit_status("Commit failed: not connected");
             return;
         }
 
         if let Some(db_conn) = conn_guard.get_connection() {
             if let Err(err) = db_conn.commit() {
                 fltk::dialog::alert_default(&format!("Commit failed: {}", err));
+                self.emit_status("Commit failed");
+            } else {
+                self.emit_status("Committed");
             }
+        } else {
+            self.emit_status("Commit failed");
         }
     }
 
@@ -860,13 +995,19 @@ impl SqlEditorWidget {
         let conn_guard = lock_connection(&self.connection);
         if !conn_guard.is_connected() {
             fltk::dialog::alert_default("Not connected to database");
+            self.emit_status("Rollback failed: not connected");
             return;
         }
 
         if let Some(db_conn) = conn_guard.get_connection() {
             if let Err(err) = db_conn.rollback() {
                 fltk::dialog::alert_default(&format!("Rollback failed: {}", err));
+                self.emit_status("Rollback failed");
+            } else {
+                self.emit_status("Rolled back");
             }
+        } else {
+            self.emit_status("Rollback failed");
         }
     }
 
@@ -894,6 +1035,47 @@ impl SqlEditorWidget {
         F: FnMut(QueryResult) + 'static,
     {
         *self.execute_callback.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn set_status_callback<F>(&mut self, callback: F)
+    where
+        F: FnMut(&str) + 'static,
+    {
+        *self.status_callback.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn set_find_callback<F>(&mut self, callback: F)
+    where
+        F: FnMut() + 'static,
+    {
+        *self.find_callback.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn set_replace_callback<F>(&mut self, callback: F)
+    where
+        F: FnMut() + 'static,
+    {
+        *self.replace_callback.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn hide_intellisense_if_outside(&self, x: i32, y: i32) {
+        let mut popup = self.intellisense_popup.borrow_mut();
+        if !popup.is_visible() {
+            return;
+        }
+        if popup.contains_point(x, y) {
+            return;
+        }
+        popup.hide();
+        *self.completion_range.borrow_mut() = None;
+    }
+
+    pub fn hide_intellisense(&self) {
+        let mut popup = self.intellisense_popup.borrow_mut();
+        if popup.is_visible() {
+            popup.hide();
+        }
+        *self.completion_range.borrow_mut() = None;
     }
 
     #[allow(dead_code)]
@@ -974,15 +1156,589 @@ impl SqlEditorWidget {
         self.execute_sql(&sql);
     }
 
+    pub fn execute_statement_at_cursor(&self) {
+        let sql = self.buffer.text();
+        let cursor_pos = self.editor.insert_position() as usize;
+        if let Some(statement) = QueryExecutor::statement_at_cursor(&sql, cursor_pos) {
+            self.execute_sql(&statement);
+        } else {
+            fltk::dialog::alert_default("No SQL at cursor");
+        }
+    }
+
     pub fn execute_selected(&self) {
-        let buffer = self.buffer.clone();
+        let mut buffer = self.buffer.clone();
         if !buffer.selected() {
             fltk::dialog::alert_default("No SQL selected");
             return;
         }
 
+        let selection = buffer.selection_position();
+        let insert_pos = self.editor.insert_position();
         let sql = buffer.selection_text();
         self.execute_sql(&sql);
+        if let Some((start, end)) = selection {
+            buffer.select(start, end);
+            let mut editor = self.editor.clone();
+            editor.set_insert_position(insert_pos);
+            editor.show_insert_position();
+        }
+    }
+
+    pub fn format_selected_sql(&self) {
+        let mut buffer = self.buffer.clone();
+        let selection = buffer.selection_position();
+        let (start, end) = match selection {
+            Some((start, end)) if start != end => {
+                if start <= end {
+                    (start, end)
+                } else {
+                    (end, start)
+                }
+            }
+            _ => {
+                fltk::dialog::alert_default("No SQL selected");
+                return;
+            }
+        };
+
+        let selected = buffer.selection_text();
+        let formatted = Self::format_sql_basic(&selected);
+        if formatted == selected {
+            return;
+        }
+
+        buffer.replace(start, end, &formatted);
+        buffer.select(start, start + formatted.len() as i32);
+
+        let mut editor = self.editor.clone();
+        editor.set_insert_position(start + formatted.len() as i32);
+        editor.show_insert_position();
+        self.refresh_highlighting();
+    }
+
+    pub fn toggle_comment(&self) {
+        let mut buffer = self.buffer.clone();
+        let mut editor = self.editor.clone();
+        let selection = buffer.selection_position();
+        let had_selection = matches!(selection, Some((start, end)) if start != end);
+        let original_pos = editor.insert_position();
+
+        let (start, end) = if let Some((start, end)) = selection {
+            if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            }
+        } else {
+            let line_start = buffer.line_start(original_pos);
+            let line_end = buffer.line_end(original_pos);
+            (line_start, line_end)
+        };
+
+        let line_start = buffer.line_start(start);
+        let line_end = buffer.line_end(end);
+        let text = buffer.text_range(line_start, line_end).unwrap_or_default();
+        let ends_with_newline = text.ends_with('\n');
+        let lines: Vec<&str> = text.lines().collect();
+
+        let all_commented = lines
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .all(|line| line.trim_start().starts_with("--"));
+
+        let mut new_lines: Vec<String> = Vec::with_capacity(lines.len());
+        for line in lines {
+            if line.trim().is_empty() {
+                new_lines.push(line.to_string());
+                continue;
+            }
+
+            let prefix_len = line.len() - line.trim_start().len();
+            let prefix = &line[..prefix_len];
+            let trimmed = &line[prefix_len..];
+
+            if all_commented {
+                let uncommented = trimmed.strip_prefix("--").unwrap_or(trimmed);
+                let uncommented = if uncommented.starts_with(' ') {
+                    &uncommented[1..]
+                } else {
+                    uncommented
+                };
+                new_lines.push(format!("{}{}", prefix, uncommented));
+            } else if trimmed.starts_with("--") {
+                new_lines.push(line.to_string());
+            } else {
+                new_lines.push(format!("{}-- {}", prefix, trimmed));
+            }
+        }
+
+        let mut new_text = new_lines.join("\n");
+        if ends_with_newline {
+            new_text.push('\n');
+        }
+
+        buffer.replace(line_start, line_end, &new_text);
+        let new_end = line_start + new_text.len() as i32;
+        if had_selection {
+            buffer.select(line_start, new_end);
+            editor.set_insert_position(new_end);
+        } else {
+            let delta = new_text.len() as i32 - (line_end - line_start);
+            let new_pos = if original_pos >= line_start {
+                original_pos + delta
+            } else {
+                original_pos
+            };
+            editor.set_insert_position(new_pos);
+        }
+        editor.show_insert_position();
+        self.refresh_highlighting();
+    }
+
+    pub fn convert_selection_case(&self, to_upper: bool) {
+        let mut buffer = self.buffer.clone();
+        let selection = buffer.selection_position();
+        let (start, end) = match selection {
+            Some((start, end)) if start != end => {
+                if start <= end {
+                    (start, end)
+                } else {
+                    (end, start)
+                }
+            }
+            _ => {
+                fltk::dialog::alert_default("No SQL selected");
+                return;
+            }
+        };
+
+        let selected = buffer.selection_text();
+        let converted = if to_upper {
+            selected.to_uppercase()
+        } else {
+            selected.to_lowercase()
+        };
+
+        if converted == selected {
+            return;
+        }
+
+        buffer.replace(start, end, &converted);
+        buffer.select(start, start + converted.len() as i32);
+
+        let mut editor = self.editor.clone();
+        editor.set_insert_position(start + converted.len() as i32);
+        editor.show_insert_position();
+        self.refresh_highlighting();
+    }
+
+    fn format_sql_basic(sql: &str) -> String {
+        let mut formatted = String::new();
+        let statements = QueryExecutor::split_statements_with_blocks(sql);
+        if statements.is_empty() {
+            return String::new();
+        }
+
+        let trailing_semicolon = sql.trim_end().ends_with(';');
+        let statement_count = statements.len();
+        for (idx, statement) in statements.iter().enumerate() {
+            let formatted_statement = Self::format_statement(statement);
+            formatted.push_str(&formatted_statement);
+            if idx + 1 < statement_count || trailing_semicolon {
+                formatted.push(';');
+                if idx + 1 < statement_count {
+                    formatted.push('\n');
+                }
+            }
+        }
+
+        formatted
+    }
+
+    fn format_statement(statement: &str) -> String {
+        let clause_keywords = [
+            "SELECT", "FROM", "WHERE", "GROUP", "HAVING", "ORDER", "UNION", "INTERSECT", "MINUS",
+            "INSERT", "UPDATE", "DELETE", "MERGE", "VALUES", "SET", "INTO", "WITH",
+        ];
+        let join_modifiers = ["LEFT", "RIGHT", "FULL", "INNER", "CROSS"];
+        let join_keyword = "JOIN";
+        let condition_keywords = ["ON", "AND", "OR", "WHEN", "ELSE"];
+        let block_start = ["BEGIN", "DECLARE", "LOOP", "CASE"];
+        let block_end = ["END"];
+
+        let tokens = Self::tokenize_sql(statement);
+        let mut out = String::new();
+        let mut indent_level = 0usize;
+        let mut paren_depth = 0usize;
+        let mut at_line_start = true;
+        let mut needs_space = false;
+        let mut line_indent = 0usize;
+        let mut join_modifier_active = false;
+
+        let newline_with = |out: &mut String,
+                            indent_level: usize,
+                            extra: usize,
+                            at_line_start: &mut bool,
+                            needs_space: &mut bool,
+                            line_indent: &mut usize| {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            *line_indent = indent_level + extra;
+            *at_line_start = true;
+            *needs_space = false;
+        };
+
+        let ensure_indent =
+            |out: &mut String, at_line_start: &mut bool, line_indent: usize| {
+                if *at_line_start {
+                    out.push_str(&" ".repeat(line_indent * 4));
+                    *at_line_start = false;
+                }
+            };
+
+        let trim_trailing_space = |out: &mut String| {
+            while out.ends_with(' ') {
+                out.pop();
+            }
+        };
+
+        let mut idx = 0;
+        while idx < tokens.len() {
+            let token = tokens[idx].clone();
+            let next_word_upper = tokens[idx + 1..]
+                .iter()
+                .find_map(|t| match t {
+                    SqlToken::Word(w) => Some(w.to_uppercase()),
+                    _ => None,
+                });
+
+            match token {
+                SqlToken::Word(word) => {
+                    let upper = word.to_uppercase();
+                    if block_end.contains(&upper.as_str()) {
+                        if indent_level > 0 {
+                            indent_level -= 1;
+                        }
+                        newline_with(
+                            &mut out,
+                            indent_level,
+                            0,
+                            &mut at_line_start,
+                            &mut needs_space,
+                            &mut line_indent,
+                        );
+                    } else if clause_keywords.contains(&upper.as_str()) {
+                        newline_with(
+                            &mut out,
+                            indent_level,
+                            0,
+                            &mut at_line_start,
+                            &mut needs_space,
+                            &mut line_indent,
+                        );
+                    } else if condition_keywords.contains(&upper.as_str()) {
+                        newline_with(
+                            &mut out,
+                            indent_level,
+                            1,
+                            &mut at_line_start,
+                            &mut needs_space,
+                            &mut line_indent,
+                        );
+                    } else if upper == join_keyword {
+                        if !join_modifier_active {
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                1,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        }
+                        join_modifier_active = false;
+                    } else if join_modifiers.contains(&upper.as_str()) {
+                        if matches!(next_word_upper.as_deref(), Some("JOIN")) {
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                1,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                            join_modifier_active = true;
+                        }
+                    } else if block_start.contains(&upper.as_str()) {
+                        newline_with(
+                            &mut out,
+                            indent_level,
+                            0,
+                            &mut at_line_start,
+                            &mut needs_space,
+                            &mut line_indent,
+                        );
+                    }
+
+                    ensure_indent(&mut out, &mut at_line_start, line_indent);
+                    if needs_space {
+                        out.push(' ');
+                    }
+                    out.push_str(&word);
+                    needs_space = true;
+
+                    if block_start.contains(&upper.as_str()) {
+                        indent_level += 1;
+                    }
+                }
+                SqlToken::String(literal) => {
+                    ensure_indent(&mut out, &mut at_line_start, line_indent);
+                    if needs_space {
+                        out.push(' ');
+                    }
+                    out.push_str(&literal);
+                    needs_space = true;
+                    if literal.contains('\n') {
+                        at_line_start = true;
+                    }
+                }
+                SqlToken::Comment(comment) => {
+                    if !at_line_start {
+                        out.push(' ');
+                    }
+                    ensure_indent(&mut out, &mut at_line_start, line_indent);
+                    out.push_str(&comment);
+                    needs_space = true;
+                    if comment.ends_with('\n') || comment.contains('\n') {
+                        at_line_start = true;
+                        needs_space = false;
+                    }
+                }
+                SqlToken::Symbol(sym) => {
+                    match sym.as_str() {
+                        "," => {
+                            trim_trailing_space(&mut out);
+                            out.push(',');
+                            if paren_depth == 0 {
+                                newline_with(
+                                    &mut out,
+                                    indent_level,
+                                    1,
+                                    &mut at_line_start,
+                                    &mut needs_space,
+                                    &mut line_indent,
+                                );
+                            } else {
+                                out.push(' ');
+                                needs_space = false;
+                            }
+                        }
+                        ";" => {
+                            trim_trailing_space(&mut out);
+                            out.push(';');
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        }
+                        "(" => {
+                            if needs_space {
+                                out.push(' ');
+                            }
+                            out.push('(');
+                            paren_depth += 1;
+                            needs_space = false;
+                        }
+                        ")" => {
+                            trim_trailing_space(&mut out);
+                            out.push(')');
+                            if paren_depth > 0 {
+                                paren_depth -= 1;
+                            }
+                            needs_space = true;
+                        }
+                        "." => {
+                            trim_trailing_space(&mut out);
+                            out.push('.');
+                            needs_space = false;
+                        }
+                        _ => {
+                            ensure_indent(&mut out, &mut at_line_start, line_indent);
+                            if needs_space {
+                                out.push(' ');
+                            }
+                            out.push_str(&sym);
+                            needs_space = true;
+                        }
+                    }
+                }
+            }
+
+            idx += 1;
+        }
+
+        out.trim_end().to_string()
+    }
+
+    fn tokenize_sql(sql: &str) -> Vec<SqlToken> {
+        let mut tokens = Vec::new();
+        let chars: Vec<char> = sql.chars().collect();
+        let mut i = 0;
+        let mut current = String::new();
+
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
+
+        let flush_word = |current: &mut String, tokens: &mut Vec<SqlToken>| {
+            if !current.is_empty() {
+                tokens.push(SqlToken::Word(std::mem::take(current)));
+            }
+        };
+
+        while i < chars.len() {
+            let c = chars[i];
+            let next = if i + 1 < chars.len() {
+                Some(chars[i + 1])
+            } else {
+                None
+            };
+
+            if in_line_comment {
+                current.push(c);
+                if c == '\n' {
+                    tokens.push(SqlToken::Comment(std::mem::take(&mut current)));
+                    in_line_comment = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_block_comment {
+                current.push(c);
+                if c == '*' && next == Some('/') {
+                    current.push('/');
+                    tokens.push(SqlToken::Comment(std::mem::take(&mut current)));
+                    in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_single_quote {
+                current.push(c);
+                if c == '\'' {
+                    if next == Some('\'') {
+                        current.push('\'');
+                        i += 2;
+                        continue;
+                    }
+                    tokens.push(SqlToken::String(std::mem::take(&mut current)));
+                    in_single_quote = false;
+                    i += 1;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_double_quote {
+                current.push(c);
+                if c == '"' {
+                    if next == Some('"') {
+                        current.push('"');
+                        i += 2;
+                        continue;
+                    }
+                    tokens.push(SqlToken::String(std::mem::take(&mut current)));
+                    in_double_quote = false;
+                    i += 1;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if c.is_whitespace() {
+                flush_word(&mut current, &mut tokens);
+                i += 1;
+                continue;
+            }
+
+            if c == '-' && next == Some('-') {
+                flush_word(&mut current, &mut tokens);
+                in_line_comment = true;
+                current.push('-');
+                current.push('-');
+                i += 2;
+                continue;
+            }
+
+            if c == '/' && next == Some('*') {
+                flush_word(&mut current, &mut tokens);
+                in_block_comment = true;
+                current.push('/');
+                current.push('*');
+                i += 2;
+                continue;
+            }
+
+            if c == '\'' {
+                flush_word(&mut current, &mut tokens);
+                in_single_quote = true;
+                current.push('\'');
+                i += 1;
+                continue;
+            }
+
+            if c == '"' {
+                flush_word(&mut current, &mut tokens);
+                in_double_quote = true;
+                current.push('"');
+                i += 1;
+                continue;
+            }
+
+            if c.is_alphanumeric() || c == '_' || c == '$' || c == '#' {
+                current.push(c);
+                i += 1;
+                continue;
+            }
+
+            flush_word(&mut current, &mut tokens);
+
+            let sym = match (c, next) {
+                ('<', Some('=')) => Some("<=".to_string()),
+                ('>', Some('=')) => Some(">=".to_string()),
+                ('<', Some('>')) => Some("<>".to_string()),
+                ('!', Some('=')) => Some("!=".to_string()),
+                ('|', Some('|')) => Some("||".to_string()),
+                (':', Some('=')) => Some(":=".to_string()),
+                ('=', Some('>')) => Some("=>".to_string()),
+                _ => None,
+            };
+
+            if let Some(sym) = sym {
+                tokens.push(SqlToken::Symbol(sym));
+                i += 2;
+                continue;
+            }
+
+            tokens.push(SqlToken::Symbol(c.to_string()));
+            i += 1;
+        }
+
+        flush_word(&mut current, &mut tokens);
+        tokens
     }
 
     fn execute_sql(&self, sql: &str) {

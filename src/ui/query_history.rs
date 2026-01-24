@@ -1,7 +1,7 @@
 use fltk::{
     browser::HoldBrowser,
     button::Button,
-    enums::{Color, FrameType},
+    enums::FrameType,
     group::Flex,
     prelude::*,
     text::{TextBuffer, TextDisplay},
@@ -11,6 +11,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::utils::config::{QueryHistory, QueryHistoryEntry};
+use crate::ui::theme;
 
 /// Query history dialog for viewing and re-executing past queries
 pub struct QueryHistoryDialog;
@@ -29,7 +30,7 @@ impl QueryHistoryDialog {
         let mut dialog = Window::default()
             .with_size(800, 500)
             .with_label("Query History");
-        dialog.set_color(Color::from_rgb(45, 45, 48));
+        dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 
         let mut main_flex = Flex::default()
@@ -50,12 +51,12 @@ impl QueryHistoryDialog {
 
         let mut list_label = fltk::frame::Frame::default()
             .with_label("Query History (Most Recent First):");
-        list_label.set_label_color(Color::White);
+        list_label.set_label_color(theme::text_primary());
         list_flex.fixed(&list_label, 20);
 
         let mut browser = HoldBrowser::default();
-        browser.set_color(Color::from_rgb(30, 30, 30));
-        browser.set_selection_color(Color::from_rgb(0, 122, 204));
+        browser.set_color(theme::input_bg());
+        browser.set_selection_color(theme::selection_strong());
 
         // Populate browser with history entries
         for entry in history.queries.iter() {
@@ -79,14 +80,14 @@ impl QueryHistoryDialog {
 
         let mut preview_label = fltk::frame::Frame::default()
             .with_label("SQL Preview:");
-        preview_label.set_label_color(Color::White);
+        preview_label.set_label_color(theme::text_primary());
         preview_flex.fixed(&preview_label, 20);
 
         let preview_buffer = TextBuffer::default();
         let mut preview_display = TextDisplay::default();
         preview_display.set_buffer(preview_buffer.clone());
-        preview_display.set_color(Color::from_rgb(30, 30, 30));
-        preview_display.set_text_color(Color::from_rgb(220, 220, 220));
+        preview_display.set_color(theme::editor_bg());
+        preview_display.set_text_color(theme::text_primary());
         preview_display.set_text_font(fltk::enums::Font::Courier);
         preview_display.set_text_size(12);
 
@@ -104,23 +105,23 @@ impl QueryHistoryDialog {
         let mut use_btn = Button::default()
             .with_size(120, 30)
             .with_label("Use Query");
-        use_btn.set_color(Color::from_rgb(0, 122, 204));
-        use_btn.set_label_color(Color::White);
-        use_btn.set_frame(FrameType::FlatBox);
+        use_btn.set_color(theme::button_primary());
+        use_btn.set_label_color(theme::text_primary());
+        use_btn.set_frame(FrameType::RFlatBox);
 
         let mut clear_btn = Button::default()
             .with_size(120, 30)
             .with_label("Clear History");
-        clear_btn.set_color(Color::from_rgb(200, 50, 50));
-        clear_btn.set_label_color(Color::White);
-        clear_btn.set_frame(FrameType::FlatBox);
+        clear_btn.set_color(theme::button_danger());
+        clear_btn.set_label_color(theme::text_primary());
+        clear_btn.set_frame(FrameType::RFlatBox);
 
         let mut close_btn = Button::default()
             .with_size(80, 30)
             .with_label("Close");
-        close_btn.set_color(Color::from_rgb(100, 100, 100));
-        close_btn.set_label_color(Color::White);
-        close_btn.set_frame(FrameType::FlatBox);
+        close_btn.set_color(theme::button_subtle());
+        close_btn.set_label_color(theme::text_primary());
+        close_btn.set_frame(FrameType::RFlatBox);
 
         button_flex.fixed(&use_btn, 120);
         button_flex.fixed(&clear_btn, 120);

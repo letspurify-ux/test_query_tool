@@ -1,6 +1,6 @@
 use fltk::{
     app,
-    enums::{Color, Event, Key},
+    enums::{Event, Key},
     group::{Flex, FlexType},
     input::Input,
     prelude::*,
@@ -12,6 +12,7 @@ use std::rc::Rc;
 use std::thread;
 
 use crate::db::{lock_connection, ObjectBrowser, SharedConnection};
+use crate::ui::theme;
 
 #[derive(Clone)]
 pub enum SqlAction {
@@ -66,18 +67,18 @@ impl ObjectBrowserWidget {
 
         // Filter input with modern styling
         let mut filter_input = Input::default();
-        filter_input.set_color(Color::from_rgb(45, 45, 48)); // Modern input background
-        filter_input.set_text_color(Color::from_rgb(212, 212, 212));
+        filter_input.set_color(theme::input_bg());
+        filter_input.set_text_color(theme::text_primary());
         filter_input.set_tooltip("Type to filter objects...");
         flex.fixed(&filter_input, 28);
 
         // Tree view with modern styling
         let mut tree = Tree::default();
 
-        tree.set_color(Color::from_rgb(37, 37, 38)); // Modern tree background
-        tree.set_selection_color(Color::from_rgb(38, 79, 120)); // Selection
-        tree.set_item_label_fgcolor(Color::from_rgb(200, 200, 200)); // Item text
-        tree.set_connector_color(Color::from_rgb(80, 80, 80)); // Subtle connectors
+        tree.set_color(theme::panel_bg());
+        tree.set_selection_color(theme::selection_soft());
+        tree.set_item_label_fgcolor(theme::text_secondary());
+        tree.set_connector_color(theme::tree_connector());
         tree.set_select_mode(TreeSelect::Single);
 
         // Initialize tree structure
@@ -296,8 +297,8 @@ impl ObjectBrowserWidget {
             let mouse_y = fltk::app::event_y();
 
             let mut menu = fltk::menu::MenuButton::new(mouse_x, mouse_y, 0, 0, None);
-            menu.set_color(Color::from_rgb(45, 45, 48));
-            menu.set_text_color(Color::White);
+            menu.set_color(theme::panel_raised());
+            menu.set_text_color(theme::text_primary());
 
             match &item_info {
                 ObjectItem::Simple { object_type, .. } if object_type == "Tables" => {
@@ -488,12 +489,12 @@ impl ObjectBrowserWidget {
         use fltk::{prelude::*, text::TextDisplay, window::Window};
 
         let mut dialog = Window::default().with_size(700, 500).with_label(title);
-        dialog.set_color(Color::from_rgb(45, 45, 48));
+        dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 
         let mut display = TextDisplay::default().with_pos(10, 10).with_size(680, 440);
-        display.set_color(Color::from_rgb(30, 30, 30));
-        display.set_text_color(Color::from_rgb(220, 220, 220));
+        display.set_color(theme::editor_bg());
+        display.set_text_color(theme::text_primary());
         display.set_text_font(fltk::enums::Font::Courier);
         display.set_text_size(12);
 
@@ -505,8 +506,8 @@ impl ObjectBrowserWidget {
             .with_pos(300, 460)
             .with_size(100, 30)
             .with_label("Close");
-        close_btn.set_color(Color::from_rgb(0, 122, 204));
-        close_btn.set_label_color(Color::White);
+        close_btn.set_color(theme::button_secondary());
+        close_btn.set_label_color(theme::text_primary());
 
         let (sender, receiver) = std::sync::mpsc::channel::<()>();
         close_btn.set_callback(move |_| {

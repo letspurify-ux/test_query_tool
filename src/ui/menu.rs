@@ -1,8 +1,10 @@
 use fltk::{
-    enums::{Color, Shortcut},
+    enums::Shortcut,
     menu::{MenuBar, MenuFlag},
     prelude::*,
 };
+
+use crate::ui::theme;
 
 pub struct MenuBarBuilder;
 
@@ -13,8 +15,8 @@ fn forward_menu_callback(menu: &mut MenuBar) {
 impl MenuBarBuilder {
     pub fn build() -> MenuBar {
         let mut menu = MenuBar::default();
-        menu.set_color(Color::from_rgb(45, 45, 48));
-        menu.set_text_color(Color::White);
+        menu.set_color(theme::panel_raised());
+        menu.set_text_color(theme::text_primary());
         menu.set_id("main_menu");
 
         // File menu
@@ -82,25 +84,25 @@ impl MenuBarBuilder {
         );
         menu.add(
             "&Edit/Cu&t\t",
-            Shortcut::None,
+            Shortcut::Ctrl | Shortcut::Command | 'x',
             MenuFlag::Normal,
             forward_menu_callback,
         );
         menu.add(
             "&Edit/&Copy\t",
-            Shortcut::None,
+            Shortcut::Ctrl | Shortcut::Command | 'c',
             MenuFlag::Normal,
             forward_menu_callback,
         );
         menu.add(
             "&Edit/Copy with &Headers\t",
-            Shortcut::None,
+            Shortcut::Ctrl | Shortcut::Command | Shortcut::Shift | 'c',
             MenuFlag::Normal,
             forward_menu_callback,
         );
         menu.add(
             "&Edit/&Paste\t",
-            Shortcut::None,
+            Shortcut::Ctrl | Shortcut::Command | 'v',
             MenuFlag::Normal,
             forward_menu_callback,
         );
@@ -112,7 +114,7 @@ impl MenuBarBuilder {
         );
         menu.add(
             "&Edit/Select &All\t",
-            Shortcut::None,
+            Shortcut::Ctrl | Shortcut::Command | 'a',
             MenuFlag::Normal,
             forward_menu_callback,
         );
@@ -149,8 +151,14 @@ impl MenuBarBuilder {
             forward_menu_callback,
         );
         menu.add(
-            "&Query/Execute &Selected\t",
+            "&Query/Execute &Statement\t",
             Shortcut::Ctrl | fltk::enums::Key::Enter,
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&Query/Execute &Selected\t",
+            Shortcut::from_key(fltk::enums::Key::F9),
             MenuFlag::Normal,
             forward_menu_callback,
         );
@@ -217,18 +225,6 @@ impl MenuBarBuilder {
             forward_menu_callback,
         );
         menu.add(
-            "&Tools/Query &History...\t",
-            Shortcut::from_key(fltk::enums::Key::F9),
-            MenuFlag::Normal,
-            forward_menu_callback,
-        );
-        menu.add(
-            "&Tools/",
-            Shortcut::None,
-            MenuFlag::MenuDivider,
-            forward_menu_callback,
-        );
-        menu.add(
             "&Tools/&Feature Catalog...\t",
             Shortcut::None,
             MenuFlag::Normal,
@@ -271,14 +267,19 @@ impl MenuBarBuilder {
                     Ctrl+S - Save SQL File\n\
                     Ctrl+F - Find\n\
                     Ctrl+H - Replace\n\
+                    Ctrl+B - Format Selection\n\
+                    Ctrl+/ - Toggle Comment\n\
+                    Ctrl+U - Uppercase Selection\n\
+                    Ctrl+L - Lowercase Selection\n\
                     F3 - Find Next\n\
                     Ctrl+Space - Intellisense\n\
                     Ctrl+E - Export Results\n\
-                    F5 - Execute Query\n\
+                    Ctrl+Enter - Execute Statement\n\
+                    F5 - Execute Script\n\
+                    F9 - Execute Selected\n\
                     F6 - Explain Plan\n\
                     F7 - Commit\n\
                     F8 - Rollback\n\
-                    F9 - Query History\n\
                     F4 - Refresh Objects\n\
                     Ctrl+Q - Exit",
                 );

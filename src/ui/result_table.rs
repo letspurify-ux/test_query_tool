@@ -1,6 +1,6 @@
 use fltk::{
     app,
-    enums::{Color, Event, FrameType, Key, Shortcut},
+    enums::{Event, FrameType, Key, Shortcut},
     menu::MenuButton,
     prelude::*,
 };
@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::db::QueryResult;
+use crate::ui::theme;
 
 /// Minimum interval between UI updates during streaming
 const UI_UPDATE_INTERVAL: Duration = Duration::from_millis(500);
@@ -49,7 +50,7 @@ impl ResultTableWidget {
         let mut table = SmartTable::new(x, y, w, h, None).with_opts(Self::table_opts(0, 0));
 
         // Apply dark theme colors
-        table.set_color(Color::from_rgb(30, 30, 30));
+        table.set_color(theme::panel_bg());
         table.set_row_header(true);
         table.set_row_header_width(55);
         table.set_col_header(true);
@@ -200,13 +201,13 @@ impl ResultTableWidget {
             rows,
             cols,
             editable: false,
-            cell_color: Color::from_rgb(37, 37, 38),
-            cell_font_color: Color::from_rgb(220, 220, 220),
-            cell_selection_color: Color::from_rgb(38, 79, 120),
+            cell_color: theme::table_cell_bg(),
+            cell_font_color: theme::text_primary(),
+            cell_selection_color: theme::selection_soft(),
             header_frame: FrameType::FlatBox,
-            header_color: Color::from_rgb(45, 45, 48),
-            header_font_color: Color::from_rgb(240, 240, 240),
-            cell_border_color: Color::from_rgb(50, 50, 52),
+            header_color: theme::table_header_bg(),
+            header_font_color: theme::text_primary(),
+            cell_border_color: theme::table_border(),
             ..Default::default()
         }
     }
@@ -372,9 +373,9 @@ impl ResultTableWidget {
         // Give focus and potentially select cell under mouse for better UX
         let _ = table.take_focus();
         if let Some((row, col)) = Self::get_cell_at_mouse(&table) {
-            let (r1, r2, c1, c2) = table.get_selection();
+            let (row_top, col_left, row_bot, col_right) = table.get_selection();
             // If the cell under mouse is not already in the selection, select it
-            if row < r1 || row > r2 || col < c1 || col > c2 {
+            if row < row_top || row > row_bot || col < col_left || col > col_right {
                 table.set_selection(row, col, row, col);
                 table.redraw();
             }
@@ -385,8 +386,8 @@ impl ResultTableWidget {
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut menu = MenuButton::new(mouse_x, mouse_y, 0, 0, None);
-        menu.set_color(Color::from_rgb(45, 45, 48));
-        menu.set_text_color(Color::White);
+        menu.set_color(theme::panel_raised());
+        menu.set_text_color(theme::text_primary());
         menu.add_choice("Copy|Copy with Headers|Copy Cell|Copy All");
 
         if let Some(ref group) = current_group {
