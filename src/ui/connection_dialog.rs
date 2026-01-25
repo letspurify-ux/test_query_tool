@@ -34,7 +34,8 @@ impl ConnectionDialog {
 
         let mut dialog = Window::default()
             .with_size(500, 460)
-            .with_label("Connect to Oracle Database");
+            .with_label("Connect to Oracle Database")
+            .center_screen();
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 
@@ -43,7 +44,7 @@ impl ConnectionDialog {
             .with_size(460, 420);
         main_flex.set_type(fltk::group::FlexType::Column);
         main_flex.set_margin(10);
-        main_flex.set_spacing(8);
+        main_flex.set_spacing(5);
 
         // Saved Connections section
         let mut saved_flex = Flex::default();
@@ -66,7 +67,7 @@ impl ConnectionDialog {
         }
 
         let mut delete_btn = Button::default()
-            .with_size(60, 25)
+            .with_size(60, 20)
             .with_label("Delete");
         delete_btn.set_color(theme::button_danger());
         delete_btn.set_label_color(theme::text_primary());
@@ -173,26 +174,26 @@ impl ConnectionDialog {
         // Buttons
         let mut button_flex = Flex::default();
         button_flex.set_type(fltk::group::FlexType::Row);
-        button_flex.set_spacing(10);
+        button_flex.set_spacing(5);
 
         let _spacer = fltk::frame::Frame::default();
 
         let mut test_btn = Button::default()
-            .with_size(80, 30)
+            .with_size(80, 20)
             .with_label("Test");
         test_btn.set_color(theme::button_secondary());
         test_btn.set_label_color(theme::text_primary());
         test_btn.set_frame(FrameType::RFlatBox);
 
         let mut connect_btn = Button::default()
-            .with_size(80, 30)
+            .with_size(80, 20)
             .with_label("Connect");
         connect_btn.set_color(theme::button_primary());
         connect_btn.set_label_color(theme::text_primary());
         connect_btn.set_frame(FrameType::RFlatBox);
 
         let mut cancel_btn = Button::default()
-            .with_size(80, 30)
+            .with_size(80, 20)
             .with_label("Cancel");
         cancel_btn.set_color(theme::button_subtle());
         cancel_btn.set_label_color(theme::text_primary());

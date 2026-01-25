@@ -95,7 +95,7 @@ impl SqlEditorWidget {
         let mut group = Flex::default();
         group.set_type(FlexType::Column);
         group.set_margin(0);
-        group.set_spacing(0);
+        group.set_spacing(5);
         group.set_frame(FrameType::FlatBox);
         group.set_color(theme::panel_bg()); // Windows 11-inspired panel background
 
@@ -104,32 +104,32 @@ impl SqlEditorWidget {
         button_pack.set_type(PackType::Horizontal);
         button_pack.set_spacing(6);
 
-        let mut execute_btn = Button::default().with_size(90, 28).with_label("@> Execute");
+        let mut execute_btn = Button::default().with_size(90, 20).with_label("@> Execute");
         execute_btn.set_color(theme::button_primary());
         execute_btn.set_label_color(theme::text_primary());
         execute_btn.set_frame(FrameType::RFlatBox);
 
-        let mut cancel_btn = Button::default().with_size(80, 28).with_label("Cancel");
+        let mut cancel_btn = Button::default().with_size(80, 20).with_label("Cancel");
         cancel_btn.set_color(theme::button_warning());
         cancel_btn.set_label_color(theme::text_primary());
         cancel_btn.set_frame(FrameType::RFlatBox);
 
-        let mut explain_btn = Button::default().with_size(80, 28).with_label("Explain");
+        let mut explain_btn = Button::default().with_size(80, 20).with_label("Explain");
         explain_btn.set_color(theme::button_secondary());
         explain_btn.set_label_color(theme::text_primary());
         explain_btn.set_frame(FrameType::RFlatBox);
 
-        let mut clear_btn = Button::default().with_size(70, 28).with_label("Clear");
+        let mut clear_btn = Button::default().with_size(70, 20).with_label("Clear");
         clear_btn.set_color(theme::button_subtle());
         clear_btn.set_label_color(theme::text_secondary());
         clear_btn.set_frame(FrameType::RFlatBox);
 
-        let mut commit_btn = Button::default().with_size(80, 28).with_label("Commit");
+        let mut commit_btn = Button::default().with_size(80, 20).with_label("Commit");
         commit_btn.set_color(theme::button_success());
         commit_btn.set_label_color(theme::text_primary());
         commit_btn.set_frame(FrameType::RFlatBox);
 
-        let mut rollback_btn = Button::default().with_size(80, 28).with_label("Rollback");
+        let mut rollback_btn = Button::default().with_size(80, 20).with_label("Rollback");
         rollback_btn.set_color(theme::button_danger());
         rollback_btn.set_label_color(theme::text_primary());
         rollback_btn.set_frame(FrameType::RFlatBox);
@@ -1155,7 +1155,8 @@ impl SqlEditorWidget {
                 
                 let mut dialog = Window::default()
                     .with_size(600, 400)
-                    .with_label(&format!("Describe: {}", object_name.to_uppercase()));
+                    .with_label(&format!("Describe: {}", object_name.to_uppercase()))
+                    .center_screen();
                 dialog.set_color(theme::panel_raised());
                 dialog.make_modal(true);
                 dialog.begin();
@@ -1172,7 +1173,7 @@ impl SqlEditorWidget {
 
                 let mut close_btn = fltk::button::Button::default()
                     .with_pos(250, 360)
-                    .with_size(100, 30)
+                    .with_size(100, 20)
                     .with_label("Close");
                 close_btn.set_color(theme::button_secondary());
                 close_btn.set_label_color(theme::text_primary());
@@ -1285,7 +1286,8 @@ impl SqlEditorWidget {
 
         let mut dialog = Window::default()
             .with_size(800, 500)
-            .with_label("Explain Plan");
+            .with_label("Explain Plan")
+            .center_screen();
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
         dialog.begin();
@@ -1302,7 +1304,7 @@ impl SqlEditorWidget {
 
         let mut close_btn = fltk::button::Button::default()
             .with_pos(690, 455)
-            .with_size(100, 30)
+            .with_size(100, 20)
             .with_label("Close");
         close_btn.set_color(theme::button_secondary());
         close_btn.set_label_color(theme::text_primary());

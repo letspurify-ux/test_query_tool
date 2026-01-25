@@ -29,7 +29,8 @@ impl QueryHistoryDialog {
 
         let mut dialog = Window::default()
             .with_size(800, 500)
-            .with_label("Query History");
+            .with_label("Query History")
+            .center_screen();
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 
@@ -37,12 +38,12 @@ impl QueryHistoryDialog {
             .with_pos(10, 10)
             .with_size(780, 480);
         main_flex.set_type(fltk::group::FlexType::Column);
-        main_flex.set_spacing(10);
+        main_flex.set_spacing(5);
 
         // Top section with list and preview
         let mut content_flex = Flex::default();
         content_flex.set_type(fltk::group::FlexType::Row);
-        content_flex.set_spacing(10);
+        content_flex.set_spacing(5);
 
         // Left - History list
         let mut list_flex = Flex::default();
@@ -98,26 +99,26 @@ impl QueryHistoryDialog {
         // Bottom buttons
         let mut button_flex = Flex::default();
         button_flex.set_type(fltk::group::FlexType::Row);
-        button_flex.set_spacing(10);
+        button_flex.set_spacing(5);
 
         let _spacer = fltk::frame::Frame::default();
 
         let mut use_btn = Button::default()
-            .with_size(120, 30)
+            .with_size(120, 20)
             .with_label("Use Query");
         use_btn.set_color(theme::button_primary());
         use_btn.set_label_color(theme::text_primary());
         use_btn.set_frame(FrameType::RFlatBox);
 
         let mut clear_btn = Button::default()
-            .with_size(120, 30)
+            .with_size(120, 20)
             .with_label("Clear History");
         clear_btn.set_color(theme::button_danger());
         clear_btn.set_label_color(theme::text_primary());
         clear_btn.set_frame(FrameType::RFlatBox);
 
         let mut close_btn = Button::default()
-            .with_size(80, 30)
+            .with_size(80, 20)
             .with_label("Close");
         close_btn.set_color(theme::button_subtle());
         close_btn.set_label_color(theme::text_primary());

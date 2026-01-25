@@ -26,17 +26,18 @@ impl FeatureCatalogDialog {
 
         let mut dialog = Window::default()
             .with_size(900, 700)
-            .with_label("Feature Catalog");
+            .with_label("Feature Catalog")
+            .center_screen();
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 
         let mut main_flex = Flex::default().with_pos(10, 10).with_size(880, 680);
         main_flex.set_type(FlexType::Column);
-        main_flex.set_spacing(10);
+        main_flex.set_spacing(5);
 
         let mut controls_row = Flex::default();
         controls_row.set_type(FlexType::Row);
-        controls_row.set_spacing(10);
+        controls_row.set_spacing(5);
 
         let mut filter_label = Frame::default().with_label("Filter:");
         filter_label.set_label_color(theme::text_primary());
@@ -54,12 +55,12 @@ impl FeatureCatalogDialog {
         show_planned.set_label_color(theme::text_secondary());
         show_planned.set_value(true);
 
-        let mut reload_btn = Button::default().with_size(90, 30).with_label("Reload");
+        let mut reload_btn = Button::default().with_size(90, 20).with_label("Reload");
         reload_btn.set_color(theme::button_secondary());
         reload_btn.set_label_color(theme::text_primary());
         reload_btn.set_frame(FrameType::RFlatBox);
 
-        let mut clear_btn = Button::default().with_size(80, 30).with_label("Clear");
+        let mut clear_btn = Button::default().with_size(80, 20).with_label("Clear");
         clear_btn.set_color(theme::button_subtle());
         clear_btn.set_label_color(theme::text_primary());
         clear_btn.set_frame(FrameType::RFlatBox);
@@ -92,7 +93,7 @@ impl FeatureCatalogDialog {
         button_row.set_type(FlexType::Row);
 
         let _spacer = fltk::frame::Frame::default();
-        let mut close_btn = Button::default().with_size(80, 30).with_label("Close");
+        let mut close_btn = Button::default().with_size(80, 20).with_label("Close");
         close_btn.set_color(theme::button_subtle());
         close_btn.set_label_color(theme::text_primary());
         close_btn.set_frame(FrameType::RFlatBox);

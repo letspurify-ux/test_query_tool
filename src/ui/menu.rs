@@ -1,7 +1,11 @@
 use fltk::{
-    enums::Shortcut,
+    app,
+    button::Button,
+    enums::{FrameType, Shortcut},
     menu::{MenuBar, MenuFlag},
     prelude::*,
+    text::{TextBuffer, TextDisplay},
+    window::Window,
 };
 
 use crate::ui::theme;
@@ -10,6 +14,59 @@ pub struct MenuBarBuilder;
 
 fn forward_menu_callback(menu: &mut MenuBar) {
     menu.do_callback();
+}
+
+fn show_info_dialog(title: &str, content: &str, width: i32, height: i32) {
+    let current_group = fltk::group::Group::try_current();
+    fltk::group::Group::set_current(None::<&fltk::group::Group>);
+
+    let mut dialog = Window::default()
+        .with_size(width, height)
+        .with_label(title)
+        .center_screen();
+    dialog.set_color(theme::panel_raised());
+    dialog.make_modal(true);
+    dialog.begin();
+
+    let mut display = TextDisplay::default()
+        .with_pos(10, 10)
+        .with_size(width - 20, height - 60);
+    display.set_color(theme::editor_bg());
+    display.set_text_color(theme::text_primary());
+    display.set_text_font(fltk::enums::Font::Courier);
+    display.set_text_size(12);
+
+    let mut buffer = TextBuffer::default();
+    buffer.set_text(content);
+    display.set_buffer(buffer);
+
+    let button_width = 90;
+    let button_height = 20;
+    let button_x = (width - button_width) / 2;
+    let button_y = height - 35;
+    let mut close_btn = Button::default()
+        .with_pos(button_x, button_y)
+        .with_size(button_width, button_height)
+        .with_label("Close");
+    close_btn.set_color(theme::button_secondary());
+    close_btn.set_label_color(theme::text_primary());
+    close_btn.set_frame(FrameType::RFlatBox);
+
+    let mut dialog_handle = dialog.clone();
+    close_btn.set_callback(move |_| {
+        dialog_handle.hide();
+        app::awake();
+    });
+
+    dialog.end();
+    dialog.show();
+    fltk::group::Group::set_current(current_group.as_ref());
+
+    while dialog.shown() {
+        if app::wait_for(0.05).is_err() {
+            app::wait();
+        }
+    }
 }
 
 impl MenuBarBuilder {
@@ -291,8 +348,11 @@ impl MenuBarBuilder {
             Shortcut::None,
             MenuFlag::Normal,
             |_| {
-                fltk::dialog::message_default(
+                show_info_dialog(
+                    "About",
                     "Oracle Query Tool v0.1.0\n\nBuilt with Rust and FLTK\n\nA Toad-like Oracle database query tool.",
+                    420,
+                    240,
                 );
             },
         );
@@ -301,7 +361,8 @@ impl MenuBarBuilder {
             Shortcut::None,
             MenuFlag::Normal,
             |_| {
-                fltk::dialog::message_default(
+                show_info_dialog(
+                    "Keyboard Shortcuts",
                     "Keyboard Shortcuts:\n\n\
                     File:\n\
                     Ctrl+N - Connect\n\
@@ -342,6 +403,8 @@ impl MenuBarBuilder {
                     Ctrl+A - Select All\n\n\
                     Object Browser:\n\
                     Enter - Generate SELECT (tables/views)",
+                    640,
+                    640,
                 );
             },
         );

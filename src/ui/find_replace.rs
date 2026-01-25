@@ -52,14 +52,15 @@ impl FindReplaceDialog {
 
         let mut dialog = Window::default()
             .with_size(450, height)
-            .with_label(title);
+            .with_label(title)
+            .center_screen();
         dialog.set_color(theme::panel_raised());
 
         let mut main_flex = Flex::default()
             .with_pos(10, 10)
             .with_size(430, height - 20);
         main_flex.set_type(fltk::group::FlexType::Column);
-        main_flex.set_spacing(8);
+        main_flex.set_spacing(5);
 
         // Find input row
         let mut find_flex = Flex::default();
@@ -103,12 +104,12 @@ impl FindReplaceDialog {
         // Buttons row
         let mut button_flex = Flex::default();
         button_flex.set_type(fltk::group::FlexType::Row);
-        button_flex.set_spacing(10);
+        button_flex.set_spacing(5);
 
         let _spacer = fltk::frame::Frame::default();
 
         let mut find_next_btn = Button::default()
-            .with_size(90, 30)
+            .with_size(90, 20)
             .with_label("Find Next");
         find_next_btn.set_color(theme::button_primary());
         find_next_btn.set_label_color(theme::text_primary());
@@ -116,7 +117,7 @@ impl FindReplaceDialog {
 
         let replace_btn = if show_replace {
             let mut btn = Button::default()
-                .with_size(90, 30)
+                .with_size(90, 20)
                 .with_label("Replace");
             btn.set_color(theme::button_secondary());
             btn.set_label_color(theme::text_primary());
@@ -129,7 +130,7 @@ impl FindReplaceDialog {
 
         let replace_all_btn = if show_replace {
             let mut btn = Button::default()
-                .with_size(90, 30)
+                .with_size(90, 20)
                 .with_label("Replace All");
             btn.set_color(theme::button_secondary());
             btn.set_label_color(theme::text_primary());
@@ -141,7 +142,7 @@ impl FindReplaceDialog {
         };
 
         let mut close_btn = Button::default()
-            .with_size(70, 30)
+            .with_size(70, 20)
             .with_label("Close");
         close_btn.set_color(theme::button_subtle());
         close_btn.set_label_color(theme::text_primary());

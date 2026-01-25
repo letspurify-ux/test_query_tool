@@ -67,7 +67,8 @@ impl MainWindow {
         let connection = create_shared_connection();
         let mut window = Window::default()
             .with_size(1200, 800)
-            .with_label("Oracle Query Tool - Rust Edition");
+            .with_label("Oracle Query Tool - Rust Edition")
+            .center_screen();
         window.set_color(theme::window_bg());
 
         let mut main_flex = Flex::default_fill();
@@ -93,16 +94,17 @@ impl MainWindow {
         let mut result_toolbar = Flex::default();
         result_toolbar.set_type(FlexType::Row);
         result_toolbar.set_margin(6);
-        result_toolbar.set_spacing(6);
+        result_toolbar.set_spacing(5);
 
         let spacer = Frame::default();
         result_toolbar.resizable(&spacer);
 
-        let mut clear_tabs_btn = Button::default().with_size(110, 26).with_label("Clear Tabs");
+        let mut clear_tabs_btn = Button::default().with_size(110, 25).with_label("Clear Tabs");
         clear_tabs_btn.set_color(theme::button_subtle());
         clear_tabs_btn.set_label_color(theme::text_secondary());
         clear_tabs_btn.set_frame(FrameType::RFlatBox);
         clear_tabs_btn.set_tooltip("Remove all result tabs");
+        result_toolbar.fixed(&clear_tabs_btn, 110);
 
         result_toolbar.end();
         right_flex.fixed(&result_toolbar, 34);

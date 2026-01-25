@@ -64,7 +64,7 @@ impl ObjectBrowserWidget {
         // Create a flex container for the filter input and tree
         let mut flex = Flex::default().with_pos(x, y).with_size(w, h);
         flex.set_type(FlexType::Column);
-        flex.set_spacing(2);
+        flex.set_spacing(5);
 
         // Filter input with modern styling
         let mut filter_input = Input::default();
@@ -489,7 +489,10 @@ impl ObjectBrowserWidget {
     fn show_info_dialog(title: &str, content: &str) {
         use fltk::{prelude::*, text::TextDisplay, window::Window};
 
-        let mut dialog = Window::default().with_size(700, 500).with_label(title);
+        let mut dialog = Window::default()
+            .with_size(700, 500)
+            .with_label(title)
+            .center_screen();
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 
@@ -505,7 +508,7 @@ impl ObjectBrowserWidget {
 
         let mut close_btn = fltk::button::Button::default()
             .with_pos(300, 460)
-            .with_size(100, 30)
+            .with_size(100, 20)
             .with_label("Close");
         close_btn.set_color(theme::button_secondary());
         close_btn.set_label_color(theme::text_primary());
