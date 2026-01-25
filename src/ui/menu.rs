@@ -142,6 +142,42 @@ impl MenuBarBuilder {
             MenuFlag::Normal,
             forward_menu_callback,
         );
+        menu.add(
+            "&Edit/",
+            Shortcut::None,
+            MenuFlag::MenuDivider,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&Edit/&Format SQL\t",
+            Shortcut::Ctrl | Shortcut::Command | Shortcut::Shift | 'f',
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&Edit/Toggle &Comment\t",
+            Shortcut::Ctrl | Shortcut::Command | '/',
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&Edit/Upper&case Selection\t",
+            Shortcut::Ctrl | Shortcut::Command | 'u',
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&Edit/Lower&case Selection\t",
+            Shortcut::Ctrl | Shortcut::Command | 'l',
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&Edit/&Intellisense\t",
+            Shortcut::Ctrl | Shortcut::Command | ' ',
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
 
         // Query menu
         menu.add(
@@ -159,6 +195,12 @@ impl MenuBarBuilder {
         menu.add(
             "&Query/Execute &Selected\t",
             Shortcut::from_key(fltk::enums::Key::F9),
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&Query/&Quick Describe\t",
+            Shortcut::from_key(fltk::enums::Key::F4),
             MenuFlag::Normal,
             forward_menu_callback,
         );
@@ -196,7 +238,7 @@ impl MenuBarBuilder {
         // Tools menu
         menu.add(
             "&Tools/&Refresh Objects\t",
-            Shortcut::from_key(fltk::enums::Key::F4),
+            Shortcut::None,
             MenuFlag::Normal,
             forward_menu_callback,
         );
@@ -261,27 +303,45 @@ impl MenuBarBuilder {
             |_| {
                 fltk::dialog::message_default(
                     "Keyboard Shortcuts:\n\n\
-                    Ctrl+N - New Connection\n\
+                    File:\n\
+                    Ctrl+N - Connect\n\
                     Ctrl+D - Disconnect\n\
                     Ctrl+O - Open SQL File\n\
                     Ctrl+S - Save SQL File\n\
+                    Ctrl+Q - Exit\n\n\
+                    Edit (SQL Editor):\n\
+                    Ctrl+Z - Undo\n\
+                    Ctrl+Y - Redo\n\
+                    Ctrl+X - Cut\n\
+                    Ctrl+C - Copy\n\
+                    Ctrl+Shift+C - Copy with Headers\n\
+                    Ctrl+V - Paste\n\
+                    Ctrl+A - Select All\n\
                     Ctrl+F - Find\n\
+                    F3 - Find Next\n\
                     Ctrl+H - Replace\n\
-                    Ctrl+B - Format Selection\n\
+                    Ctrl+Shift+F - Format SQL\n\
                     Ctrl+/ - Toggle Comment\n\
                     Ctrl+U - Uppercase Selection\n\
                     Ctrl+L - Lowercase Selection\n\
-                    F3 - Find Next\n\
-                    Ctrl+Space - Intellisense\n\
-                    Ctrl+E - Export Results\n\
+                    Ctrl+Space - Intellisense\n\n\
+                    Query:\n\
                     Ctrl+Enter - Execute Statement\n\
                     F5 - Execute Script\n\
                     F9 - Execute Selected\n\
                     F6 - Explain Plan\n\
                     F7 - Commit\n\
                     F8 - Rollback\n\
-                    F4 - Refresh Objects\n\
-                    Ctrl+Q - Exit",
+                    F4 - Quick Describe (Editor)\n\n\
+                    Tools:\n\
+                    Ctrl+E - Export Results\n\
+                    Ctrl+H - Query History\n\n\
+                    Results Table:\n\
+                    Ctrl+C - Copy Selected Cells\n\
+                    Ctrl+Shift+C - Copy with Headers\n\
+                    Ctrl+A - Select All\n\n\
+                    Object Browser:\n\
+                    Enter - Generate SELECT (tables/views)",
                 );
             },
         );

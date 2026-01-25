@@ -122,9 +122,19 @@ impl ResultTableWidget {
                     let key = app::event_key();
                     let state = app::event_state();
                     let ctrl_or_cmd = state.contains(Shortcut::Ctrl) || state.contains(Shortcut::Command);
+                    let shift = state.contains(Shortcut::Shift);
 
                     if ctrl_or_cmd {
                         match key {
+                            k if (k == Key::from_char('c') || k == Key::from_char('C')) && shift => {
+                                // Ctrl+Shift+C - Copy with headers
+                                Self::copy_selected_with_headers(
+                                    &table_for_handle,
+                                    &headers_for_handle,
+                                    &full_data_for_handle,
+                                );
+                                return true;
+                            }
                             k if k == Key::from_char('a') || k == Key::from_char('A') => {
                                 // Ctrl+A - Select all
                                 let rows = table_for_handle.rows();
@@ -144,15 +154,6 @@ impl ResultTableWidget {
                                 );
                                 return true;
                             }
-                            k if k == Key::from_char('h') || k == Key::from_char('H') => {
-                                // Ctrl+H - Copy with headers
-                                Self::copy_selected_with_headers(
-                                    &table_for_handle,
-                                    &headers_for_handle,
-                                    &full_data_for_handle,
-                                );
-                                return true;
-                            }
                             _ => {}
                         }
                     }
@@ -162,7 +163,16 @@ impl ResultTableWidget {
                     let key = app::event_key();
                     let state = app::event_state();
                     let ctrl_or_cmd = state.contains(Shortcut::Ctrl) || state.contains(Shortcut::Command);
-                    
+                    let shift = state.contains(Shortcut::Shift);
+
+                    if ctrl_or_cmd && shift && (key == Key::from_char('c') || key == Key::from_char('C')) {
+                        Self::copy_selected_with_headers(
+                            &table_for_handle,
+                            &headers_for_handle,
+                            &full_data_for_handle,
+                        );
+                        return true;
+                    }
                     if ctrl_or_cmd && (key == Key::from_char('c') || key == Key::from_char('C')) {
                         Self::copy_selected_to_clipboard(
                             &table_for_handle,

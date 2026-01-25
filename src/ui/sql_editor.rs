@@ -17,7 +17,9 @@ use std::thread;
 use std::time::Duration;
 
 use crate::db::{lock_connection, QueryExecutor, QueryResult, SharedConnection};
-use crate::ui::intellisense::{get_word_at_cursor, IntellisenseData, IntellisensePopup};
+use crate::ui::intellisense::{
+    get_word_at_cursor, IntellisenseData, IntellisensePopup, SQL_KEYWORDS,
+};
 use crate::ui::query_history::QueryHistoryDialog;
 use crate::ui::syntax_highlight::{create_style_table, HighlightData, SqlHighlighter};
 use crate::ui::theme;
@@ -245,10 +247,14 @@ impl SqlEditorWidget {
     }
 
     fn setup_syntax_highlighting(&self) {
-        // Initial highlighting (empty)
-        self.highlighter
-            .borrow()
-            .highlight("", &mut self.style_buffer.clone());
+        let highlighter = self.highlighter.clone();
+        let mut style_buffer = self.style_buffer.clone();
+        let mut buffer = self.buffer.clone();
+        buffer.add_modify_callback2(move |buf, _pos, _ins, _del, _restyled, _deleted_text| {
+            let text = buf.text();
+            highlighter.borrow().highlight(&text, &mut style_buffer);
+        });
+        self.refresh_highlighting();
     }
 
     fn setup_intellisense(&mut self) {
@@ -258,7 +264,6 @@ impl SqlEditorWidget {
         let intellisense_popup = self.intellisense_popup.clone();
         let highlighter = self.highlighter.clone();
         let style_buffer = self.style_buffer.clone();
-        let connection_for_describe = self.connection.clone();
         let suppress_enter = Rc::new(RefCell::new(false));
         let suppress_nav = Rc::new(RefCell::new(false));
         let nav_anchor = Rc::new(RefCell::new(None::<i32>));
@@ -303,7 +308,6 @@ impl SqlEditorWidget {
         let intellisense_popup_for_handle = intellisense_popup.clone();
         let highlighter_for_handle = highlighter.clone();
         let mut style_buffer_for_handle = style_buffer.clone();
-        let connection_for_f4 = connection_for_describe.clone();
         let suppress_enter_for_handle = suppress_enter.clone();
         let suppress_nav_for_handle = suppress_nav.clone();
         let nav_anchor_for_handle = nav_anchor.clone();
@@ -410,8 +414,13 @@ impl SqlEditorWidget {
                     let state = fltk::app::event_state();
                     let ctrl_or_cmd = state.contains(fltk::enums::Shortcut::Ctrl)
                         || state.contains(fltk::enums::Shortcut::Command);
+                    let shift = state.contains(fltk::enums::Shortcut::Shift);
                     
                     if ctrl_or_cmd {
+                        if shift && (key == Key::from_char('f') || key == Key::from_char('F')) {
+                            widget_for_shortcuts.format_selected_sql();
+                            return true;
+                        }
                         match key {
                             k if k == Key::from_char(' ') => {
                                 // Ctrl+Space - Trigger intellisense
@@ -438,10 +447,6 @@ impl SqlEditorWidget {
                                 }
                                 return true;
                             }
-                            k if k == Key::from_char('b') || k == Key::from_char('B') => {
-                                widget_for_shortcuts.format_selected_sql();
-                                return true;
-                            }
                             k if k == Key::from_char('/') || k == Key::from_char('?') => {
                                 widget_for_shortcuts.toggle_comment();
                                 return true;
@@ -466,20 +471,7 @@ impl SqlEditorWidget {
 
                     // F4 - Quick Describe (handle on KeyDown for immediate response)
                     if key == Key::F4 {
-                        let text = buffer_for_handle.text();
-                        let cursor_pos = ed.insert_position() as usize;
-                        let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
-
-                        if !word.is_empty() {
-                            let conn_guard = lock_connection(&connection_for_f4);
-                            if conn_guard.is_connected() {
-                                if let Some(db_conn) = conn_guard.get_connection() {
-                                    Self::show_quick_describe(db_conn.as_ref(), &word);
-                                }
-                            } else {
-                                fltk::dialog::alert_default("Not connected to database");
-                            }
-                        }
+                        widget_for_shortcuts.quick_describe_at_cursor();
                         return true;
                     }
 
@@ -530,11 +522,8 @@ impl SqlEditorWidget {
                         return false;
                     }
                     // KeyUp fires AFTER the character is inserted into the buffer.
-                    // Update syntax highlighting and filter/show intellisense here.
+                    // Filter/show intellisense here.
                     let text = buffer_for_handle.text();
-                    highlighter_for_handle
-                        .borrow()
-                        .highlight(&text, &mut style_buffer_for_handle);
 
                     let key = fltk::app::event_key();
 
@@ -673,11 +662,6 @@ impl SqlEditorWidget {
                     false
                 }
                 Event::Paste => {
-                    // Update syntax highlighting after paste
-                    let text = buffer_for_handle.text();
-                    highlighter_for_handle
-                        .borrow()
-                        .highlight(&text, &mut style_buffer_for_handle);
                     false
                 }
                 _ => false,
@@ -1146,6 +1130,34 @@ impl SqlEditorWidget {
         self.editor.clone()
     }
 
+    pub fn show_intellisense(&self) {
+        Self::trigger_intellisense(
+            &self.editor,
+            &self.buffer,
+            &self.intellisense_data,
+            &self.intellisense_popup,
+            &self.completion_range,
+        );
+    }
+
+    pub fn quick_describe_at_cursor(&self) {
+        let text = self.buffer.text();
+        let cursor_pos = self.editor.insert_position() as usize;
+        let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
+        if word.is_empty() {
+            return;
+        }
+
+        let conn_guard = lock_connection(&self.connection);
+        if conn_guard.is_connected() {
+            if let Some(db_conn) = conn_guard.get_connection() {
+                Self::show_quick_describe(db_conn.as_ref(), &word);
+            }
+        } else {
+            fltk::dialog::alert_default("Not connected to database");
+        }
+    }
+
     pub fn focus(&mut self) {
         self.group.show();
         let _ = self.editor.take_focus();
@@ -1188,31 +1200,34 @@ impl SqlEditorWidget {
     pub fn format_selected_sql(&self) {
         let mut buffer = self.buffer.clone();
         let selection = buffer.selection_position();
-        let (start, end) = match selection {
+        let (start, end, source, select_formatted) = match selection {
             Some((start, end)) if start != end => {
-                if start <= end {
-                    (start, end)
-                } else {
-                    (end, start)
-                }
+                let (start, end) = if start <= end { (start, end) } else { (end, start) };
+                (start, end, buffer.selection_text(), true)
             }
             _ => {
-                fltk::dialog::alert_default("No SQL selected");
-                return;
+                let text = buffer.text();
+                let end = buffer.length();
+                (0, end, text, false)
             }
         };
 
-        let selected = buffer.selection_text();
-        let formatted = Self::format_sql_basic(&selected);
-        if formatted == selected {
+        let formatted = Self::format_sql_basic(&source);
+        if formatted == source {
             return;
         }
 
-        buffer.replace(start, end, &formatted);
-        buffer.select(start, start + formatted.len() as i32);
-
         let mut editor = self.editor.clone();
-        editor.set_insert_position(start + formatted.len() as i32);
+        let original_pos = editor.insert_position();
+        buffer.replace(start, end, &formatted);
+
+        if select_formatted {
+            buffer.select(start, start + formatted.len() as i32);
+            editor.set_insert_position(start + formatted.len() as i32);
+        } else {
+            let new_pos = (original_pos as usize).min(formatted.len()) as i32;
+            editor.set_insert_position(new_pos);
+        }
         editor.show_insert_position();
         self.refresh_highlighting();
     }
@@ -1363,6 +1378,7 @@ impl SqlEditorWidget {
         ];
         let join_modifiers = ["LEFT", "RIGHT", "FULL", "INNER", "CROSS"];
         let join_keyword = "JOIN";
+        let outer_keyword = "OUTER";
         let condition_keywords = ["ON", "AND", "OR", "WHEN", "ELSE"];
         let block_start = ["BEGIN", "DECLARE", "LOOP", "CASE"];
         let block_end = ["END"];
@@ -1370,7 +1386,8 @@ impl SqlEditorWidget {
         let tokens = Self::tokenize_sql(statement);
         let mut out = String::new();
         let mut indent_level = 0usize;
-        let mut paren_depth = 0usize;
+        let mut suppress_comma_break_depth = 0usize;
+        let mut paren_stack: Vec<bool> = Vec::new();
         let mut at_line_start = true;
         let mut needs_space = false;
         let mut line_indent = 0usize;
@@ -1417,6 +1434,7 @@ impl SqlEditorWidget {
             match token {
                 SqlToken::Word(word) => {
                     let upper = word.to_uppercase();
+                    let is_keyword = SQL_KEYWORDS.iter().any(|&kw| kw == upper);
                     if block_end.contains(&upper.as_str()) {
                         if indent_level > 0 {
                             indent_level -= 1;
@@ -1460,7 +1478,19 @@ impl SqlEditorWidget {
                         }
                         join_modifier_active = false;
                     } else if join_modifiers.contains(&upper.as_str()) {
-                        if matches!(next_word_upper.as_deref(), Some("JOIN")) {
+                        if matches!(next_word_upper.as_deref(), Some("JOIN" | "OUTER")) {
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                1,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                            join_modifier_active = true;
+                        }
+                    } else if upper == outer_keyword {
+                        if matches!(next_word_upper.as_deref(), Some("JOIN")) && !join_modifier_active {
                             newline_with(
                                 &mut out,
                                 indent_level,
@@ -1486,7 +1516,11 @@ impl SqlEditorWidget {
                     if needs_space {
                         out.push(' ');
                     }
-                    out.push_str(&word);
+                    if is_keyword {
+                        out.push_str(&upper);
+                    } else {
+                        out.push_str(&word);
+                    }
                     needs_space = true;
 
                     if block_start.contains(&upper.as_str()) {
@@ -1521,7 +1555,7 @@ impl SqlEditorWidget {
                         "," => {
                             trim_trailing_space(&mut out);
                             out.push(',');
-                            if paren_depth == 0 {
+                            if suppress_comma_break_depth == 0 {
                                 newline_with(
                                     &mut out,
                                     indent_level,
@@ -1548,19 +1582,50 @@ impl SqlEditorWidget {
                             );
                         }
                         "(" => {
+                            let is_subquery = matches!(
+                                next_word_upper.as_deref(),
+                                Some("SELECT" | "WITH" | "INSERT" | "UPDATE" | "DELETE" | "MERGE")
+                            );
                             if needs_space {
                                 out.push(' ');
                             }
                             out.push('(');
-                            paren_depth += 1;
+                            paren_stack.push(is_subquery);
+                            if is_subquery {
+                                indent_level += 1;
+                                newline_with(
+                                    &mut out,
+                                    indent_level,
+                                    0,
+                                    &mut at_line_start,
+                                    &mut needs_space,
+                                    &mut line_indent,
+                                );
+                            } else {
+                                suppress_comma_break_depth += 1;
+                            }
                             needs_space = false;
                         }
                         ")" => {
                             trim_trailing_space(&mut out);
-                            out.push(')');
-                            if paren_depth > 0 {
-                                paren_depth -= 1;
+                            let was_subquery = paren_stack.pop().unwrap_or(false);
+                            if was_subquery {
+                                if indent_level > 0 {
+                                    indent_level -= 1;
+                                }
+                                newline_with(
+                                    &mut out,
+                                    indent_level,
+                                    0,
+                                    &mut at_line_start,
+                                    &mut needs_space,
+                                    &mut line_indent,
+                                );
+                                ensure_indent(&mut out, &mut at_line_start, line_indent);
+                            } else if suppress_comma_break_depth > 0 {
+                                suppress_comma_break_depth -= 1;
                             }
+                            out.push(')');
                             needs_space = true;
                         }
                         "." => {

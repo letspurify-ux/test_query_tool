@@ -147,108 +147,134 @@ impl SqlHighlighter {
     }
 
     /// Generates the style string for the given text
+    ///
+    /// IMPORTANT: FLTK TextBuffer uses byte-based indexing, so the style buffer
+    /// must have one style character per byte, not per Unicode character.
+    /// For multi-byte characters (like Korean, Chinese, etc.), we repeat the
+    /// style character for each byte of the character.
     fn generate_styles(&self, text: &str) -> String {
-        let chars: Vec<char> = text.chars().collect();
-        let mut styles: Vec<char> = vec![STYLE_DEFAULT; chars.len()];
-        let mut i = 0;
+        // Create a style buffer with one entry per byte
+        let mut styles: Vec<char> = vec![STYLE_DEFAULT; text.len()];
 
-        while i < chars.len() {
+        // We need to track character position
+        let chars: Vec<char> = text.chars().collect();
+        let mut char_idx = 0usize;
+
+        // Helper to get byte offset for a character index
+        let char_byte_offsets: Vec<usize> = text
+            .char_indices()
+            .map(|(byte_idx, _)| byte_idx)
+            .chain(std::iter::once(text.len()))
+            .collect();
+
+        while char_idx < chars.len() {
+            let byte_start = char_byte_offsets[char_idx];
+
             // Check for single-line comment (--)
-            if i + 1 < chars.len() && chars[i] == '-' && chars[i + 1] == '-' {
-                let start = i;
-                while i < chars.len() && chars[i] != '\n' {
-                    i += 1;
+            if char_idx + 1 < chars.len() && chars[char_idx] == '-' && chars[char_idx + 1] == '-' {
+                let start_char = char_idx;
+                while char_idx < chars.len() && chars[char_idx] != '\n' {
+                    char_idx += 1;
                 }
-                for j in start..i {
-                    styles[j] = STYLE_COMMENT;
+                // Fill styles for all bytes in this range
+                let byte_end = char_byte_offsets[char_idx];
+                for b in char_byte_offsets[start_char]..byte_end {
+                    styles[b] = STYLE_COMMENT;
                 }
                 continue;
             }
 
             // Check for multi-line comment (/* */)
-            if i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '*' {
-                let start = i;
-                i += 2;
-                while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
-                    i += 1;
+            if char_idx + 1 < chars.len() && chars[char_idx] == '/' && chars[char_idx + 1] == '*' {
+                let start_char = char_idx;
+                char_idx += 2;
+                while char_idx + 1 < chars.len() && !(chars[char_idx] == '*' && chars[char_idx + 1] == '/') {
+                    char_idx += 1;
                 }
-                if i + 1 < chars.len() {
-                    i += 2; // Skip */
+                if char_idx + 1 < chars.len() {
+                    char_idx += 2; // Skip */
                 }
-                for j in start..i {
-                    styles[j] = STYLE_COMMENT;
+                let byte_end = char_byte_offsets[char_idx];
+                for b in char_byte_offsets[start_char]..byte_end {
+                    styles[b] = STYLE_COMMENT;
                 }
                 continue;
             }
 
             // Check for string literals ('...')
-            if chars[i] == '\'' {
-                let start = i;
-                i += 1;
-                while i < chars.len() {
-                    if chars[i] == '\'' {
+            if chars[char_idx] == '\'' {
+                let start_char = char_idx;
+                char_idx += 1;
+                while char_idx < chars.len() {
+                    if chars[char_idx] == '\'' {
                         // Check for escaped quote ('')
-                        if i + 1 < chars.len() && chars[i + 1] == '\'' {
-                            i += 2;
+                        if char_idx + 1 < chars.len() && chars[char_idx + 1] == '\'' {
+                            char_idx += 2;
                             continue;
                         }
-                        i += 1;
+                        char_idx += 1;
                         break;
                     }
-                    i += 1;
+                    char_idx += 1;
                 }
-                for j in start..i {
-                    styles[j] = STYLE_STRING;
+                let byte_end = char_byte_offsets[char_idx];
+                for b in char_byte_offsets[start_char]..byte_end {
+                    styles[b] = STYLE_STRING;
                 }
                 continue;
             }
 
             // Check for numbers
-            if chars[i].is_ascii_digit()
-                || (chars[i] == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
+            if chars[char_idx].is_ascii_digit()
+                || (chars[char_idx] == '.' && char_idx + 1 < chars.len() && chars[char_idx + 1].is_ascii_digit())
             {
-                let start = i;
-                let mut has_dot = chars[i] == '.';
-                i += 1;
-                while i < chars.len() {
-                    if chars[i].is_ascii_digit() {
-                        i += 1;
-                    } else if chars[i] == '.' && !has_dot {
+                let start_char = char_idx;
+                let mut has_dot = chars[char_idx] == '.';
+                char_idx += 1;
+                while char_idx < chars.len() {
+                    if chars[char_idx].is_ascii_digit() {
+                        char_idx += 1;
+                    } else if chars[char_idx] == '.' && !has_dot {
                         has_dot = true;
-                        i += 1;
+                        char_idx += 1;
                     } else {
                         break;
                     }
                 }
-                for j in start..i {
-                    styles[j] = STYLE_NUMBER;
+                let byte_end = char_byte_offsets[char_idx];
+                for b in char_byte_offsets[start_char]..byte_end {
+                    styles[b] = STYLE_NUMBER;
                 }
                 continue;
             }
 
             // Check for identifiers/keywords
-            if chars[i].is_alphabetic() || chars[i] == '_' {
-                let start = i;
-                while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '$') {
-                    i += 1;
+            if chars[char_idx].is_alphabetic() || chars[char_idx] == '_' {
+                let start_char = char_idx;
+                while char_idx < chars.len() && (chars[char_idx].is_alphanumeric() || chars[char_idx] == '_' || chars[char_idx] == '$') {
+                    char_idx += 1;
                 }
-                let word: String = chars[start..i].iter().collect();
+                let word: String = chars[start_char..char_idx].iter().collect();
                 let token_type = self.classify_word(&word);
-                for j in start..i {
-                    styles[j] = token_type.to_style_char();
+                let byte_end = char_byte_offsets[char_idx];
+                for b in char_byte_offsets[start_char]..byte_end {
+                    styles[b] = token_type.to_style_char();
                 }
                 continue;
             }
 
             // Check for operators
-            if is_operator(chars[i]) {
-                styles[i] = STYLE_OPERATOR;
-                i += 1;
+            if is_operator(chars[char_idx]) {
+                let byte_end = char_byte_offsets[char_idx + 1];
+                for b in byte_start..byte_end {
+                    styles[b] = STYLE_OPERATOR;
+                }
+                char_idx += 1;
                 continue;
             }
 
             // Default: move to next character
-            i += 1;
+            char_idx += 1;
         }
 
         styles.into_iter().collect()
@@ -324,5 +350,57 @@ mod tests {
 
         // Entire line should be comment style (E)
         assert!(styles.chars().all(|c| c == STYLE_COMMENT));
+    }
+
+    #[test]
+    fn test_multibyte_character_style_length() {
+        // FLTK TextBuffer uses byte-based indexing, so the style buffer
+        // must have one style character per byte, not per Unicode character.
+        let highlighter = SqlHighlighter::new();
+
+        // Korean text "한글" is 6 bytes in UTF-8 (3 bytes per character)
+        let text = "SELECT '한글' FROM dual";
+        let styles = highlighter.generate_styles(text);
+
+        // Style buffer length must equal byte length, not character length
+        assert_eq!(styles.len(), text.len(),
+            "Style buffer length ({}) must match text byte length ({})",
+            styles.len(), text.len());
+    }
+
+    #[test]
+    fn test_multibyte_string_highlighting() {
+        let highlighter = SqlHighlighter::new();
+
+        // Test that Korean characters in string literals are properly highlighted
+        let text = "'한글테스트'";
+        let styles = highlighter.generate_styles(text);
+
+        // All bytes should be string style (D)
+        assert_eq!(styles.len(), text.len());
+        assert!(styles.chars().all(|c| c == STYLE_STRING),
+            "All bytes of multi-byte string should have string style");
+    }
+
+    #[test]
+    fn test_multibyte_after_keyword() {
+        let highlighter = SqlHighlighter::new();
+
+        // Test that highlighting doesn't shift after multi-byte characters
+        let text = "SELECT '가' FROM dual";
+        let styles = highlighter.generate_styles(text);
+
+        assert_eq!(styles.len(), text.len());
+
+        // "SELECT" should be keyword (B) - first 6 bytes
+        assert!(styles[..6].chars().all(|c| c == STYLE_KEYWORD));
+
+        // Find "FROM" position and verify it's highlighted as keyword
+        let from_pos = match text.find("FROM") {
+            Some(pos) => pos,
+            None => panic!("FROM keyword not found in test text"),
+        };
+        assert!(styles[from_pos..from_pos + 4].chars().all(|c| c == STYLE_KEYWORD),
+            "FROM keyword should be highlighted correctly after multi-byte string");
     }
 }

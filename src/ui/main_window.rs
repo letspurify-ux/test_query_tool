@@ -393,6 +393,9 @@ impl MainWindow {
                             .sql_editor
                             .execute_statement_at_cursor(),
                         "Query/Execute Selected" => state_for_menu.borrow_mut().sql_editor.execute_selected(),
+                        "Query/Quick Describe" => {
+                            state_for_menu.borrow_mut().sql_editor.quick_describe_at_cursor();
+                        }
                         "Query/Explain Plan" => state_for_menu.borrow_mut().sql_editor.explain_current(),
                         "Query/Commit" => state_for_menu.borrow_mut().sql_editor.commit(),
                         "Query/Rollback" => state_for_menu.borrow_mut().sql_editor.rollback(),
@@ -444,6 +447,27 @@ impl MainWindow {
                                 (s.sql_editor.get_editor(), s.sql_buffer.clone(), s.popups.clone())
                             };
                             FindReplaceDialog::show_replace_with_registry(&mut editor, &mut buffer, popups);
+                        }
+                        "Edit/Format SQL" => {
+                            state_for_menu.borrow_mut().sql_editor.format_selected_sql();
+                        }
+                        "Edit/Toggle Comment" => {
+                            state_for_menu.borrow_mut().sql_editor.toggle_comment();
+                        }
+                        "Edit/Uppercase Selection" => {
+                            state_for_menu
+                                .borrow_mut()
+                                .sql_editor
+                                .convert_selection_case(true);
+                        }
+                        "Edit/Lowercase Selection" => {
+                            state_for_menu
+                                .borrow_mut()
+                                .sql_editor
+                                .convert_selection_case(false);
+                        }
+                        "Edit/Intellisense" => {
+                            state_for_menu.borrow().sql_editor.show_intellisense();
                         }
                         "Tools/Query History..." => {
                             let (mut buffer, popups) = {
