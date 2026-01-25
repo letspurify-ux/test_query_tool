@@ -1,5 +1,6 @@
 use fltk::{
     app,
+    button::Button,
     dialog::{FileDialog, FileDialogType},
     enums::FrameType,
     frame::Frame,
@@ -37,6 +38,7 @@ pub struct AppState {
     pub sql_editor: SqlEditorWidget,
     pub sql_buffer: TextBuffer,
     pub result_tabs: ResultTabsWidget,
+    pub result_tab_offset: usize,
     pub object_browser: ObjectBrowserWidget,
     pub status_bar: Frame,
     pub current_file: Rc<RefCell<Option<PathBuf>>>,
@@ -88,6 +90,23 @@ impl MainWindow {
         let sql_group = sql_editor.get_group().clone();
         right_flex.fixed(&sql_group, 250);
 
+        let mut result_toolbar = Flex::default();
+        result_toolbar.set_type(FlexType::Row);
+        result_toolbar.set_margin(6);
+        result_toolbar.set_spacing(6);
+
+        let spacer = Frame::default();
+        result_toolbar.resizable(&spacer);
+
+        let mut clear_tabs_btn = Button::default().with_size(110, 26).with_label("Clear Tabs");
+        clear_tabs_btn.set_color(theme::button_subtle());
+        clear_tabs_btn.set_label_color(theme::text_secondary());
+        clear_tabs_btn.set_frame(FrameType::RFlatBox);
+        clear_tabs_btn.set_tooltip("Remove all result tabs");
+
+        result_toolbar.end();
+        right_flex.fixed(&result_toolbar, 34);
+
         let result_tabs = ResultTabsWidget::new(0, 0, 900, 400);
         let result_widget = result_tabs.get_widget();
         right_flex.add(&result_widget);
@@ -108,11 +127,23 @@ impl MainWindow {
         window.make_resizable(true);
 
         let sql_buffer = sql_editor.get_buffer();
+        let result_tabs_for_clear = result_tabs.clone();
+        let sql_editor_for_clear = sql_editor.clone();
+        clear_tabs_btn.set_callback(move |_| {
+            if sql_editor_for_clear.is_query_running() {
+                fltk::dialog::alert_default("A query is running. Stop it before clearing tabs.");
+                return;
+            }
+            let mut tabs = result_tabs_for_clear.clone();
+            tabs.clear();
+        });
+
         let state = Rc::new(RefCell::new(AppState {
             connection,
             sql_editor: sql_editor.clone(),
             sql_buffer,
             result_tabs,
+            result_tab_offset: 0,
             object_browser,
             status_bar,
             current_file: Rc::new(RefCell::new(None)),
@@ -180,6 +211,9 @@ impl MainWindow {
                     editor.set_insert_position(insert_pos + text.len() as i32);
                     s.sql_editor.refresh_highlighting();
                 }
+                SqlAction::Execute(sql) => {
+                    s.sql_editor.execute_sql_text(&sql);
+                }
             }
         });
 
@@ -197,15 +231,28 @@ impl MainWindow {
         state_borrow.sql_editor.set_progress_callback(move |progress| {
             let mut s = state_for_progress.borrow_mut();
             match progress {
-                QueryProgress::BatchStart => { s.result_tabs.clear(); }
-                QueryProgress::StatementStart { index } => { s.result_tabs.start_statement(index, &format!("Result {}", index + 1)); }
-                QueryProgress::SelectStart { index, columns } => { s.result_tabs.start_streaming(index, &columns); }
-                QueryProgress::Rows { index, rows } => { s.result_tabs.append_rows(index, rows); }
+                QueryProgress::BatchStart => {
+                    s.result_tab_offset = s.result_tabs.tab_count();
+                }
+                QueryProgress::StatementStart { index } => {
+                    let tab_index = s.result_tab_offset + index;
+                    s.result_tabs
+                        .start_statement(tab_index, &format!("Result {}", tab_index + 1));
+                }
+                QueryProgress::SelectStart { index, columns } => {
+                    let tab_index = s.result_tab_offset + index;
+                    s.result_tabs.start_streaming(tab_index, &columns);
+                }
+                QueryProgress::Rows { index, rows } => {
+                    let tab_index = s.result_tab_offset + index;
+                    s.result_tabs.append_rows(tab_index, rows);
+                }
                 QueryProgress::StatementFinished { index, result, .. } => {
+                    let tab_index = s.result_tab_offset + index;
                     if result.is_select {
-                        s.result_tabs.finish_streaming(index);
+                        s.result_tabs.finish_streaming(tab_index);
                     } else {
-                        s.result_tabs.display_result(index, &result);
+                        s.result_tabs.display_result(tab_index, &result);
                     }
                 }
                 QueryProgress::BatchFinished => { s.result_tabs.finish_all_streaming(); }

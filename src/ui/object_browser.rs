@@ -18,6 +18,7 @@ use crate::ui::theme;
 pub enum SqlAction {
     Set(String),
     Insert(String),
+    Execute(String),
 }
 
 /// Callback type for executing SQL from object browser
@@ -336,7 +337,7 @@ impl ObjectBrowserWidget {
                             let sql = format!("SELECT * FROM {} WHERE ROWNUM <= 100", object_name);
                             drop(conn_guard);
                             if let Some(ref mut cb) = *sql_callback.borrow_mut() {
-                                cb(SqlAction::Set(sql));
+                                cb(SqlAction::Execute(sql));
                             }
                         }
                         ("View Structure", ObjectItem::Simple { object_name, .. }) => {

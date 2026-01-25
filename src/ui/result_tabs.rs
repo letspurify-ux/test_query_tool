@@ -66,6 +66,10 @@ impl ResultTabsWidget {
         *self.active_index.borrow_mut() = None;
     }
 
+    pub fn tab_count(&self) -> usize {
+        self.data.borrow().len()
+    }
+
     pub fn start_statement(&mut self, index: usize, label: &str) {
         let current_len = self.data.borrow().len();
         if index < current_len {

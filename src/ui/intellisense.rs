@@ -3,6 +3,7 @@ use fltk::{
     prelude::*,
     window::Window,
 };
+use std::collections::{HashMap, HashSet};
 use std::cell::RefCell;
 use std::rc::Rc;
 use crate::ui::theme;
@@ -56,7 +57,8 @@ pub const ORACLE_FUNCTIONS: &[&str] = &[
 #[derive(Clone)]
 pub struct IntellisenseData {
     pub tables: Vec<String>,
-    pub columns: Vec<(String, Vec<String>)>, // (table_name, [column_names])
+    pub columns: HashMap<String, Vec<String>>, // table_name -> column_names
+    pub columns_loading: HashSet<String>,
     pub views: Vec<String>,
     pub procedures: Vec<String>,
     pub functions: Vec<String>,
@@ -66,14 +68,20 @@ impl IntellisenseData {
     pub fn new() -> Self {
         Self {
             tables: Vec::new(),
-            columns: Vec::new(),
+            columns: HashMap::new(),
+            columns_loading: HashSet::new(),
             views: Vec::new(),
             procedures: Vec::new(),
             functions: Vec::new(),
         }
     }
 
-    pub fn get_all_suggestions(&self, prefix: &str) -> Vec<String> {
+    pub fn get_suggestions(
+        &self,
+        prefix: &str,
+        include_columns: bool,
+        column_tables: Option<&[String]>,
+    ) -> Vec<String> {
         let prefix_upper = prefix.to_uppercase();
         let mut suggestions = Vec::new();
 
@@ -119,11 +127,28 @@ impl IntellisenseData {
             }
         }
 
-        // Add all columns
-        for (_, cols) in &self.columns {
-            for col in cols {
-                if col.to_uppercase().starts_with(&prefix_upper) {
-                    suggestions.push(col.clone());
+        if include_columns {
+            match column_tables {
+                Some(tables) if !tables.is_empty() => {
+                    for table in tables {
+                        let key = table.to_uppercase();
+                        if let Some(cols) = self.columns.get(&key) {
+                            for col in cols {
+                                if col.to_uppercase().starts_with(&prefix_upper) {
+                                    suggestions.push(col.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    for cols in self.columns.values() {
+                        for col in cols {
+                            if col.to_uppercase().starts_with(&prefix_upper) {
+                                suggestions.push(col.clone());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -134,15 +159,30 @@ impl IntellisenseData {
         suggestions
     }
 
-    #[allow(dead_code)]
     pub fn get_columns_for_table(&self, table_name: &str) -> Vec<String> {
-        let table_upper = table_name.to_uppercase();
-        for (name, cols) in &self.columns {
-            if name.to_uppercase() == table_upper {
-                return cols.clone();
-            }
+        let key = table_name.to_uppercase();
+        self.columns.get(&key).cloned().unwrap_or_default()
+    }
+
+    pub fn set_columns_for_table(&mut self, table_name: &str, columns: Vec<String>) {
+        let key = table_name.to_uppercase();
+        self.columns_loading.remove(&key);
+        self.columns.insert(key, columns);
+    }
+
+    pub fn mark_columns_loading(&mut self, table_name: &str) -> bool {
+        let key = table_name.to_uppercase();
+        if self.columns.contains_key(&key) || self.columns_loading.contains(&key) {
+            return false;
         }
-        Vec::new()
+        self.columns_loading.insert(key);
+        true
+    }
+
+    pub fn is_known_relation(&self, name: &str) -> bool {
+        let upper = name.to_uppercase();
+        self.tables.iter().any(|t| t.to_uppercase() == upper)
+            || self.views.iter().any(|v| v.to_uppercase() == upper)
     }
 }
 

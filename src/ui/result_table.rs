@@ -398,7 +398,7 @@ impl ResultTableWidget {
         let mut menu = MenuButton::new(mouse_x, mouse_y, 0, 0, None);
         menu.set_color(theme::panel_raised());
         menu.set_text_color(theme::text_primary());
-        menu.add_choice("Copy|Copy with Headers|Copy Cell|Copy All");
+        menu.add_choice("Copy|Copy with Headers|Copy All");
 
         if let Some(ref group) = current_group {
             fltk::group::Group::set_current(Some(group));
@@ -411,7 +411,6 @@ impl ResultTableWidget {
                 "Copy with Headers" => {
                     Self::copy_selected_with_headers(&table, headers, full_data);
                 }
-                "Copy Cell" => Self::copy_current_cell(&table, full_data),
                 "Copy All" => Self::copy_all_to_clipboard(&table, headers, full_data),
                 _ => {}
             }
@@ -517,19 +516,6 @@ impl ResultTableWidget {
             cell_count
         } else {
             0
-        }
-    }
-
-    fn copy_current_cell(table: &SmartTable, full_data: &Rc<RefCell<Vec<Vec<String>>>>) {
-        let (row_top, col_left, _, _) = table.get_selection();
-        if row_top >= 0 && col_left >= 0 {
-            let val = full_data
-                .borrow()
-                .get(row_top as usize)
-                .and_then(|r| r.get(col_left as usize))
-                .cloned()
-                .unwrap_or_else(|| table.cell_value(row_top, col_left));
-            app::copy(&val);
         }
     }
 
