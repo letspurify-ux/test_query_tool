@@ -756,8 +756,9 @@ impl ResultTableWidget {
             let row_idx = current_rows + row_offset as i32;
             for (col_idx, cell) in row.iter().enumerate() {
                 if (col_idx as i32) < cols {
-                    let display_text = if cell.len() > 50 {
-                        format!("{}...", &cell[..47])
+                    let display_text = if cell.chars().count() > 50 {
+                        let truncated: String = cell.chars().take(47).collect();
+                        format!("{}...", truncated)
                     } else {
                         cell.clone()
                     };

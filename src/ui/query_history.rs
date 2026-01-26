@@ -253,8 +253,9 @@ fn truncate_sql(sql: &str, max_len: usize) -> String {
         .collect();
     let trimmed = normalized.trim();
 
-    if trimmed.len() > max_len {
-        format!("{}...", &trimmed[..max_len])
+    if trimmed.chars().count() > max_len {
+        let truncated: String = trimmed.chars().take(max_len).collect();
+        format!("{}...", truncated)
     } else {
         trimmed.to_string()
     }

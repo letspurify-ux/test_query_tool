@@ -257,23 +257,17 @@ impl FindReplaceDialog {
                         let text = buffer.text();
                         let start_pos = *search_pos.borrow();
 
-                        let found_pos = if case_sensitive {
-                            text[start_pos as usize..].find(&search_text)
-                        } else {
-                            text[start_pos as usize..]
-                                .to_lowercase()
-                                .find(&search_text.to_lowercase())
-                        };
-
-                        if let Some(pos) = found_pos {
-                            let absolute_pos = start_pos as usize + pos;
+                        if let Some((match_start, match_end)) =
+                            find_next_match(&text, &search_text, start_pos, case_sensitive)
+                        {
                             buffer.select(
-                                absolute_pos as i32,
-                                (absolute_pos + search_text.len()) as i32,
+                                match_start as i32,
+                                match_end as i32,
                             );
-                            editor.set_insert_position((absolute_pos + search_text.len()) as i32);
+                            editor.set_insert_position(match_end as i32);
                             editor.show_insert_position();
-                            *search_pos.borrow_mut() = (absolute_pos + 1) as i32;
+                            *search_pos.borrow_mut() =
+                                next_char_start(&text, match_start) as i32;
                         } else if start_pos > 0 {
                             *search_pos.borrow_mut() = 0;
                             fltk::dialog::message_default(
@@ -308,34 +302,45 @@ impl FindReplaceDialog {
                         replace_text,
                         case_sensitive,
                     } => {
+                        if search_text.is_empty() {
+                            fltk::dialog::message_default("Search text is empty");
+                            continue;
+                        }
                         let text = buffer.text();
                         let new_text = if case_sensitive {
                             text.replace(&search_text, &replace_text)
                         } else {
-                            let mut result = text.clone();
-                            let lower_text = text.to_lowercase();
-                            let lower_search = search_text.to_lowercase();
-                            let mut offset: i32 = 0;
-
-                            for (pos, _) in lower_text.match_indices(&lower_search) {
-                                let actual_pos = (pos as i32 + offset) as usize;
-                                result = format!(
-                                    "{}{}{}",
-                                    &result[..actual_pos],
-                                    replace_text,
-                                    &result[actual_pos + search_text.len()..]
-                                );
-                                offset += replace_text.len() as i32 - search_text.len() as i32;
+                            let mut result = String::with_capacity(text.len());
+                            let mut search_pos = 0usize;
+                            while let Some((match_start, match_end)) =
+                                find_next_match(&text, &search_text, search_pos as i32, false)
+                            {
+                                result.push_str(&text[search_pos..match_start]);
+                                result.push_str(&replace_text);
+                                search_pos = match_end;
+                                if search_pos >= text.len() {
+                                    break;
+                                }
                             }
+                            result.push_str(&text[search_pos..]);
                             result
                         };
 
                         let count = if case_sensitive {
                             text.matches(&search_text).count()
                         } else {
-                            text.to_lowercase()
-                                .matches(&search_text.to_lowercase())
-                                .count()
+                            let mut count = 0usize;
+                            let mut search_pos = 0usize;
+                            while let Some((_match_start, match_end)) =
+                                find_next_match(&text, &search_text, search_pos as i32, false)
+                            {
+                                count += 1;
+                                search_pos = match_end;
+                                if search_pos >= text.len() {
+                                    break;
+                                }
+                            }
+                            count
                         };
 
                         buffer.set_text(&new_text);
@@ -370,34 +375,23 @@ impl FindReplaceDialog {
         let current_pos = editor.insert_position();
         let text = buffer.text();
 
-        let found_pos = if case_sensitive {
-            text[current_pos as usize..].find(search_text)
-        } else {
-            text[current_pos as usize..]
-                .to_lowercase()
-                .find(&search_text.to_lowercase())
-        };
-
-        if let Some(pos) = found_pos {
-            let absolute_pos = current_pos as usize + pos;
+        if let Some((match_start, match_end)) =
+            find_next_match(&text, search_text, current_pos, case_sensitive)
+        {
             buffer.select(
-                absolute_pos as i32,
-                (absolute_pos + search_text.len()) as i32,
+                match_start as i32,
+                match_end as i32,
             );
-            editor.set_insert_position((absolute_pos + search_text.len()) as i32);
+            editor.set_insert_position(match_end as i32);
             editor.show_insert_position();
             true
         } else {
             // Try from beginning
-            let found_pos = if case_sensitive {
-                text.find(search_text)
-            } else {
-                text.to_lowercase().find(&search_text.to_lowercase())
-            };
-
-            if let Some(pos) = found_pos {
-                buffer.select(pos as i32, (pos + search_text.len()) as i32);
-                editor.set_insert_position((pos + search_text.len()) as i32);
+            if let Some((match_start, match_end)) =
+                find_next_match(&text, search_text, 0, case_sensitive)
+            {
+                buffer.select(match_start as i32, match_end as i32);
+                editor.set_insert_position(match_end as i32);
                 editor.show_insert_position();
                 true
             } else {
@@ -405,4 +399,81 @@ impl FindReplaceDialog {
             }
         }
     }
+}
+
+fn clamp_to_char_boundary(text: &str, mut idx: usize) -> usize {
+    if idx > text.len() {
+        idx = text.len();
+    }
+    while idx < text.len() && !text.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
+}
+
+fn next_char_start(text: &str, start: usize) -> usize {
+    if start >= text.len() {
+        return text.len();
+    }
+    let mut chars = text[start..].chars();
+    match chars.next() {
+        Some(ch) => start + ch.len_utf8(),
+        None => text.len(),
+    }
+}
+
+fn end_after_n_chars(text: &str, start: usize, n: usize) -> Option<usize> {
+    if n == 0 {
+        return Some(start);
+    }
+    let mut end = start;
+    let mut iter = text[start..].char_indices();
+    for _ in 0..n {
+        let (offset, ch) = iter.next()?;
+        end = start + offset + ch.len_utf8();
+    }
+    Some(end)
+}
+
+fn find_next_match(
+    text: &str,
+    search_text: &str,
+    start_pos: i32,
+    case_sensitive: bool,
+) -> Option<(usize, usize)> {
+    if search_text.is_empty() || text.is_empty() {
+        return None;
+    }
+    let start_pos = if start_pos < 0 { 0 } else { start_pos as usize };
+    let start = clamp_to_char_boundary(text, start_pos);
+    if case_sensitive {
+        let slice = &text[start..];
+        let mut offset = 0usize;
+        while let Some(pos) = slice[offset..].find(search_text) {
+            let match_start = start + offset + pos;
+            let match_end = match_start + search_text.len();
+            if text.is_char_boundary(match_start) && text.is_char_boundary(match_end) {
+                return Some((match_start, match_end));
+            }
+            offset += pos + 1;
+            if start + offset >= text.len() {
+                break;
+            }
+        }
+        return None;
+    }
+
+    let search_lower = search_text.to_lowercase();
+    let search_chars = search_text.chars().count();
+    for (offset, _) in text[start..].char_indices() {
+        let match_start = start + offset;
+        let Some(match_end) = end_after_n_chars(text, match_start, search_chars) else {
+            return None;
+        };
+        let candidate = &text[match_start..match_end];
+        if candidate.to_lowercase() == search_lower {
+            return Some((match_start, match_end));
+        }
+    }
+    None
 }
