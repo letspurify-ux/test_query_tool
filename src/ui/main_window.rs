@@ -248,11 +248,11 @@ impl MainWindow {
                 false
             }
             fltk::enums::Event::Resize => {
-                let (mut right_flex, sql_group) = {
-                    let s = state_for_window.borrow();
-                    (s.right_flex.clone(), s.sql_editor.get_group().clone())
-                };
-                MainWindow::adjust_query_layout_with(&mut right_flex, &sql_group);
+                if let Ok(s) = state_for_window.try_borrow() {
+                    let mut right_flex = s.right_flex.clone();
+                    let sql_group = s.sql_editor.get_group().clone();
+                    MainWindow::adjust_query_layout_with(&mut right_flex, &sql_group);
+                }
                 false
             }
             _ => false,
