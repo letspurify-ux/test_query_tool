@@ -216,6 +216,9 @@ impl QueryHistoryDialog {
             }
         }
 
+        // Remove dialog from popups to prevent memory leak
+        popups.borrow_mut().retain(|w| w.as_widget_ptr() != dialog.as_widget_ptr());
+
         let result = selected_sql.borrow().clone();
         result
     }
