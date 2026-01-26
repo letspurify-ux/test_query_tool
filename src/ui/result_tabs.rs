@@ -88,9 +88,10 @@ impl ResultTabsWidget {
     pub fn start_statement(&mut self, index: usize, label: &str) {
         let current_len = self.data.borrow().len();
         if index < current_len {
-            let _ = self
-                .tabs
-                .set_value(&self.data.borrow()[index].group);
+            // Extract the group before calling set_value to avoid re-entrant borrow
+            // when the tabs callback fires
+            let group = self.data.borrow()[index].group.clone();
+            let _ = self.tabs.set_value(&group);
             *self.active_index.borrow_mut() = Some(index);
             return;
         }
@@ -116,9 +117,10 @@ impl ResultTabsWidget {
 
         self.data.borrow_mut().push(ResultTab { group, table });
         let new_index = self.data.borrow().len().saturating_sub(1);
-        let _ = self
-            .tabs
-            .set_value(&self.data.borrow()[new_index].group);
+        // Extract the group before calling set_value to avoid re-entrant borrow
+        // when the tabs callback fires
+        let group = self.data.borrow()[new_index].group.clone();
+        let _ = self.tabs.set_value(&group);
         *self.active_index.borrow_mut() = Some(new_index);
     }
 
