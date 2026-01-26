@@ -1,5 +1,0 @@
-[env]
-DYLD_LIBRARY_PATH = "/opt/homebrew/Cellar/instantclient-basic/19.8.0.0.0dbru/lib"
-
-[build]
-target = "x86_64-apple-darwin"
