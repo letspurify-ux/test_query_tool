@@ -277,13 +277,13 @@ impl SqlEditorWidget {
             }
 
             // Reschedule for next poll
-            let receiver = receiver.clone();
-            let progress_callback = progress_callback.clone();
-            let query_running = query_running.clone();
-            let execute_callback = execute_callback.clone();
-
-            app::add_timeout(0.05, move || {
-                schedule_poll(receiver, progress_callback, query_running, execute_callback);
+            app::add_timeout3(0.05, move |_| {
+                schedule_poll(
+                    Rc::clone(&receiver),
+                    Rc::clone(&progress_callback),
+                    Rc::clone(&query_running),
+                    Rc::clone(&execute_callback),
+                );
             });
         }
 
@@ -312,11 +312,8 @@ impl SqlEditorWidget {
             }
 
             // Reschedule for next poll
-            let receiver = receiver.clone();
-            let intellisense_data = intellisense_data.clone();
-
-            app::add_timeout(0.05, move || {
-                schedule_poll(receiver, intellisense_data);
+            app::add_timeout3(0.05, move |_| {
+                schedule_poll(Rc::clone(&receiver), Rc::clone(&intellisense_data));
             });
         }
 

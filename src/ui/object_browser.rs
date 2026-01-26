@@ -152,7 +152,7 @@ impl ObjectBrowserWidget {
     }
 
     fn setup_refresh_handler(&mut self, refresh_receiver: std::sync::mpsc::Receiver<ObjectCache>) {
-        let mut tree = self.tree.clone();
+        let tree = self.tree.clone();
         let object_cache = self.object_cache.clone();
         let filter_input = self.filter_input.clone();
 
@@ -178,13 +178,13 @@ impl ObjectBrowserWidget {
             }
 
             // Reschedule for next poll
-            let receiver = receiver.clone();
-            let tree = tree.clone();
-            let object_cache = object_cache.clone();
-            let filter_input = filter_input.clone();
-
-            app::add_timeout(0.05, move || {
-                schedule_poll(receiver, tree, object_cache, filter_input);
+            app::add_timeout3(0.05, move |_| {
+                schedule_poll(
+                    Rc::clone(&receiver),
+                    tree.clone(),
+                    Rc::clone(&object_cache),
+                    filter_input.clone(),
+                );
             });
         }
 
