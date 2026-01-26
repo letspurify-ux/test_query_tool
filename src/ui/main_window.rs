@@ -45,6 +45,7 @@ pub struct AppState {
     pub last_result: Rc<RefCell<Option<QueryResult>>>,
     pub popups: Rc<RefCell<Vec<Window>>>,
     pub window: Window,
+    pub right_flex: Flex,
 }
 
 pub struct MainWindow {
@@ -147,9 +148,26 @@ impl MainWindow {
             last_result: Rc::new(RefCell::new(None)),
             popups: Rc::new(RefCell::new(Vec::new())),
             window,
+            right_flex: right_flex.clone(),
         }));
 
+        {
+            let mut state_borrow = state.borrow_mut();
+            Self::adjust_query_layout(&mut state_borrow);
+        }
+
         Self { state }
+    }
+
+    fn adjust_query_layout(state: &mut AppState) {
+        let right_height = state.right_flex.h();
+        if right_height <= 0 {
+            return;
+        }
+        let desired_height = ((right_height as f32) * 0.4).round() as i32;
+        let sql_group = state.sql_editor.get_group();
+        state.right_flex.fixed(sql_group, desired_height);
+        state.right_flex.layout();
     }
 
     pub fn setup_callbacks(&mut self) {
@@ -215,13 +233,19 @@ impl MainWindow {
         });
 
         let state_for_window = state.clone();
-        state_borrow.window.handle(move |_w, ev| {
-            if ev == fltk::enums::Event::Push {
+        state_borrow.window.handle(move |_w, ev| match ev {
+            fltk::enums::Event::Push => {
                 let s = state_for_window.borrow();
                 s.sql_editor
                     .hide_intellisense_if_outside(app::event_x_root(), app::event_y_root());
+                false
             }
-            false
+            fltk::enums::Event::Resize => {
+                let mut s = state_for_window.borrow_mut();
+                MainWindow::adjust_query_layout(&mut s);
+                false
+            }
+            _ => false,
         });
 
         let state_for_progress = state.clone();
