@@ -166,7 +166,7 @@ impl MainWindow {
         }
         let desired_height = ((right_height as f32) * 0.4).round() as i32;
         let sql_group = state.sql_editor.get_group();
-        state.right_flex.fixed(&sql_group, desired_height);
+        state.right_flex.fixed(sql_group, desired_height);
         state.right_flex.layout();
     }
 
