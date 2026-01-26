@@ -2326,6 +2326,7 @@ impl SqlEditorWidget {
 
                     let mut buffered_rows: Vec<Vec<String>> = Vec::new();
                     let mut last_flush = std::time::Instant::now();
+                    let statement_start = std::time::Instant::now();
                     let mut timed_out = false;
 
                     let mut result = if is_select {
@@ -2344,6 +2345,13 @@ impl SqlEditorWidget {
                                 app::awake();
                             },
                             &mut |row| {
+                                // Check client-side timeout during row streaming
+                                if let Some(timeout_duration) = query_timeout {
+                                    if statement_start.elapsed() >= timeout_duration {
+                                        return false; // Stop fetching
+                                    }
+                                }
+
                                 buffered_rows.push(row);
                                 if last_flush.elapsed() >= Duration::from_secs(1) {
                                     let rows = std::mem::take(&mut buffered_rows);
@@ -2351,9 +2359,16 @@ impl SqlEditorWidget {
                                     app::awake();
                                     last_flush = std::time::Instant::now();
                                 }
+                                true // Continue fetching
                             },
                         ) {
-                            Ok(result) => result,
+                            Ok((mut query_result, was_cancelled)) => {
+                                if was_cancelled {
+                                    timed_out = true;
+                                    query_result.message = Self::timeout_message(query_timeout);
+                                }
+                                query_result
+                            }
                             Err(err) => {
                                 timed_out = Self::is_timeout_error(&err);
                                 let message = if timed_out {
