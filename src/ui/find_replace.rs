@@ -350,6 +350,9 @@ impl FindReplaceDialog {
                 }
             }
         }
+
+        // Remove dialog from popups to prevent memory leak
+        popups.borrow_mut().retain(|w| w.as_widget_ptr() != dialog.as_widget_ptr());
     }
 
     /// Find next occurrence (for F3 shortcut)
