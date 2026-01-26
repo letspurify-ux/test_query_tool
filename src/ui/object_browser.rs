@@ -156,14 +156,40 @@ impl ObjectBrowserWidget {
         let object_cache = self.object_cache.clone();
         let filter_input = self.filter_input.clone();
 
-        app::add_idle3(move |_| {
-            while let Ok(cache) = refresh_receiver.try_recv() {
-                *object_cache.borrow_mut() = cache.clone();
-                let filter_text = filter_input.value().to_lowercase();
-                ObjectBrowserWidget::populate_tree(&mut tree, &cache, &filter_text);
-                tree.redraw();
+        // Wrap receiver in Rc<RefCell> to share across timeout callbacks
+        let receiver: Rc<RefCell<std::sync::mpsc::Receiver<ObjectCache>>> =
+            Rc::new(RefCell::new(refresh_receiver));
+
+        fn schedule_poll(
+            receiver: Rc<RefCell<std::sync::mpsc::Receiver<ObjectCache>>>,
+            mut tree: Tree,
+            object_cache: Rc<RefCell<ObjectCache>>,
+            filter_input: Input,
+        ) {
+            // Process any pending messages
+            {
+                let r = receiver.borrow();
+                while let Ok(cache) = r.try_recv() {
+                    *object_cache.borrow_mut() = cache.clone();
+                    let filter_text = filter_input.value().to_lowercase();
+                    ObjectBrowserWidget::populate_tree(&mut tree, &cache, &filter_text);
+                    tree.redraw();
+                }
             }
-        });
+
+            // Reschedule for next poll
+            let receiver = receiver.clone();
+            let tree = tree.clone();
+            let object_cache = object_cache.clone();
+            let filter_input = filter_input.clone();
+
+            app::add_timeout(0.05, move || {
+                schedule_poll(receiver, tree, object_cache, filter_input);
+            });
+        }
+
+        // Start polling
+        schedule_poll(receiver, tree, object_cache, filter_input);
     }
 
     fn setup_callbacks(&mut self) {
