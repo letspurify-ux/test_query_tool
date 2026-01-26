@@ -239,6 +239,12 @@ impl MainWindow {
 
         let state_for_window = state.clone();
         state_borrow.window.handle(move |_w, ev| match ev {
+            fltk::enums::Event::KeyDown => {
+                if app::event_key() == fltk::enums::Key::Escape {
+                    return true;
+                }
+                false
+            }
             fltk::enums::Event::Push => {
                 let sql_editor = {
                     let s = state_for_window.borrow();
