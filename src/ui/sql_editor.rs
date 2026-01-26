@@ -23,7 +23,7 @@ use crate::ui::intellisense::{
     SQL_KEYWORDS,
 };
 use crate::ui::query_history::QueryHistoryDialog;
-use crate::ui::syntax_highlight::{create_style_table, HighlightData, SqlHighlighter};
+use crate::ui::syntax_highlight::{create_style_table, HighlightData, SqlHighlighter, STYLE_DEFAULT};
 use crate::ui::theme;
 
 #[derive(Clone)]
@@ -362,8 +362,17 @@ impl SqlEditorWidget {
         let mut style_buffer = self.style_buffer.clone();
         let mut buffer = self.buffer.clone();
         let mut editor = self.editor.clone();
-        buffer.add_modify_callback2(move |buf, _pos, _ins, _del, _restyled, _deleted_text| {
+        buffer.add_modify_callback2(move |buf, pos, ins, del, _restyled, _deleted_text| {
             let text = buf.text();
+            if del > 0 {
+                style_buffer.remove(pos, pos + del);
+            }
+            if ins > 0 {
+                let insert_styles = std::iter::repeat(STYLE_DEFAULT)
+                    .take(ins as usize)
+                    .collect::<String>();
+                style_buffer.insert(pos, &insert_styles);
+            }
             let cursor_pos = editor.insert_position().max(0) as usize;
             highlighter
                 .borrow()
