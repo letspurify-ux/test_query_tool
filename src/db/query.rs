@@ -315,15 +315,15 @@ impl QueryExecutor {
         sql: &str,
         mut on_select_start: F,
         mut on_row: G,
-    ) -> Result<QueryResult, OracleError>
+    ) -> Result<(QueryResult, bool), OracleError>
     where
         F: FnMut(&[ColumnInfo]),
-        G: FnMut(Vec<String>),
+        G: FnMut(Vec<String>) -> bool,
     {
         let statements = Self::split_statements_with_blocks(sql);
 
         if statements.is_empty() {
-            return Ok(QueryResult {
+            return Ok((QueryResult {
                 sql: sql.to_string(),
                 columns: vec![],
                 rows: vec![],
@@ -331,7 +331,7 @@ impl QueryExecutor {
                 execution_time: Duration::from_secs(0),
                 message: "No statements to execute".to_string(),
                 is_select: false,
-            });
+            }, false));
         }
 
         if statements.len() == 1 {
@@ -345,10 +345,10 @@ impl QueryExecutor {
                 );
             }
 
-            return Self::execute(conn, statement);
+            return Ok((Self::execute(conn, statement)?, false));
         }
 
-        Self::execute_batch(conn, sql)
+        Ok((Self::execute_batch(conn, sql)?, false))
     }
 
     /// Split SQL text into individual statements by semicolons.
@@ -960,15 +960,18 @@ impl QueryExecutor {
         ))
     }
 
+    /// Execute a SELECT statement with streaming results.
+    /// on_row returns true to continue, false to stop fetching.
+    /// Returns (QueryResult, was_cancelled) tuple.
     pub fn execute_select_streaming<F, G>(
         conn: &Connection,
         sql: &str,
         on_select_start: &mut F,
         on_row: &mut G,
-    ) -> Result<QueryResult, OracleError>
+    ) -> Result<(QueryResult, bool), OracleError>
     where
         F: FnMut(&[ColumnInfo]),
-        G: FnMut(Vec<String>),
+        G: FnMut(Vec<String>) -> bool,
     {
         let start = Instant::now();
         let mut stmt = match conn.statement(sql).build() {
@@ -992,6 +995,7 @@ impl QueryExecutor {
         on_select_start(&column_info);
 
         let mut row_count = 0usize;
+        let mut cancelled = false;
 
         for row_result in result_set {
             let row: Row = match row_result {
@@ -1005,17 +1009,22 @@ impl QueryExecutor {
                 row_data.push(value.unwrap_or_else(|| "NULL".to_string()));
             }
 
-            on_row(row_data);
+            let should_continue = on_row(row_data);
             row_count += 1;
+
+            if !should_continue {
+                cancelled = true;
+                break;
+            }
         }
 
         let execution_time = start.elapsed();
-        Ok(QueryResult::new_select_streamed(
+        Ok((QueryResult::new_select_streamed(
             sql,
             column_info,
             row_count,
             execution_time,
-        ))
+        ), cancelled))
     }
 
     fn execute_dml(
