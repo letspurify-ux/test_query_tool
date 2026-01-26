@@ -159,6 +159,7 @@ impl IntellisenseData {
         suggestions
     }
 
+    #[allow(dead_code)]
     pub fn get_columns_for_table(&self, table_name: &str) -> Vec<String> {
         let key = table_name.to_uppercase();
         self.columns.get(&key).cloned().unwrap_or_default()

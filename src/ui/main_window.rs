@@ -165,7 +165,7 @@ impl MainWindow {
         Self::adjust_query_layout_with(&mut right_flex, &sql_group);
     }
 
-    fn adjust_query_layout_with(right_flex: &mut fltk::group::Flex, sql_group: &fltk::group::Group) {
+    fn adjust_query_layout_with(right_flex: &mut fltk::group::Flex, sql_group: &fltk::group::Flex) {
         let right_height = right_flex.h();
         if right_height <= 0 {
             return;
@@ -248,7 +248,7 @@ impl MainWindow {
             fltk::enums::Event::Resize => {
                 let (mut right_flex, sql_group) = {
                     let s = state_for_window.borrow();
-                    (s.right_flex.clone(), s.sql_editor.get_group())
+                    (s.right_flex.clone(), s.sql_editor.get_group().clone())
                 };
                 MainWindow::adjust_query_layout_with(&mut right_flex, &sql_group);
                 false
