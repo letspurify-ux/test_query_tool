@@ -129,6 +129,9 @@ pub struct SqlHighlighter {
     highlight_data: HighlightData,
 }
 
+const HIGHLIGHT_WINDOW_THRESHOLD: usize = 20_000;
+const HIGHLIGHT_WINDOW_RADIUS: usize = 8_000;
+
 impl SqlHighlighter {
     pub fn new() -> Self {
         Self {
@@ -143,6 +146,12 @@ impl SqlHighlighter {
     /// Highlights the given text and updates the style buffer
     pub fn highlight(&self, text: &str, style_buffer: &mut TextBuffer) {
         let style_text = self.generate_styles(text);
+        style_buffer.set_text(&style_text);
+    }
+
+    /// Highlights the given text with a performance window around the cursor position.
+    pub fn highlight_around_cursor(&self, text: &str, style_buffer: &mut TextBuffer, cursor_pos: usize) {
+        let style_text = self.generate_styles_windowed(text, cursor_pos);
         style_buffer.set_text(&style_text);
     }
 
@@ -280,6 +289,22 @@ impl SqlHighlighter {
         styles.into_iter().collect()
     }
 
+    fn generate_styles_windowed(&self, text: &str, cursor_pos: usize) -> String {
+        if text.len() <= HIGHLIGHT_WINDOW_THRESHOLD {
+            return self.generate_styles(text);
+        }
+
+        let cursor_pos = cursor_pos.min(text.len());
+        let (range_start, range_end) = windowed_range(text, cursor_pos);
+        let window_text = &text[range_start..range_end];
+        let window_styles = self.generate_styles(window_text);
+        let mut styles: Vec<char> = vec![STYLE_DEFAULT; text.len()];
+        for (offset, style_char) in window_styles.chars().enumerate() {
+            styles[range_start + offset] = style_char;
+        }
+        styles.into_iter().collect()
+    }
+
     /// Classifies a word as keyword, function, identifier, or default
     fn classify_word(&self, word: &str) -> TokenType {
         let upper = word.to_uppercase();
@@ -307,6 +332,31 @@ impl Default for SqlHighlighter {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn windowed_range(text: &str, cursor_pos: usize) -> (usize, usize) {
+    let start_candidate = cursor_pos.saturating_sub(HIGHLIGHT_WINDOW_RADIUS);
+    let end_candidate = (cursor_pos + HIGHLIGHT_WINDOW_RADIUS).min(text.len());
+
+    let mut start = start_candidate;
+    while start > 0 && !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = end_candidate;
+    while end < text.len() && !text.is_char_boundary(end) {
+        end += 1;
+    }
+
+    let start = match text[..start].rfind('\n') {
+        Some(pos) => pos + 1,
+        None => 0,
+    };
+    let end = match text[end..].find('\n') {
+        Some(pos) => end + pos,
+        None => text.len(),
+    };
+
+    (start, end)
 }
 
 /// Checks if a character is an SQL operator
@@ -402,5 +452,35 @@ mod tests {
         };
         assert!(styles[from_pos..from_pos + 4].chars().all(|c| c == STYLE_KEYWORD),
             "FROM keyword should be highlighted correctly after multi-byte string");
+    }
+
+    #[test]
+    fn test_windowed_highlighting_limits_scope() {
+        let highlighter = SqlHighlighter::new();
+        let text = "SELECT col FROM table;\n".repeat(2000);
+        assert!(text.len() > HIGHLIGHT_WINDOW_THRESHOLD);
+        let cursor_pos = text.len() / 2;
+        let styles = highlighter.generate_styles_windowed(&text, cursor_pos);
+
+        assert_eq!(styles.len(), text.len());
+
+        let (range_start, range_end) = windowed_range(&text, cursor_pos);
+        assert!(range_start > 0);
+        assert!(range_end <= text.len());
+
+        let outside_select_pos = text.find("SELECT").unwrap();
+        if outside_select_pos + 6 < range_start {
+            assert!(styles[outside_select_pos..outside_select_pos + 6]
+                .chars()
+                .all(|c| c == STYLE_DEFAULT));
+        }
+
+        let inside_select_pos = text[range_start..range_end]
+            .find("SELECT")
+            .map(|pos| range_start + pos)
+            .unwrap();
+        assert!(styles[inside_select_pos..inside_select_pos + 6]
+            .chars()
+            .all(|c| c == STYLE_KEYWORD));
     }
 }
