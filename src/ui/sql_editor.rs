@@ -243,45 +243,59 @@ impl SqlEditorWidget {
             query_running: Rc<RefCell<bool>>,
             execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>>,
         ) {
+            let mut disconnected = false;
             // Process any pending messages
             {
                 let r = receiver.borrow();
-                while let Ok(message) = r.try_recv() {
-                    if let Some(ref mut cb) = *progress_callback.borrow_mut() {
-                        cb(message.clone());
-                    }
+                loop {
+                    match r.try_recv() {
+                        Ok(message) => {
+                            if let Some(ref mut cb) = *progress_callback.borrow_mut() {
+                                cb(message.clone());
+                            }
 
-                    match message {
-                        QueryProgress::StatementFinished {
-                            result,
-                            connection_name,
-                            timed_out,
-                            ..
-                        } => {
-                            if timed_out {
-                                fltk::dialog::alert_default(&format!(
-                                    "Query timed out!\n\n{}",
-                                    result.message
-                                ));
-                            }
-                            QueryHistoryDialog::add_to_history(
-                                &result.sql,
-                                result.execution_time.as_millis() as u64,
-                                result.row_count,
-                                &connection_name,
-                            );
-                            if let Some(ref mut cb) = *execute_callback.borrow_mut() {
-                                cb(result);
+                            match message {
+                                QueryProgress::StatementFinished {
+                                    result,
+                                    connection_name,
+                                    timed_out,
+                                    ..
+                                } => {
+                                    if timed_out {
+                                        fltk::dialog::alert_default(&format!(
+                                            "Query timed out!\n\n{}",
+                                            result.message
+                                        ));
+                                    }
+                                    QueryHistoryDialog::add_to_history(
+                                        &result.sql,
+                                        result.execution_time.as_millis() as u64,
+                                        result.row_count,
+                                        &connection_name,
+                                    );
+                                    if let Some(ref mut cb) = *execute_callback.borrow_mut() {
+                                        cb(result);
+                                    }
+                                }
+                                QueryProgress::BatchFinished => {
+                                    *query_running.borrow_mut() = false;
+                                    set_cursor(Cursor::Default);
+                                    app::flush();
+                                }
+                                _ => {}
                             }
                         }
-                        QueryProgress::BatchFinished => {
-                            *query_running.borrow_mut() = false;
-                            set_cursor(Cursor::Default);
-                            app::flush();
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            disconnected = true;
+                            break;
                         }
-                        _ => {}
                     }
                 }
+            }
+
+            if disconnected {
+                return;
             }
 
             // Reschedule for next poll
@@ -310,13 +324,27 @@ impl SqlEditorWidget {
             receiver: Rc<RefCell<mpsc::Receiver<ColumnLoadUpdate>>>,
             intellisense_data: Rc<RefCell<IntellisenseData>>,
         ) {
+            let mut disconnected = false;
             // Process any pending messages
             {
                 let r = receiver.borrow();
-                while let Ok(update) = r.try_recv() {
-                    let mut data = intellisense_data.borrow_mut();
-                    data.set_columns_for_table(&update.table, update.columns);
+                loop {
+                    match r.try_recv() {
+                        Ok(update) => {
+                            let mut data = intellisense_data.borrow_mut();
+                            data.set_columns_for_table(&update.table, update.columns);
+                        }
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            disconnected = true;
+                            break;
+                        }
+                    }
                 }
+            }
+
+            if disconnected {
+                return;
             }
 
             // Reschedule for next poll

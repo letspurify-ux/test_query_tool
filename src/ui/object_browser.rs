@@ -166,15 +166,29 @@ impl ObjectBrowserWidget {
             object_cache: Rc<RefCell<ObjectCache>>,
             filter_input: Input,
         ) {
+            let mut disconnected = false;
             // Process any pending messages
             {
                 let r = receiver.borrow();
-                while let Ok(cache) = r.try_recv() {
-                    *object_cache.borrow_mut() = cache.clone();
-                    let filter_text = filter_input.value().to_lowercase();
-                    ObjectBrowserWidget::populate_tree(&mut tree, &cache, &filter_text);
-                    tree.redraw();
+                loop {
+                    match r.try_recv() {
+                        Ok(cache) => {
+                            *object_cache.borrow_mut() = cache.clone();
+                            let filter_text = filter_input.value().to_lowercase();
+                            ObjectBrowserWidget::populate_tree(&mut tree, &cache, &filter_text);
+                            tree.redraw();
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            disconnected = true;
+                            break;
+                        }
+                    }
                 }
+            }
+
+            if disconnected {
+                return;
             }
 
             // Reschedule for next poll
