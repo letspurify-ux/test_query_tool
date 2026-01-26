@@ -2,6 +2,8 @@ use fltk::{
     enums::{Color, Font},
     text::{StyleTableEntry, TextBuffer},
 };
+use once_cell::sync::Lazy;
+use std::collections::HashSet;
 
 use super::intellisense::{ORACLE_FUNCTIONS, SQL_KEYWORDS};
 use crate::ui::theme;
@@ -15,6 +17,11 @@ pub const STYLE_COMMENT: char = 'E';
 pub const STYLE_NUMBER: char = 'F';
 pub const STYLE_OPERATOR: char = 'G';
 pub const STYLE_IDENTIFIER: char = 'H';
+
+static SQL_KEYWORDS_SET: Lazy<HashSet<&'static str>> =
+    Lazy::new(|| SQL_KEYWORDS.iter().copied().collect());
+static ORACLE_FUNCTIONS_SET: Lazy<HashSet<&'static str>> =
+    Lazy::new(|| ORACLE_FUNCTIONS.iter().copied().collect());
 
 /// Creates the style table for SQL syntax highlighting
 pub fn create_style_table() -> Vec<StyleTableEntry> {
@@ -116,17 +123,12 @@ impl HighlightData {
         }
     }
 
-    pub fn is_identifier(&self, word: &str) -> bool {
-        let upper = word.to_uppercase();
-        self.tables.iter().any(|t| t.to_uppercase() == upper)
-            || self.views.iter().any(|v| v.to_uppercase() == upper)
-            || self.columns.iter().any(|c| c.to_uppercase() == upper)
-    }
 }
 
 /// SQL Syntax Highlighter
 pub struct SqlHighlighter {
     highlight_data: HighlightData,
+    identifier_lookup: HashSet<String>,
 }
 
 const HIGHLIGHT_WINDOW_THRESHOLD: usize = 20_000;
@@ -136,36 +138,66 @@ impl SqlHighlighter {
     pub fn new() -> Self {
         Self {
             highlight_data: HighlightData::new(),
+            identifier_lookup: HashSet::new(),
         }
     }
 
     pub fn set_highlight_data(&mut self, data: HighlightData) {
         self.highlight_data = data;
+        self.rebuild_identifier_lookup();
     }
 
-    /// Highlights the given text and updates the style buffer
-    pub fn highlight(&self, text: &str, style_buffer: &mut TextBuffer) {
-        let style_text = self.generate_styles(text);
-        style_buffer.set_text(&style_text);
+    fn rebuild_identifier_lookup(&mut self) {
+        let mut lookup = HashSet::new();
+        for name in self
+            .highlight_data
+            .tables
+            .iter()
+            .chain(self.highlight_data.views.iter())
+            .chain(self.highlight_data.columns.iter())
+        {
+            lookup.insert(name.to_uppercase());
+        }
+        self.identifier_lookup = lookup;
     }
 
-    /// Highlights the given text with a performance window around the cursor position.
-    pub fn highlight_around_cursor(&self, text: &str, style_buffer: &mut TextBuffer, cursor_pos: usize) {
-        if text.len() <= HIGHLIGHT_WINDOW_THRESHOLD {
-            let style_text = self.generate_styles(text);
+    /// Highlights using a windowed range from the buffer to avoid full-buffer scans.
+    pub fn highlight_buffer_window(
+        &self,
+        buffer: &TextBuffer,
+        style_buffer: &mut TextBuffer,
+        cursor_pos: usize,
+    ) {
+        let text_len = buffer.length().max(0) as usize;
+        if text_len == 0 {
+            style_buffer.set_text("");
+            return;
+        }
+        if text_len <= HIGHLIGHT_WINDOW_THRESHOLD {
+            let text = buffer.text();
+            let style_text = self.generate_styles(&text);
             style_buffer.set_text(&style_text);
             return;
         }
 
-        if style_buffer.length() != text.len() as i32 {
-            let default_styles: String = std::iter::repeat(STYLE_DEFAULT).take(text.len()).collect();
+        if style_buffer.length() != text_len as i32 {
+            let default_styles: String =
+                std::iter::repeat(STYLE_DEFAULT).take(text_len).collect();
             style_buffer.set_text(&default_styles);
         }
 
-        let cursor_pos = cursor_pos.min(text.len());
-        let (range_start, range_end) = windowed_range(text, cursor_pos);
-        let window_text = &text[range_start..range_end];
-        let window_styles = self.generate_styles(window_text);
+        let cursor_pos = cursor_pos.min(text_len);
+        let (range_start, range_end) = windowed_range_from_buffer(buffer, cursor_pos, text_len);
+        if range_start >= range_end {
+            return;
+        }
+        let Some(window_text) = buffer.text_range(range_start as i32, range_end as i32) else {
+            return;
+        };
+        let window_styles = self.generate_styles(&window_text);
+        if window_styles.len() != range_end - range_start {
+            return;
+        }
         style_buffer.replace(range_start as i32, range_end as i32, &window_styles);
     }
 
@@ -176,165 +208,135 @@ impl SqlHighlighter {
     /// For multi-byte characters (like Korean, Chinese, etc.), we repeat the
     /// style character for each byte of the character.
     fn generate_styles(&self, text: &str) -> String {
-        // Create a style buffer with one entry per byte
         let mut styles: Vec<char> = vec![STYLE_DEFAULT; text.len()];
+        let bytes = text.as_bytes();
+        let mut idx = 0usize;
 
-        // We need to track character position
-        let chars: Vec<char> = text.chars().collect();
-        let mut char_idx = 0usize;
-
-        // Helper to get byte offset for a character index
-        let char_byte_offsets: Vec<usize> = text
-            .char_indices()
-            .map(|(byte_idx, _)| byte_idx)
-            .chain(std::iter::once(text.len()))
-            .collect();
-
-        while char_idx < chars.len() {
-            let byte_start = char_byte_offsets[char_idx];
+        while idx < bytes.len() {
+            let byte = bytes[idx];
 
             // Check for single-line comment (--)
-            if char_idx + 1 < chars.len() && chars[char_idx] == '-' && chars[char_idx + 1] == '-' {
-                let start_char = char_idx;
-                while char_idx < chars.len() && chars[char_idx] != '\n' {
-                    char_idx += 1;
+            if byte == b'-' && idx + 1 < bytes.len() && bytes[idx + 1] == b'-' {
+                let start = idx;
+                idx += 2;
+                while idx < bytes.len() && bytes[idx] != b'\n' {
+                    idx += 1;
                 }
-                // Fill styles for all bytes in this range
-                let byte_end = char_byte_offsets[char_idx];
-                for b in char_byte_offsets[start_char]..byte_end {
+                for b in start..idx {
                     styles[b] = STYLE_COMMENT;
                 }
                 continue;
             }
 
             // Check for multi-line comment (/* */)
-            if char_idx + 1 < chars.len() && chars[char_idx] == '/' && chars[char_idx + 1] == '*' {
-                let start_char = char_idx;
-                char_idx += 2;
-                while char_idx + 1 < chars.len() && !(chars[char_idx] == '*' && chars[char_idx + 1] == '/') {
-                    char_idx += 1;
+            if byte == b'/' && idx + 1 < bytes.len() && bytes[idx + 1] == b'*' {
+                let start = idx;
+                idx += 2;
+                while idx + 1 < bytes.len() && !(bytes[idx] == b'*' && bytes[idx + 1] == b'/') {
+                    idx += 1;
                 }
-                if char_idx + 1 < chars.len() {
-                    char_idx += 2; // Skip */
+                if idx + 1 < bytes.len() {
+                    idx += 2;
+                } else {
+                    idx = bytes.len();
                 }
-                let byte_end = char_byte_offsets[char_idx];
-                for b in char_byte_offsets[start_char]..byte_end {
+                for b in start..idx {
                     styles[b] = STYLE_COMMENT;
                 }
                 continue;
             }
 
             // Check for string literals ('...')
-            if chars[char_idx] == '\'' {
-                let start_char = char_idx;
-                char_idx += 1;
-                while char_idx < chars.len() {
-                    if chars[char_idx] == '\'' {
-                        // Check for escaped quote ('')
-                        if char_idx + 1 < chars.len() && chars[char_idx + 1] == '\'' {
-                            char_idx += 2;
+            if byte == b'\'' {
+                let start = idx;
+                idx += 1;
+                while idx < bytes.len() {
+                    if bytes[idx] == b'\'' {
+                        if idx + 1 < bytes.len() && bytes[idx + 1] == b'\'' {
+                            idx += 2;
                             continue;
                         }
-                        char_idx += 1;
+                        idx += 1;
                         break;
                     }
-                    char_idx += 1;
+                    idx += 1;
                 }
-                let byte_end = char_byte_offsets[char_idx];
-                for b in char_byte_offsets[start_char]..byte_end {
+                for b in start..idx {
                     styles[b] = STYLE_STRING;
                 }
                 continue;
             }
 
             // Check for numbers
-            if chars[char_idx].is_ascii_digit()
-                || (chars[char_idx] == '.' && char_idx + 1 < chars.len() && chars[char_idx + 1].is_ascii_digit())
+            if byte.is_ascii_digit()
+                || (byte == b'.'
+                    && idx + 1 < bytes.len()
+                    && bytes[idx + 1].is_ascii_digit())
             {
-                let start_char = char_idx;
-                let mut has_dot = chars[char_idx] == '.';
-                char_idx += 1;
-                while char_idx < chars.len() {
-                    if chars[char_idx].is_ascii_digit() {
-                        char_idx += 1;
-                    } else if chars[char_idx] == '.' && !has_dot {
+                let start = idx;
+                let mut has_dot = byte == b'.';
+                idx += 1;
+                while idx < bytes.len() {
+                    let next_byte = bytes[idx];
+                    if next_byte.is_ascii_digit() {
+                        idx += 1;
+                    } else if next_byte == b'.' && !has_dot {
                         has_dot = true;
-                        char_idx += 1;
+                        idx += 1;
                     } else {
                         break;
                     }
                 }
-                let byte_end = char_byte_offsets[char_idx];
-                for b in char_byte_offsets[start_char]..byte_end {
+                for b in start..idx {
                     styles[b] = STYLE_NUMBER;
                 }
                 continue;
             }
 
             // Check for identifiers/keywords
-            if chars[char_idx].is_alphabetic() || chars[char_idx] == '_' {
-                let start_char = char_idx;
-                while char_idx < chars.len() && (chars[char_idx].is_alphanumeric() || chars[char_idx] == '_' || chars[char_idx] == '$') {
-                    char_idx += 1;
+            if is_identifier_start_byte(byte) {
+                let start = idx;
+                idx += 1;
+                while idx < bytes.len() && is_identifier_continue_byte(bytes[idx]) {
+                    idx += 1;
                 }
-                let word: String = chars[start_char..char_idx].iter().collect();
-                let token_type = self.classify_word(&word);
-                let byte_end = char_byte_offsets[char_idx];
-                for b in char_byte_offsets[start_char]..byte_end {
+                let word = &text[start..idx];
+                let token_type = self.classify_word(word);
+                for b in start..idx {
                     styles[b] = token_type.to_style_char();
                 }
                 continue;
             }
 
             // Check for operators
-            if is_operator(chars[char_idx]) {
-                let byte_end = char_byte_offsets[char_idx + 1];
-                for b in byte_start..byte_end {
-                    styles[b] = STYLE_OPERATOR;
-                }
-                char_idx += 1;
+            if is_operator_byte(byte) {
+                styles[idx] = STYLE_OPERATOR;
+                idx += 1;
                 continue;
             }
 
-            // Default: move to next character
-            char_idx += 1;
+            idx += 1;
         }
 
-        styles.into_iter().collect()
-    }
-
-    fn generate_styles_windowed(&self, text: &str, cursor_pos: usize) -> String {
-        if text.len() <= HIGHLIGHT_WINDOW_THRESHOLD {
-            return self.generate_styles(text);
-        }
-
-        let cursor_pos = cursor_pos.min(text.len());
-        let (range_start, range_end) = windowed_range(text, cursor_pos);
-        let window_text = &text[range_start..range_end];
-        let window_styles = self.generate_styles(window_text);
-        let mut styles: Vec<char> = vec![STYLE_DEFAULT; text.len()];
-        for (offset, style_char) in window_styles.chars().enumerate() {
-            styles[range_start + offset] = style_char;
-        }
         styles.into_iter().collect()
     }
 
     /// Classifies a word as keyword, function, identifier, or default
     fn classify_word(&self, word: &str) -> TokenType {
-        let upper = word.to_uppercase();
+        let upper = word.to_ascii_uppercase();
 
         // Check if it's a SQL keyword
-        if SQL_KEYWORDS.iter().any(|&kw| kw == upper) {
+        if SQL_KEYWORDS_SET.contains(upper.as_str()) {
             return TokenType::Keyword;
         }
 
         // Check if it's an Oracle function
-        if ORACLE_FUNCTIONS.iter().any(|&func| func == upper) {
+        if ORACLE_FUNCTIONS_SET.contains(upper.as_str()) {
             return TokenType::Function;
         }
 
         // Check if it's a known identifier (table, view, column)
-        if self.highlight_data.is_identifier(word) {
+        if self.identifier_lookup.contains(&upper) {
             return TokenType::Identifier;
         }
 
@@ -348,43 +350,84 @@ impl Default for SqlHighlighter {
     }
 }
 
-fn windowed_range(text: &str, cursor_pos: usize) -> (usize, usize) {
+fn windowed_range_from_buffer(
+    buffer: &TextBuffer,
+    cursor_pos: usize,
+    text_len: usize,
+) -> (usize, usize) {
     let start_candidate = cursor_pos.saturating_sub(HIGHLIGHT_WINDOW_RADIUS);
-    let end_candidate = (cursor_pos + HIGHLIGHT_WINDOW_RADIUS).min(text.len());
+    let end_candidate = (cursor_pos + HIGHLIGHT_WINDOW_RADIUS).min(text_len);
 
-    let mut start = start_candidate;
-    while start > 0 && !text.is_char_boundary(start) {
-        start -= 1;
-    }
-    let mut end = end_candidate;
-    while end < text.len() && !text.is_char_boundary(end) {
-        end += 1;
-    }
+    let start = buffer.line_start(start_candidate as i32).max(0) as usize;
+    let end = buffer.line_end(end_candidate as i32).max(0) as usize;
 
-    let start = match text[..start].rfind('\n') {
-        Some(pos) => pos + 1,
-        None => 0,
-    };
-    let end = match text[end..].find('\n') {
-        Some(pos) => end + pos,
-        None => text.len(),
-    };
-
-    (start, end)
+    (start.min(text_len), end.min(text_len))
 }
 
-/// Checks if a character is an SQL operator
-fn is_operator(c: char) -> bool {
+fn is_operator_byte(byte: u8) -> bool {
     matches!(
-        c,
-        '+' | '-' | '*' | '/' | '=' | '<' | '>' | '!' | '&' | '|' | '^' | '%' | '(' | ')' | '['
-            | ']' | '{' | '}' | ',' | ';' | ':' | '.'
+        byte,
+        b'+' | b'-' | b'*' | b'/' | b'=' | b'<' | b'>' | b'!' | b'&' | b'|' | b'^' | b'%'
+            | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'.'
     )
+}
+
+fn is_identifier_start_byte(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+fn is_identifier_continue_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn windowed_range_for_test(text: &str, cursor_pos: usize) -> (usize, usize) {
+        let start_candidate = cursor_pos.saturating_sub(HIGHLIGHT_WINDOW_RADIUS);
+        let end_candidate = (cursor_pos + HIGHLIGHT_WINDOW_RADIUS).min(text.len());
+
+        let mut start = start_candidate;
+        while start > 0 && !text.is_char_boundary(start) {
+            start -= 1;
+        }
+        let mut end = end_candidate;
+        while end < text.len() && !text.is_char_boundary(end) {
+            end += 1;
+        }
+
+        let start = match text[..start].rfind('\n') {
+            Some(pos) => pos + 1,
+            None => 0,
+        };
+        let end = match text[end..].find('\n') {
+            Some(pos) => end + pos,
+            None => text.len(),
+        };
+
+        (start, end)
+    }
+
+    fn generate_styles_windowed_for_test(
+        highlighter: &SqlHighlighter,
+        text: &str,
+        cursor_pos: usize,
+    ) -> String {
+        if text.len() <= HIGHLIGHT_WINDOW_THRESHOLD {
+            return highlighter.generate_styles(text);
+        }
+
+        let cursor_pos = cursor_pos.min(text.len());
+        let (range_start, range_end) = windowed_range_for_test(text, cursor_pos);
+        let window_text = &text[range_start..range_end];
+        let window_styles = highlighter.generate_styles(window_text);
+        let mut styles: Vec<char> = vec![STYLE_DEFAULT; text.len()];
+        for (offset, style_char) in window_styles.chars().enumerate() {
+            styles[range_start + offset] = style_char;
+        }
+        styles.into_iter().collect()
+    }
 
     #[test]
     fn test_keyword_highlighting() {
@@ -474,11 +517,11 @@ mod tests {
         let text = "SELECT col FROM table;\n".repeat(2000);
         assert!(text.len() > HIGHLIGHT_WINDOW_THRESHOLD);
         let cursor_pos = text.len() / 2;
-        let styles = highlighter.generate_styles_windowed(&text, cursor_pos);
+        let styles = generate_styles_windowed_for_test(&highlighter, &text, cursor_pos);
 
         assert_eq!(styles.len(), text.len());
 
-        let (range_start, range_end) = windowed_range(&text, cursor_pos);
+        let (range_start, range_end) = windowed_range_for_test(&text, cursor_pos);
         assert!(range_start > 0);
         assert!(range_end <= text.len());
 

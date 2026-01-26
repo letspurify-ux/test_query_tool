@@ -1,1 +1,4 @@
 /target
+.cargo/
+.env
+toad_manual_features.json

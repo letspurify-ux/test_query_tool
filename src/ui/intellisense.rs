@@ -54,6 +54,21 @@ pub const ORACLE_FUNCTIONS: &[&str] = &[
     "VAR_SAMP", "VARIANCE", "VSIZE", "WIDTH_BUCKET", "XMLAGG",
 ];
 
+const MAX_SUGGESTIONS: usize = 50;
+
+#[derive(Clone)]
+struct NameEntry {
+    name: String,
+    upper: String,
+}
+
+impl NameEntry {
+    fn new(name: String) -> Self {
+        let upper = name.to_uppercase();
+        Self { name, upper }
+    }
+}
+
 #[derive(Clone)]
 pub struct IntellisenseData {
     pub tables: Vec<String>,
@@ -62,6 +77,14 @@ pub struct IntellisenseData {
     pub views: Vec<String>,
     pub procedures: Vec<String>,
     pub functions: Vec<String>,
+    table_entries: Vec<NameEntry>,
+    view_entries: Vec<NameEntry>,
+    procedure_entries: Vec<NameEntry>,
+    function_entries: Vec<NameEntry>,
+    column_entries_by_table: HashMap<String, Vec<NameEntry>>,
+    all_columns_entries: Vec<NameEntry>,
+    all_columns_dirty: bool,
+    relations_upper: HashSet<String>,
 }
 
 impl IntellisenseData {
@@ -73,58 +96,105 @@ impl IntellisenseData {
             views: Vec::new(),
             procedures: Vec::new(),
             functions: Vec::new(),
+            table_entries: Vec::new(),
+            view_entries: Vec::new(),
+            procedure_entries: Vec::new(),
+            function_entries: Vec::new(),
+            column_entries_by_table: HashMap::new(),
+            all_columns_entries: Vec::new(),
+            all_columns_dirty: false,
+            relations_upper: HashSet::new(),
         }
     }
 
     pub fn get_suggestions(
-        &self,
+        &mut self,
         prefix: &str,
         include_columns: bool,
         column_tables: Option<&[String]>,
     ) -> Vec<String> {
+        self.ensure_base_indices();
+
         let prefix_upper = prefix.to_uppercase();
         let mut suggestions = Vec::new();
+        let mut seen = HashSet::new();
+
+        let push_suggestion = |value: String,
+                               suggestions: &mut Vec<String>,
+                               seen: &mut HashSet<String>| {
+            if suggestions.len() >= MAX_SUGGESTIONS {
+                return true;
+            }
+            if seen.insert(value.clone()) {
+                suggestions.push(value);
+            }
+            suggestions.len() >= MAX_SUGGESTIONS
+        };
 
         // Add SQL keywords
         for keyword in SQL_KEYWORDS {
             if keyword.starts_with(&prefix_upper) {
-                suggestions.push(keyword.to_string());
+                if push_suggestion(keyword.to_string(), &mut suggestions, &mut seen) {
+                    break;
+                }
             }
         }
 
         // Add Oracle functions
         for func in ORACLE_FUNCTIONS {
             if func.starts_with(&prefix_upper) {
-                suggestions.push(format!("{}()", func));
+                if push_suggestion(format!("{}()", func), &mut suggestions, &mut seen) {
+                    break;
+                }
             }
         }
 
         // Add tables
-        for table in &self.tables {
-            if table.to_uppercase().starts_with(&prefix_upper) {
-                suggestions.push(table.clone());
-            }
+        if Self::push_entries(
+            &self.table_entries,
+            &prefix_upper,
+            &mut suggestions,
+            &mut seen,
+        ) {
+            suggestions.sort_unstable();
+            suggestions.dedup();
+            return suggestions;
         }
 
         // Add views
-        for view in &self.views {
-            if view.to_uppercase().starts_with(&prefix_upper) {
-                suggestions.push(view.clone());
-            }
+        if Self::push_entries(
+            &self.view_entries,
+            &prefix_upper,
+            &mut suggestions,
+            &mut seen,
+        ) {
+            suggestions.sort_unstable();
+            suggestions.dedup();
+            return suggestions;
         }
 
         // Add procedures
-        for proc in &self.procedures {
-            if proc.to_uppercase().starts_with(&prefix_upper) {
-                suggestions.push(proc.clone());
-            }
+        if Self::push_entries(
+            &self.procedure_entries,
+            &prefix_upper,
+            &mut suggestions,
+            &mut seen,
+        ) {
+            suggestions.sort_unstable();
+            suggestions.dedup();
+            return suggestions;
         }
 
         // Add functions
-        for func in &self.functions {
-            if func.to_uppercase().starts_with(&prefix_upper) {
-                suggestions.push(func.clone());
-            }
+        if Self::push_entries(
+            &self.function_entries,
+            &prefix_upper,
+            &mut suggestions,
+            &mut seen,
+        ) {
+            suggestions.sort_unstable();
+            suggestions.dedup();
+            return suggestions;
         }
 
         if include_columns {
@@ -132,30 +202,79 @@ impl IntellisenseData {
                 Some(tables) if !tables.is_empty() => {
                     for table in tables {
                         let key = table.to_uppercase();
-                        if let Some(cols) = self.columns.get(&key) {
-                            for col in cols {
-                                if col.to_uppercase().starts_with(&prefix_upper) {
-                                    suggestions.push(col.clone());
-                                }
+                        if let Some(cols) = self.column_entries_by_table.get(&key) {
+                            if Self::push_entries(
+                                cols,
+                                &prefix_upper,
+                                &mut suggestions,
+                                &mut seen,
+                            ) {
+                                break;
                             }
                         }
                     }
                 }
                 _ => {
-                    for cols in self.columns.values() {
-                        for col in cols {
-                            if col.to_uppercase().starts_with(&prefix_upper) {
-                                suggestions.push(col.clone());
-                            }
-                        }
+                    if !prefix_upper.is_empty() {
+                        self.ensure_all_columns_entries();
+                        let _ = Self::push_entries(
+                            &self.all_columns_entries,
+                            &prefix_upper,
+                            &mut suggestions,
+                            &mut seen,
+                        );
                     }
                 }
             }
         }
 
-        suggestions.sort();
+        suggestions.sort_unstable();
         suggestions.dedup();
-        suggestions.truncate(50); // Limit to 50 suggestions
+        suggestions.truncate(MAX_SUGGESTIONS);
+        suggestions
+    }
+
+    pub fn get_column_suggestions(
+        &mut self,
+        prefix: &str,
+        column_tables: Option<&[String]>,
+    ) -> Vec<String> {
+        self.ensure_base_indices();
+
+        let prefix_upper = prefix.to_uppercase();
+        let mut suggestions = Vec::new();
+        let mut seen = HashSet::new();
+
+        match column_tables {
+            Some(tables) if !tables.is_empty() => {
+                for table in tables {
+                    let key = table.to_uppercase();
+                    if let Some(cols) = self.column_entries_by_table.get(&key) {
+                        if Self::push_entries(
+                            cols,
+                            &prefix_upper,
+                            &mut suggestions,
+                            &mut seen,
+                        ) {
+                            break;
+                        }
+                    }
+                }
+            }
+            _ => {
+                self.ensure_all_columns_entries();
+                let _ = Self::push_entries(
+                    &self.all_columns_entries,
+                    &prefix_upper,
+                    &mut suggestions,
+                    &mut seen,
+                );
+            }
+        }
+
+        suggestions.sort_unstable();
+        suggestions.dedup();
+        suggestions.truncate(MAX_SUGGESTIONS);
         suggestions
     }
 
@@ -168,7 +287,10 @@ impl IntellisenseData {
     pub fn set_columns_for_table(&mut self, table_name: &str, columns: Vec<String>) {
         let key = table_name.to_uppercase();
         self.columns_loading.remove(&key);
-        self.columns.insert(key, columns);
+        self.columns.insert(key.clone(), columns.clone());
+        self.column_entries_by_table
+            .insert(key, Self::build_entries(&columns));
+        self.all_columns_dirty = true;
     }
 
     pub fn mark_columns_loading(&mut self, table_name: &str) -> bool {
@@ -182,8 +304,89 @@ impl IntellisenseData {
 
     pub fn is_known_relation(&self, name: &str) -> bool {
         let upper = name.to_uppercase();
+        if !self.relations_upper.is_empty() {
+            return self.relations_upper.contains(&upper);
+        }
         self.tables.iter().any(|t| t.to_uppercase() == upper)
             || self.views.iter().any(|v| v.to_uppercase() == upper)
+    }
+
+    pub fn rebuild_indices(&mut self) {
+        self.table_entries = Self::build_entries(&self.tables);
+        self.view_entries = Self::build_entries(&self.views);
+        self.procedure_entries = Self::build_entries(&self.procedures);
+        self.function_entries = Self::build_entries(&self.functions);
+        self.relations_upper = self
+            .tables
+            .iter()
+            .chain(self.views.iter())
+            .map(|name| name.to_uppercase())
+            .collect();
+        self.column_entries_by_table.clear();
+        for (table, columns) in &self.columns {
+            self.column_entries_by_table
+                .insert(table.clone(), Self::build_entries(columns));
+        }
+        self.all_columns_entries.clear();
+        self.all_columns_dirty = true;
+    }
+
+    fn ensure_base_indices(&mut self) {
+        if self.table_entries.len() != self.tables.len()
+            || self.view_entries.len() != self.views.len()
+            || self.procedure_entries.len() != self.procedures.len()
+            || self.function_entries.len() != self.functions.len()
+        {
+            self.rebuild_indices();
+        }
+    }
+
+    fn ensure_all_columns_entries(&mut self) {
+        if !self.all_columns_dirty {
+            return;
+        }
+        let mut all = Vec::new();
+        for entries in self.column_entries_by_table.values() {
+            all.extend(entries.iter().cloned());
+        }
+        all.sort_by(|a, b| a.upper.cmp(&b.upper).then_with(|| a.name.cmp(&b.name)));
+        all.dedup_by(|a, b| a.upper == b.upper && a.name == b.name);
+        self.all_columns_entries = all;
+        self.all_columns_dirty = false;
+    }
+
+    fn build_entries(names: &[String]) -> Vec<NameEntry> {
+        let mut entries: Vec<NameEntry> = names
+            .iter()
+            .cloned()
+            .map(NameEntry::new)
+            .collect();
+        entries.sort_by(|a, b| a.upper.cmp(&b.upper).then_with(|| a.name.cmp(&b.name)));
+        entries
+    }
+
+    fn push_entries(
+        entries: &[NameEntry],
+        prefix_upper: &str,
+        suggestions: &mut Vec<String>,
+        seen: &mut HashSet<String>,
+    ) -> bool {
+        if suggestions.len() >= MAX_SUGGESTIONS || entries.is_empty() {
+            return suggestions.len() >= MAX_SUGGESTIONS;
+        }
+        let start = entries.partition_point(|entry| entry.upper.as_str() < prefix_upper);
+        for entry in entries.iter().skip(start) {
+            if !entry.upper.starts_with(prefix_upper) {
+                break;
+            }
+            if seen.insert(entry.name.clone()) {
+                suggestions.push(entry.name.clone());
+                if suggestions.len() >= MAX_SUGGESTIONS {
+                    return true;
+                }
+            }
+        }
+        suggestions.len() >= MAX_SUGGESTIONS
     }
 }
 
@@ -363,14 +566,16 @@ pub fn get_word_at_cursor(text: &str, cursor_pos: usize) -> (String, usize, usiz
         return (String::new(), 0, 0);
     }
 
-    let chars: Vec<char> = text.chars().collect();
-    let pos = cursor_pos.min(chars.len());
+    let bytes = text.as_bytes();
+    let mut pos = cursor_pos.min(bytes.len());
+    while pos > 0 && !text.is_char_boundary(pos) {
+        pos -= 1;
+    }
 
     // Find word start
     let mut start = pos;
     while start > 0 {
-        let ch = chars[start - 1];
-        if !ch.is_alphanumeric() && ch != '_' {
+        if !is_identifier_byte(bytes[start - 1]) {
             break;
         }
         start -= 1;
@@ -378,23 +583,28 @@ pub fn get_word_at_cursor(text: &str, cursor_pos: usize) -> (String, usize, usiz
 
     // Find word end
     let mut end = pos;
-    while end < chars.len() {
-        let ch = chars[end];
-        if !ch.is_alphanumeric() && ch != '_' {
+    while end < bytes.len() {
+        if !is_identifier_byte(bytes[end]) {
             break;
         }
         end += 1;
     }
+    while end < text.len() && !text.is_char_boundary(end) {
+        end += 1;
+    }
 
-    let word: String = chars[start..pos].iter().collect();
+    let word = text.get(start..end).unwrap_or("").to_string();
     (word, start, end)
 }
 
 // Detect context for smarter suggestions (after FROM, after SELECT, etc.)
 #[allow(dead_code)]
 pub fn detect_sql_context(text: &str, cursor_pos: usize) -> SqlContext {
-    let text_before_cursor: String = text.chars().take(cursor_pos).collect();
-    let upper = text_before_cursor.to_uppercase();
+    let mut end = cursor_pos.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let upper = text[..end].to_uppercase();
 
     // Simple context detection
     let words: Vec<&str> = upper.split_whitespace().collect();
@@ -414,6 +624,10 @@ pub fn detect_sql_context(text: &str, cursor_pos: usize) -> SqlContext {
     } else {
         SqlContext::General
     }
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

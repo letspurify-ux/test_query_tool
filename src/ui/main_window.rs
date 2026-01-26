@@ -222,7 +222,7 @@ impl MainWindow {
             match action {
                 SqlAction::Set(sql) => {
                     s.sql_buffer.set_text(&sql);
-                    s.sql_editor.get_highlighter().borrow().highlight(&sql, &mut s.sql_editor.get_style_buffer().clone());
+                    s.sql_editor.refresh_highlighting();
                 }
                 SqlAction::Insert(text) => {
                     let mut editor = s.sql_editor.get_editor();
@@ -326,7 +326,9 @@ impl MainWindow {
                     match r.try_recv() {
                         Ok(update) => {
                             let s = state.borrow();
-                            *s.sql_editor.get_intellisense_data().borrow_mut() = update.data;
+                            let mut data = update.data;
+                            data.rebuild_indices();
+                            *s.sql_editor.get_intellisense_data().borrow_mut() = data;
                             s.sql_editor.get_highlighter().borrow_mut().set_highlight_data(update.highlight_data);
                         }
                         Err(std::sync::mpsc::TryRecvError::Empty) => break,
@@ -367,6 +369,7 @@ impl MainWindow {
                                                 highlight_data.views = views.clone();
                                                 data.views = views;
                                             }
+                                            data.rebuild_indices();
                                             let _ = schema_sender.send(SchemaUpdate { data, highlight_data });
                                             app::awake();
                                         }
@@ -462,7 +465,7 @@ impl MainWindow {
                                     s.sql_buffer.set_text(&content);
                                     *s.current_file.borrow_mut() = Some(filename.clone());
                                     s.window.set_label(&format!("Oracle Query Tool - {}", filename.file_name().unwrap_or_default().to_string_lossy()));
-                                    s.sql_editor.get_highlighter().borrow().highlight(&content, &mut s.sql_editor.get_style_buffer().clone());
+                                    s.sql_editor.refresh_highlighting();
                                     s.sql_editor.focus();
                                 }
                             }

@@ -34,6 +34,11 @@ enum SqlToken {
     Symbol(String),
 }
 
+const INTELLISENSE_WORD_WINDOW: i32 = 256;
+const INTELLISENSE_CONTEXT_WINDOW: i32 = 120_000;
+const INTELLISENSE_QUALIFIER_WINDOW: i32 = 256;
+const INTELLISENSE_STATEMENT_WINDOW: i32 = 120_000;
+
 #[derive(Clone)]
 struct TableReference {
     table: String,
@@ -70,6 +75,11 @@ struct ColumnLoadUpdate {
 }
 
 #[derive(Clone)]
+struct PendingIntellisense {
+    cursor_pos: i32,
+}
+
+#[derive(Clone)]
 pub struct SqlEditorWidget {
     group: Flex,
     editor: TextEditor,
@@ -89,6 +99,7 @@ pub struct SqlEditorWidget {
     find_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>>,
     replace_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>>,
     completion_range: Rc<RefCell<Option<(usize, usize)>>>,
+    pending_intellisense: Rc<RefCell<Option<PendingIntellisense>>>,
 }
 
 impl SqlEditorWidget {
@@ -187,6 +198,7 @@ impl SqlEditorWidget {
         let find_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
         let replace_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
         let completion_range = Rc::new(RefCell::new(None::<(usize, usize)>));
+        let pending_intellisense = Rc::new(RefCell::new(None::<PendingIntellisense>));
 
         let mut widget = Self {
             group,
@@ -207,6 +219,7 @@ impl SqlEditorWidget {
             find_callback,
             replace_callback,
             completion_range,
+            pending_intellisense,
         };
 
         widget.setup_button_callbacks(
@@ -315,6 +328,13 @@ impl SqlEditorWidget {
 
     fn setup_column_loader(&self, column_receiver: mpsc::Receiver<ColumnLoadUpdate>) {
         let intellisense_data = self.intellisense_data.clone();
+        let editor = self.editor.clone();
+        let buffer = self.buffer.clone();
+        let intellisense_popup = self.intellisense_popup.clone();
+        let completion_range = self.completion_range.clone();
+        let column_sender = self.column_sender.clone();
+        let connection = self.connection.clone();
+        let pending_intellisense = self.pending_intellisense.clone();
 
         // Wrap receiver in Rc<RefCell> to share across timeout callbacks
         let receiver: Rc<RefCell<mpsc::Receiver<ColumnLoadUpdate>>> =
@@ -323,6 +343,13 @@ impl SqlEditorWidget {
         fn schedule_poll(
             receiver: Rc<RefCell<mpsc::Receiver<ColumnLoadUpdate>>>,
             intellisense_data: Rc<RefCell<IntellisenseData>>,
+            editor: TextEditor,
+            buffer: TextBuffer,
+            intellisense_popup: Rc<RefCell<IntellisensePopup>>,
+            completion_range: Rc<RefCell<Option<(usize, usize)>>>,
+            column_sender: mpsc::Sender<ColumnLoadUpdate>,
+            connection: SharedConnection,
+            pending_intellisense: Rc<RefCell<Option<PendingIntellisense>>>,
         ) {
             let mut disconnected = false;
             // Process any pending messages
@@ -331,8 +358,27 @@ impl SqlEditorWidget {
                 loop {
                     match r.try_recv() {
                         Ok(update) => {
-                            let mut data = intellisense_data.borrow_mut();
-                            data.set_columns_for_table(&update.table, update.columns);
+                            {
+                                let mut data = intellisense_data.borrow_mut();
+                                data.set_columns_for_table(&update.table, update.columns);
+                            }
+
+                            let pending = pending_intellisense.borrow().clone();
+                            if let Some(pending) = pending {
+                                let cursor_pos = editor.insert_position().max(0);
+                                if cursor_pos == pending.cursor_pos {
+                                    SqlEditorWidget::trigger_intellisense(
+                                        &editor,
+                                        &buffer,
+                                        &intellisense_data,
+                                        &intellisense_popup,
+                                        &completion_range,
+                                        &column_sender,
+                                        &connection,
+                                        &pending_intellisense,
+                                    );
+                                }
+                            }
                         }
                         Err(mpsc::TryRecvError::Empty) => break,
                         Err(mpsc::TryRecvError::Disconnected) => {
@@ -349,21 +395,40 @@ impl SqlEditorWidget {
 
             // Reschedule for next poll
             app::add_timeout3(0.05, move |_| {
-                schedule_poll(Rc::clone(&receiver), Rc::clone(&intellisense_data));
+                schedule_poll(
+                    Rc::clone(&receiver),
+                    Rc::clone(&intellisense_data),
+                    editor.clone(),
+                    buffer.clone(),
+                    Rc::clone(&intellisense_popup),
+                    Rc::clone(&completion_range),
+                    column_sender.clone(),
+                    connection.clone(),
+                    Rc::clone(&pending_intellisense),
+                );
             });
         }
 
         // Start polling
-        schedule_poll(receiver, intellisense_data);
+        schedule_poll(
+            receiver,
+            intellisense_data,
+            editor,
+            buffer,
+            intellisense_popup,
+            completion_range,
+            column_sender,
+            connection,
+            pending_intellisense,
+        );
     }
 
     fn setup_syntax_highlighting(&self) {
         let highlighter = self.highlighter.clone();
         let mut style_buffer = self.style_buffer.clone();
         let mut buffer = self.buffer.clone();
-        let mut editor = self.editor.clone();
+        let editor = self.editor.clone();
         buffer.add_modify_callback2(move |buf, pos, ins, del, _restyled, _deleted_text| {
-            let text = buf.text();
             if del > 0 {
                 style_buffer.remove(pos, pos + del);
             }
@@ -376,7 +441,7 @@ impl SqlEditorWidget {
             let cursor_pos = editor.insert_position().max(0) as usize;
             highlighter
                 .borrow()
-                .highlight_around_cursor(&text, &mut style_buffer, cursor_pos);
+                .highlight_buffer_window(buf, &mut style_buffer, cursor_pos);
         });
         self.refresh_highlighting();
     }
@@ -395,6 +460,7 @@ impl SqlEditorWidget {
         let nav_anchor = Rc::new(RefCell::new(None::<i32>));
         let completion_range = self.completion_range.clone();
         let ctrl_enter_handled = Rc::new(RefCell::new(false));
+        let pending_intellisense = self.pending_intellisense.clone();
 
         // Setup callback for inserting selected text
         let mut buffer_for_insert = buffer.clone();
@@ -406,9 +472,10 @@ impl SqlEditorWidget {
         {
             let mut popup = intellisense_popup.borrow_mut();
             popup.set_selected_callback(move |selected| {
-                let cursor_pos = editor_for_insert.insert_position() as usize;
-                let text = buffer_for_insert.text();
-                let context = detect_sql_context(&text, cursor_pos);
+                let cursor_pos = editor_for_insert.insert_position().max(0) as i32;
+                let cursor_pos_usize = cursor_pos as usize;
+                let context_text = Self::context_before_cursor(&buffer_for_insert, cursor_pos);
+                let context = detect_sql_context(&context_text, context_text.len());
                 if matches!(context, SqlContext::TableName) {
                     let should_prefetch = {
                         let data = intellisense_data_for_insert.borrow();
@@ -427,11 +494,12 @@ impl SqlEditorWidget {
                 let (start, end) = if let Some((range_start, range_end)) = range {
                     (range_start, range_end)
                 } else {
-                    let (word, start, _end) = get_word_at_cursor(&text, cursor_pos);
+                    let (word, start, _end) =
+                        Self::word_at_cursor(&buffer_for_insert, cursor_pos);
                     if word.is_empty() {
-                        (cursor_pos, cursor_pos)
+                        (cursor_pos_usize, cursor_pos_usize)
                     } else {
-                        (start, cursor_pos)
+                        (start, cursor_pos_usize)
                     }
                 };
 
@@ -440,7 +508,8 @@ impl SqlEditorWidget {
                     editor_for_insert.set_insert_position((start + selected.len()) as i32);
                 } else {
                     buffer_for_insert.insert(cursor_pos as i32, &selected);
-                    editor_for_insert.set_insert_position((cursor_pos + selected.len()) as i32);
+                    editor_for_insert
+                        .set_insert_position((cursor_pos_usize + selected.len()) as i32);
                 }
                 *completion_range_for_insert.borrow_mut() = None;
             });
@@ -462,6 +531,7 @@ impl SqlEditorWidget {
         let find_callback_for_handle = self.find_callback.clone();
         let replace_callback_for_handle = self.replace_callback.clone();
         let ctrl_enter_handled_for_handle = ctrl_enter_handled.clone();
+        let pending_intellisense_for_handle = pending_intellisense.clone();
 
         editor.handle(move |ed, ev| {
             match ev {
@@ -501,18 +571,18 @@ impl SqlEditorWidget {
                                 // Insert selected suggestion, consume event
                                 let selected = intellisense_popup_for_handle.borrow().get_selected();
                                 if let Some(selected) = selected {
-                                    let cursor_pos = ed.insert_position() as usize;
-                                    let text = buffer_for_handle.text();
+                                    let cursor_pos = ed.insert_position().max(0) as i32;
+                                    let cursor_pos_usize = cursor_pos as usize;
                                     let range = *completion_range_for_handle.borrow();
                                     let (start, end) = if let Some((range_start, range_end)) = range {
                                         (range_start, range_end)
                                     } else {
                                         let (word, start, _end) =
-                                            get_word_at_cursor(&text, cursor_pos);
+                                            Self::word_at_cursor(&buffer_for_handle, cursor_pos);
                                         if word.is_empty() {
-                                            (cursor_pos, cursor_pos)
+                                            (cursor_pos_usize, cursor_pos_usize)
                                         } else {
-                                            (start, cursor_pos)
+                                            (start, cursor_pos_usize)
                                         }
                                     };
 
@@ -524,21 +594,22 @@ impl SqlEditorWidget {
                                         );
                                         ed.set_insert_position((start + selected.len()) as i32);
                                     } else {
-                                        buffer_for_handle.insert(cursor_pos as i32, &selected);
+                                        buffer_for_handle.insert(cursor_pos, &selected);
                                         ed.set_insert_position(
-                                            (cursor_pos + selected.len()) as i32,
+                                            (cursor_pos_usize + selected.len()) as i32,
                                         );
                                     }
                                     *completion_range_for_handle.borrow_mut() = None;
 
                                     // Update syntax highlighting after insertion
-                                    let new_text = buffer_for_handle.text();
                                     let cursor_pos = ed.insert_position().max(0) as usize;
-                                    highlighter_for_handle.borrow().highlight_around_cursor(
-                                        &new_text,
-                                        &mut style_buffer_for_handle,
-                                        cursor_pos,
-                                    );
+                                    highlighter_for_handle
+                                        .borrow()
+                                        .highlight_buffer_window(
+                                            &buffer_for_handle,
+                                            &mut style_buffer_for_handle,
+                                            cursor_pos,
+                                        );
                                 }
                                 if matches!(key, Key::Enter | Key::KPEnter) {
                                     *suppress_enter_for_handle.borrow_mut() = true;
@@ -581,6 +652,7 @@ impl SqlEditorWidget {
                                     &completion_range_for_handle,
                                     &column_sender_for_handle,
                                     &connection_for_handle,
+                                    &pending_intellisense_for_handle,
                                 );
                                 return true;
                             }
@@ -663,6 +735,7 @@ impl SqlEditorWidget {
                             &completion_range_for_handle,
                             &column_sender_for_handle,
                             &connection_for_handle,
+                            &pending_intellisense_for_handle,
                         );
                         return true;
                     }
@@ -676,8 +749,6 @@ impl SqlEditorWidget {
                     }
                     // KeyUp fires AFTER the character is inserted into the buffer.
                     // Filter/show intellisense here.
-                    let text = buffer_for_handle.text();
-
                     let key = fltk::app::event_key();
 
                     if matches!(key, Key::Up | Key::Down)
@@ -733,9 +804,10 @@ impl SqlEditorWidget {
                     }
 
                     // Handle typing - update intellisense filter
-                    let cursor_pos = ed.insert_position() as usize;
-                    let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
-                    let context = detect_sql_context(&text, cursor_pos);
+                    let cursor_pos = ed.insert_position().max(0) as i32;
+                    let (word, _, _) = Self::word_at_cursor(&buffer_for_handle, cursor_pos);
+                    let context_text = Self::context_before_cursor(&buffer_for_handle, cursor_pos);
+                    let context = detect_sql_context(&context_text, context_text.len());
 
                     if key == Key::BackSpace || key == Key::Delete {
                         // After backspace/delete, re-evaluate
@@ -748,6 +820,7 @@ impl SqlEditorWidget {
                                 &completion_range_for_handle,
                                 &column_sender_for_handle,
                                 &connection_for_handle,
+                                &pending_intellisense_for_handle,
                             );
                         } else {
                             intellisense_popup_for_handle.borrow_mut().hide();
@@ -764,7 +837,18 @@ impl SqlEditorWidget {
                         });
 
                         if let Some(ch) = typed_char {
-                            if ch.is_alphanumeric() || ch == '_' {
+                            if ch == '.' {
+                                Self::trigger_intellisense(
+                                    ed,
+                                    &buffer_for_handle,
+                                    &intellisense_data_for_handle,
+                                    &intellisense_popup_for_handle,
+                                    &completion_range_for_handle,
+                                    &column_sender_for_handle,
+                                    &connection_for_handle,
+                                    &pending_intellisense_for_handle,
+                                );
+                            } else if ch.is_alphanumeric() || ch == '_' || ch == '$' {
                                 // Alphanumeric typed - show/update popup if word is long enough
                                 if word.len() >= 2 {
                                     Self::trigger_intellisense(
@@ -775,6 +859,7 @@ impl SqlEditorWidget {
                                         &completion_range_for_handle,
                                         &column_sender_for_handle,
                                         &connection_for_handle,
+                                        &pending_intellisense_for_handle,
                                     );
                                 } else {
                                     intellisense_popup_for_handle.borrow_mut().hide();
@@ -843,13 +928,15 @@ impl SqlEditorWidget {
         completion_range: &Rc<RefCell<Option<(usize, usize)>>>,
         column_sender: &mpsc::Sender<ColumnLoadUpdate>,
         connection: &SharedConnection,
+        pending_intellisense: &Rc<RefCell<Option<PendingIntellisense>>>,
     ) {
-        let cursor_pos = editor.insert_position() as usize;
-        let text = buffer.text();
-        let (word, start, _) = get_word_at_cursor(&text, cursor_pos);
-        let qualifier = Self::qualifier_before_word(&text, start);
+        let cursor_pos = editor.insert_position().max(0) as i32;
+        let cursor_pos_usize = cursor_pos as usize;
+        let (word, start, _) = Self::word_at_cursor(buffer, cursor_pos);
+        let qualifier = Self::qualifier_before_word(buffer, start);
         let prefix = if word.is_empty() {
             if qualifier.is_none() {
+                *pending_intellisense.borrow_mut() = None;
                 *completion_range.borrow_mut() = None;
                 return;
             }
@@ -858,9 +945,14 @@ impl SqlEditorWidget {
             word
         };
 
-        let context = detect_sql_context(&text, cursor_pos);
-        let text_before_cursor: String = text.chars().take(cursor_pos).collect();
-        let table_refs = Self::collect_table_references(&text_before_cursor);
+        let context_text = Self::context_before_cursor(buffer, cursor_pos);
+        let context = detect_sql_context(&context_text, context_text.len());
+        let statement_text = Self::statement_context(buffer, cursor_pos);
+        let table_refs = if statement_text.is_empty() {
+            Self::collect_table_references(&context_text)
+        } else {
+            Self::collect_table_references(&statement_text)
+        };
         let column_tables = Self::resolve_column_tables(&table_refs, qualifier.as_deref());
         let include_columns = qualifier.is_some()
             || matches!(context, SqlContext::ColumnName | SqlContext::ColumnOrAll);
@@ -871,21 +963,42 @@ impl SqlEditorWidget {
             }
         }
 
-        let suggestions = {
+        let columns_loading = if qualifier.is_some() {
             let data = intellisense_data.borrow();
-            let column_scope = if include_columns && !column_tables.is_empty() {
+            column_tables.iter().any(|table| {
+                let key = table.to_uppercase();
+                data.columns_loading.contains(&key)
+            })
+        } else {
+            false
+        };
+
+        let suggestions = {
+            let mut data = intellisense_data.borrow_mut();
+            let column_scope = if !column_tables.is_empty() {
                 Some(column_tables.as_slice())
             } else {
                 None
             };
-            data.get_suggestions(&prefix, include_columns, column_scope)
+            if qualifier.is_some() {
+                data.get_column_suggestions(&prefix, column_scope)
+            } else {
+                data.get_suggestions(&prefix, include_columns, column_scope)
+            }
         };
 
         if suggestions.is_empty() {
+            if columns_loading {
+                *pending_intellisense.borrow_mut() =
+                    Some(PendingIntellisense { cursor_pos });
+            } else {
+                *pending_intellisense.borrow_mut() = None;
+            }
             intellisense_popup.borrow_mut().hide();
             *completion_range.borrow_mut() = None;
             return;
         }
+        *pending_intellisense.borrow_mut() = None;
 
         // Get cursor position in editor's local coordinates (already window-relative in FLTK)
         let (cursor_x, cursor_y) = editor.position_to_xy(editor.insert_position());
@@ -915,8 +1028,8 @@ impl SqlEditorWidget {
         intellisense_popup
             .borrow_mut()
             .show_suggestions(suggestions, popup_x, popup_y);
-        let completion_start = if prefix.is_empty() { cursor_pos } else { start };
-        *completion_range.borrow_mut() = Some((completion_start, cursor_pos));
+        let completion_start = if prefix.is_empty() { cursor_pos_usize } else { start };
+        *completion_range.borrow_mut() = Some((completion_start, cursor_pos_usize));
         let mut editor = editor.clone();
         let _ = editor.take_focus();
     }
@@ -993,35 +1106,119 @@ impl SqlEditorWidget {
         });
     }
 
-    fn qualifier_before_word(text: &str, word_start: usize) -> Option<String> {
+    fn word_at_cursor(buffer: &TextBuffer, cursor_pos: i32) -> (String, usize, usize) {
+        let buffer_len = buffer.length().max(0);
+        if buffer_len == 0 {
+            return (String::new(), 0, 0);
+        }
+        let cursor_pos = cursor_pos.clamp(0, buffer_len);
+        let start = (cursor_pos - INTELLISENSE_WORD_WINDOW).max(0);
+        let end = (cursor_pos + INTELLISENSE_WORD_WINDOW).min(buffer_len);
+        let start = buffer.line_start(start).max(0);
+        let end = buffer.line_end(end).max(start);
+        let text = buffer.text_range(start, end).unwrap_or_default();
+        let rel_cursor = (cursor_pos - start).max(0) as usize;
+        let (word, rel_start, rel_end) = get_word_at_cursor(&text, rel_cursor);
+        let abs_start = start as usize + rel_start;
+        let abs_end = start as usize + rel_end;
+        (word, abs_start, abs_end)
+    }
+
+    fn context_before_cursor(buffer: &TextBuffer, cursor_pos: i32) -> String {
+        let buffer_len = buffer.length().max(0);
+        let cursor_pos = cursor_pos.clamp(0, buffer_len);
+        let start = (cursor_pos - INTELLISENSE_CONTEXT_WINDOW).max(0);
+        let start = buffer.line_start(start).max(0);
+        let text = buffer.text_range(start, cursor_pos).unwrap_or_default();
+        if let Some(pos) = text.rfind(';') {
+            return text[pos + 1..].to_string();
+        }
+        text
+    }
+
+    fn statement_context(buffer: &TextBuffer, cursor_pos: i32) -> String {
+        let buffer_len = buffer.length().max(0);
+        if buffer_len == 0 {
+            return String::new();
+        }
+        let cursor_pos = cursor_pos.clamp(0, buffer_len);
+        let start = (cursor_pos - INTELLISENSE_STATEMENT_WINDOW).max(0);
+        let end = (cursor_pos + INTELLISENSE_STATEMENT_WINDOW).min(buffer_len);
+        let start = buffer.line_start(start).max(0);
+        let end = buffer.line_end(end).max(start);
+        let Some(text) = buffer.text_range(start, end) else {
+            return String::new();
+        };
+        let mut rel_cursor = (cursor_pos - start).max(0) as usize;
+        if rel_cursor > text.len() {
+            rel_cursor = text.len();
+        }
+        while rel_cursor > 0 && !text.is_char_boundary(rel_cursor) {
+            rel_cursor -= 1;
+        }
+        let mut stmt_start = text[..rel_cursor].rfind(';').map(|pos| pos + 1).unwrap_or(0);
+        let mut stmt_end = text[rel_cursor..]
+            .find(';')
+            .map(|pos| rel_cursor + pos)
+            .unwrap_or(text.len());
+        while stmt_start > 0 && !text.is_char_boundary(stmt_start) {
+            stmt_start -= 1;
+        }
+        while stmt_end < text.len() && !text.is_char_boundary(stmt_end) {
+            stmt_end += 1;
+        }
+        text[stmt_start..stmt_end].to_string()
+    }
+
+    fn qualifier_before_word(buffer: &TextBuffer, word_start: usize) -> Option<String> {
         if word_start == 0 {
             return None;
         }
-
-        let chars: Vec<char> = text.chars().collect();
-        if chars.get(word_start - 1)? != &'.' {
+        let buffer_len = buffer.length().max(0) as usize;
+        if word_start > buffer_len {
             return None;
         }
-
-        let mut start = word_start - 1;
-        while start > 0 {
-            let ch = chars[start - 1];
-            if !ch.is_alphanumeric() && ch != '_' {
-                break;
-            }
-            start -= 1;
+        let start = word_start
+            .saturating_sub(INTELLISENSE_QUALIFIER_WINDOW as usize)
+            .min(word_start);
+        let start = buffer.line_start(start as i32).max(0) as usize;
+        let text = buffer
+            .text_range(start as i32, word_start as i32)
+            .unwrap_or_default();
+        let mut rel_word_start = word_start - start;
+        if rel_word_start > text.len() {
+            rel_word_start = text.len();
         }
-
-        if start == word_start - 1 {
+        while rel_word_start > 0 && !text.is_char_boundary(rel_word_start) {
+            rel_word_start -= 1;
+        }
+        if rel_word_start == 0 {
             return None;
         }
-
-        let qualifier: String = chars[start..word_start - 1].iter().collect();
+        let bytes = text.as_bytes();
+        if bytes.get(rel_word_start - 1) != Some(&b'.') {
+            return None;
+        }
+        let idx = rel_word_start - 1;
+        let mut begin = idx;
+        while begin > 0 && Self::is_identifier_byte(bytes[begin - 1]) {
+            begin -= 1;
+        }
+        if begin == idx {
+            return None;
+        }
+        let Some(qualifier) = text.get(begin..idx) else {
+            return None;
+        };
         if qualifier.is_empty() {
             None
         } else {
-            Some(qualifier)
+            Some(qualifier.to_string())
         }
+    }
+
+    fn is_identifier_byte(byte: u8) -> bool {
+        byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
     }
 
     fn collect_table_references(text: &str) -> Vec<TableReference> {
@@ -1532,6 +1729,7 @@ impl SqlEditorWidget {
         }
         popup.hide();
         *self.completion_range.borrow_mut() = None;
+        *self.pending_intellisense.borrow_mut() = None;
     }
 
     pub fn hide_intellisense(&self) {
@@ -1540,10 +1738,13 @@ impl SqlEditorWidget {
             popup.hide();
         }
         *self.completion_range.borrow_mut() = None;
+        *self.pending_intellisense.borrow_mut() = None;
     }
 
     #[allow(dead_code)]
     pub fn update_intellisense_data(&mut self, data: IntellisenseData) {
+        let mut data = data;
+        data.rebuild_indices();
         *self.intellisense_data.borrow_mut() = data;
     }
 
@@ -1555,11 +1756,14 @@ impl SqlEditorWidget {
     pub fn update_highlight_data(&mut self, data: HighlightData) {
         self.highlighter.borrow_mut().set_highlight_data(data);
         // Re-highlight current text
-        let text = self.buffer.text();
         let mut style_buffer = self.style_buffer.clone();
         self.highlighter
             .borrow()
-            .highlight(&text, &mut style_buffer);
+            .highlight_buffer_window(
+                &self.buffer,
+                &mut style_buffer,
+                self.editor.insert_position().max(0) as usize,
+            );
     }
 
     pub fn get_highlighter(&self) -> Rc<RefCell<SqlHighlighter>> {
@@ -1584,16 +1788,15 @@ impl SqlEditorWidget {
         self.buffer.clone()
     }
 
-    pub fn get_style_buffer(&self) -> TextBuffer {
-        self.style_buffer.clone()
-    }
-
     #[allow(dead_code)]
     pub fn refresh_highlighting(&self) {
-        let text = self.buffer.text();
         self.highlighter
             .borrow()
-            .highlight(&text, &mut self.style_buffer.clone());
+            .highlight_buffer_window(
+                &self.buffer,
+                &mut self.style_buffer.clone(),
+                self.editor.insert_position().max(0) as usize,
+            );
     }
 
     #[allow(dead_code)]
@@ -1623,13 +1826,13 @@ impl SqlEditorWidget {
             &self.completion_range,
             &self.column_sender,
             &self.connection,
+            &self.pending_intellisense,
         );
     }
 
     pub fn quick_describe_at_cursor(&self) {
-        let text = self.buffer.text();
-        let cursor_pos = self.editor.insert_position() as usize;
-        let (word, _, _) = get_word_at_cursor(&text, cursor_pos);
+        let cursor_pos = self.editor.insert_position().max(0) as i32;
+        let (word, _, _) = Self::word_at_cursor(&self.buffer, cursor_pos);
         if word.is_empty() {
             return;
         }
