@@ -1299,16 +1299,12 @@ impl SqlEditorWidget {
     }
 
     pub fn explain_current(&self) {
-        let buffer = self.buffer.clone();
-        let sql = if buffer.selected() {
-            buffer.selection_text()
-        } else {
-            buffer.text()
-        };
-        if sql.trim().is_empty() {
-            fltk::dialog::alert_default("No SQL to explain");
+        let sql = self.buffer.text();
+        let cursor_pos = self.editor.insert_position() as usize;
+        let Some(sql) = QueryExecutor::statement_at_cursor(&sql, cursor_pos) else {
+            fltk::dialog::alert_default("No SQL at cursor");
             return;
-        }
+        };
 
         let conn_guard = lock_connection(&self.connection);
         if !conn_guard.is_connected() {
