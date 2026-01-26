@@ -5,6 +5,7 @@ use fltk::{
     input::Input,
     prelude::*,
     tree::{Tree, TreeItem, TreeSelect},
+    widget::Widget,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -333,6 +334,23 @@ impl ObjectBrowserWidget {
         sql_callback: &SqlExecuteCallback,
     ) {
         if let Some(item_info) = Self::get_item_info(item) {
+            let menu_choices = match &item_info {
+                ObjectItem::Simple { object_type, .. } if object_type == "Tables" => {
+                    "Select Data (Top 100)|View Structure|View Indexes|View Constraints|Generate DDL"
+                }
+                ObjectItem::Simple { object_type, .. } if object_type == "Views" => {
+                    "Select Data (Top 100)|Generate DDL"
+                }
+                ObjectItem::Simple { object_type, .. }
+                    if object_type == "Procedures"
+                        || object_type == "Functions"
+                        || object_type == "Sequences" =>
+                {
+                    "Generate DDL"
+                }
+                _ => return,
+            };
+
             // Get mouse position for proper popup placement
             let mouse_x = fltk::app::event_x();
             let mouse_y = fltk::app::event_y();
@@ -340,23 +358,7 @@ impl ObjectBrowserWidget {
             let mut menu = fltk::menu::MenuButton::new(mouse_x, mouse_y, 0, 0, None);
             menu.set_color(theme::panel_raised());
             menu.set_text_color(theme::text_primary());
-
-            match &item_info {
-                ObjectItem::Simple { object_type, .. } if object_type == "Tables" => {
-                    menu.add_choice("Select Data (Top 100)|View Structure|View Indexes|View Constraints|Generate DDL");
-                }
-                ObjectItem::Simple { object_type, .. } if object_type == "Views" => {
-                    menu.add_choice("Select Data (Top 100)|Generate DDL");
-                }
-                ObjectItem::Simple { object_type, .. }
-                    if object_type == "Procedures"
-                        || object_type == "Functions"
-                        || object_type == "Sequences" =>
-                {
-                    menu.add_choice("Generate DDL");
-                }
-                _ => return,
-            }
+            menu.add_choice(menu_choices);
 
             if let Some(choice_item) = menu.popup() {
                 let choice_label = choice_item.label().unwrap_or_default();
@@ -364,16 +366,9 @@ impl ObjectBrowserWidget {
                 let conn_guard = lock_connection(&connection);
                 if !conn_guard.is_connected() {
                     fltk::dialog::alert_default("Not connected to database");
-                    return;
-                }
-
-                if let Some(db_conn) = conn_guard.get_connection() {
+                } else if let Some(db_conn) = conn_guard.get_connection() {
                     match (choice_label.as_str(), &item_info) {
-                        ("Select Data (Top 100)", _) => {
-                            let object_name = match &item_info {
-                                ObjectItem::Simple { object_name, .. } => object_name,
-                                _ => return,
-                            };
+                        ("Select Data (Top 100)", ObjectItem::Simple { object_name, .. }) => {
                             let sql = format!("SELECT * FROM {} WHERE ROWNUM <= 100", object_name);
                             drop(conn_guard);
                             if let Some(ref mut cb) = *sql_callback.borrow_mut() {
@@ -397,21 +392,27 @@ impl ObjectBrowserWidget {
                             },
                         ) => {
                             let obj_type = match object_type.as_str() {
-                                "Tables" => "TABLE",
-                                "Views" => "VIEW",
-                                "Procedures" => "PROCEDURE",
-                                "Functions" => "FUNCTION",
-                                "Sequences" => "SEQUENCE",
-                                _ => return,
+                                "Tables" => Some("TABLE"),
+                                "Views" => Some("VIEW"),
+                                "Procedures" => Some("PROCEDURE"),
+                                "Functions" => Some("FUNCTION"),
+                                "Sequences" => Some("SEQUENCE"),
+                                _ => None,
                             };
-                            Self::show_ddl(db_conn.as_ref(), obj_type, object_name, sql_callback);
+                            if let Some(obj_type) = obj_type {
+                                Self::show_ddl(db_conn.as_ref(), obj_type, object_name, sql_callback);
+                            }
                         }
                         _ => {}
                     }
                 }
             }
 
-            menu.hide();
+            // FLTK memory management: widgets created without a parent must be deleted.
+            unsafe {
+                let widget = Widget::from_widget_ptr(menu.as_widget_ptr());
+                Widget::delete(widget);
+            }
         }
     }
 
@@ -657,6 +658,12 @@ impl ObjectBrowserWidget {
                         break;
                     }
                 }
+            }
+
+            // FLTK memory management: widgets created without a parent must be deleted.
+            unsafe {
+                let widget = Widget::from_widget_ptr(menu.as_widget_ptr());
+                Widget::delete(widget);
             }
         }
     }
