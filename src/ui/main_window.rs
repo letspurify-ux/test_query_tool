@@ -273,7 +273,7 @@ impl MainWindow {
         fn schedule_poll(
             schema_receiver: Rc<RefCell<std::sync::mpsc::Receiver<SchemaUpdate>>>,
             conn_receiver: Rc<RefCell<std::sync::mpsc::Receiver<ConnectionResult>>>,
-            state: Rc<RefCell<MainWindowState>>,
+            state: Rc<RefCell<AppState>>,
             schema_sender: std::sync::mpsc::Sender<SchemaUpdate>,
         ) {
             // Check for schema updates
@@ -327,13 +327,13 @@ impl MainWindow {
             }
 
             // Reschedule for next poll
-            let schema_receiver = schema_receiver.clone();
-            let conn_receiver = conn_receiver.clone();
-            let state = state.clone();
-            let schema_sender = schema_sender.clone();
-
-            app::add_timeout(0.05, move || {
-                schedule_poll(schema_receiver, conn_receiver, state, schema_sender);
+            app::add_timeout3(0.05, move |_| {
+                schedule_poll(
+                    Rc::clone(&schema_receiver),
+                    Rc::clone(&conn_receiver),
+                    Rc::clone(&state),
+                    schema_sender.clone(),
+                );
             });
         }
 
