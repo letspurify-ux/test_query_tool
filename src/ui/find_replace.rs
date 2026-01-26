@@ -447,20 +447,13 @@ fn find_next_match(
     let start_pos = if start_pos < 0 { 0 } else { start_pos as usize };
     let start = clamp_to_char_boundary(text, start_pos);
     if case_sensitive {
-        let slice = &text[start..];
-        let mut offset = 0usize;
-        while let Some(pos) = slice[offset..].find(search_text) {
-            let match_start = start + offset + pos;
-            let match_end = match_start + search_text.len();
-            if text.is_char_boundary(match_start) && text.is_char_boundary(match_end) {
-                return Some((match_start, match_end));
-            }
-            offset += pos + 1;
-            if start + offset >= text.len() {
-                break;
-            }
-        }
-        return None;
+        let pos = text[start..]
+            .match_indices(search_text)
+            .next()
+            .map(|(pos, _)| pos)?;
+        let match_start = start + pos;
+        let match_end = match_start + search_text.len();
+        return Some((match_start, match_end));
     }
 
     let search_lower = search_text.to_lowercase();
