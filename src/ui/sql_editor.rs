@@ -58,6 +58,7 @@ pub enum QueryProgress {
         index: usize,
         result: QueryResult,
         connection_name: String,
+        timed_out: bool,
     },
     BatchFinished,
 }
@@ -254,8 +255,15 @@ impl SqlEditorWidget {
                         QueryProgress::StatementFinished {
                             result,
                             connection_name,
+                            timed_out,
                             ..
                         } => {
+                            if timed_out {
+                                fltk::dialog::alert_default(&format!(
+                                    "Query timed out!\n\n{}",
+                                    result.message
+                                ));
+                            }
                             QueryHistoryDialog::add_to_history(
                                 &result.sql,
                                 result.execution_time.as_millis() as u64,
@@ -2297,6 +2305,7 @@ impl SqlEditorWidget {
                         index: 0,
                         result: QueryResult::new_error(&sql_text, &err.to_string()),
                         connection_name: conn_name.clone(),
+                        timed_out: false,
                     });
                     let _ = sender.send(QueryProgress::BatchFinished);
                     app::awake();
@@ -2391,6 +2400,7 @@ impl SqlEditorWidget {
                         index,
                         result,
                         connection_name: conn_name.clone(),
+                        timed_out,
                     });
                     app::awake();
 
