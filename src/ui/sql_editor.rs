@@ -361,9 +361,13 @@ impl SqlEditorWidget {
         let highlighter = self.highlighter.clone();
         let mut style_buffer = self.style_buffer.clone();
         let mut buffer = self.buffer.clone();
+        let mut editor = self.editor.clone();
         buffer.add_modify_callback2(move |buf, _pos, _ins, _del, _restyled, _deleted_text| {
             let text = buf.text();
-            highlighter.borrow().highlight(&text, &mut style_buffer);
+            let cursor_pos = editor.insert_position().max(0) as usize;
+            highlighter
+                .borrow()
+                .highlight_around_cursor(&text, &mut style_buffer, cursor_pos);
         });
         self.refresh_highlighting();
     }
@@ -520,9 +524,12 @@ impl SqlEditorWidget {
 
                                     // Update syntax highlighting after insertion
                                     let new_text = buffer_for_handle.text();
-                                    highlighter_for_handle
-                                        .borrow()
-                                        .highlight(&new_text, &mut style_buffer_for_handle);
+                                    let cursor_pos = ed.insert_position().max(0) as usize;
+                                    highlighter_for_handle.borrow().highlight_around_cursor(
+                                        &new_text,
+                                        &mut style_buffer_for_handle,
+                                        cursor_pos,
+                                    );
                                 }
                                 if matches!(key, Key::Enter | Key::KPEnter) {
                                     *suppress_enter_for_handle.borrow_mut() = true;
