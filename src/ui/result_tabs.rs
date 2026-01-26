@@ -22,6 +22,8 @@ struct ResultTab {
 }
 
 impl ResultTabsWidget {
+    const TAB_HEADER_HEIGHT: i32 = 25;
+
     pub fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
         // Use explicit dimensions to avoid "center of requires the size of the
         // widget to be known" panic that occurs with default_fill()
@@ -44,6 +46,17 @@ impl ResultTabsWidget {
                     .iter()
                     .position(|tab| tab.group.as_widget_ptr() == ptr);
                 *active_for_cb.borrow_mut() = index;
+            }
+        });
+
+        let tab_header_height = Self::TAB_HEADER_HEIGHT;
+        tabs.resize_callback(move |t, x, y, w, h| {
+            let content_y = y + tab_header_height;
+            let content_h = (h - tab_header_height).max(100);
+            for child in t.clone().into_iter() {
+                if let Some(mut group) = child.as_group() {
+                    group.resize(x, content_y, w, content_h);
+                }
             }
         });
 
@@ -87,9 +100,9 @@ impl ResultTabsWidget {
         // "center of requires the size of the widget to be known" panic
         // Use minimum dimensions (100x100) if tabs size is not yet known
         let x = self.tabs.x();
-        let y = self.tabs.y() + 25;
+        let y = self.tabs.y() + Self::TAB_HEADER_HEIGHT;
         let w = self.tabs.w().max(100);
-        let h = (self.tabs.h() - 25).max(100);
+        let h = (self.tabs.h() - Self::TAB_HEADER_HEIGHT).max(100);
         let mut group = Group::new(x, y, w, h, None).with_label(label);
         group.set_color(theme::panel_bg());
         group.set_label_color(theme::text_secondary());
