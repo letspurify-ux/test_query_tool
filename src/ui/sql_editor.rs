@@ -231,47 +231,97 @@ impl SqlEditorWidget {
         query_running: Rc<RefCell<bool>>,
     ) {
         let execute_callback = self.execute_callback.clone();
-        app::add_idle3(move |_| {
-            while let Ok(message) = progress_receiver.try_recv() {
-                if let Some(ref mut cb) = *progress_callback.borrow_mut() {
-                    cb(message.clone());
-                }
 
-                match message {
-                    QueryProgress::StatementFinished {
-                        result,
-                        connection_name,
-                        ..
-                    } => {
-                        QueryHistoryDialog::add_to_history(
-                            &result.sql,
-                            result.execution_time.as_millis() as u64,
-                            result.row_count,
-                            &connection_name,
-                        );
-                        if let Some(ref mut cb) = *execute_callback.borrow_mut() {
-                            cb(result);
+        // Wrap receiver in Rc<RefCell> to share across timeout callbacks
+        let receiver: Rc<RefCell<mpsc::Receiver<QueryProgress>>> =
+            Rc::new(RefCell::new(progress_receiver));
+
+        fn schedule_poll(
+            receiver: Rc<RefCell<mpsc::Receiver<QueryProgress>>>,
+            progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>>,
+            query_running: Rc<RefCell<bool>>,
+            execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>>,
+        ) {
+            // Process any pending messages
+            {
+                let r = receiver.borrow();
+                while let Ok(message) = r.try_recv() {
+                    if let Some(ref mut cb) = *progress_callback.borrow_mut() {
+                        cb(message.clone());
+                    }
+
+                    match message {
+                        QueryProgress::StatementFinished {
+                            result,
+                            connection_name,
+                            ..
+                        } => {
+                            QueryHistoryDialog::add_to_history(
+                                &result.sql,
+                                result.execution_time.as_millis() as u64,
+                                result.row_count,
+                                &connection_name,
+                            );
+                            if let Some(ref mut cb) = *execute_callback.borrow_mut() {
+                                cb(result);
+                            }
                         }
+                        QueryProgress::BatchFinished => {
+                            *query_running.borrow_mut() = false;
+                            set_cursor(Cursor::Default);
+                            app::flush();
+                        }
+                        _ => {}
                     }
-                    QueryProgress::BatchFinished => {
-                        *query_running.borrow_mut() = false;
-                        set_cursor(Cursor::Default);
-                        app::flush();
-                    }
-                    _ => {}
                 }
             }
-        });
+
+            // Reschedule for next poll
+            let receiver = receiver.clone();
+            let progress_callback = progress_callback.clone();
+            let query_running = query_running.clone();
+            let execute_callback = execute_callback.clone();
+
+            app::add_timeout(0.05, move || {
+                schedule_poll(receiver, progress_callback, query_running, execute_callback);
+            });
+        }
+
+        // Start polling
+        schedule_poll(receiver, progress_callback, query_running, execute_callback);
     }
 
     fn setup_column_loader(&self, column_receiver: mpsc::Receiver<ColumnLoadUpdate>) {
         let intellisense_data = self.intellisense_data.clone();
-        app::add_idle3(move |_| {
-            while let Ok(update) = column_receiver.try_recv() {
-                let mut data = intellisense_data.borrow_mut();
-                data.set_columns_for_table(&update.table, update.columns);
+
+        // Wrap receiver in Rc<RefCell> to share across timeout callbacks
+        let receiver: Rc<RefCell<mpsc::Receiver<ColumnLoadUpdate>>> =
+            Rc::new(RefCell::new(column_receiver));
+
+        fn schedule_poll(
+            receiver: Rc<RefCell<mpsc::Receiver<ColumnLoadUpdate>>>,
+            intellisense_data: Rc<RefCell<IntellisenseData>>,
+        ) {
+            // Process any pending messages
+            {
+                let r = receiver.borrow();
+                while let Ok(update) = r.try_recv() {
+                    let mut data = intellisense_data.borrow_mut();
+                    data.set_columns_for_table(&update.table, update.columns);
+                }
             }
-        });
+
+            // Reschedule for next poll
+            let receiver = receiver.clone();
+            let intellisense_data = intellisense_data.clone();
+
+            app::add_timeout(0.05, move || {
+                schedule_poll(receiver, intellisense_data);
+            });
+        }
+
+        // Start polling
+        schedule_poll(receiver, intellisense_data);
     }
 
     fn setup_syntax_highlighting(&self) {

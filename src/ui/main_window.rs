@@ -264,53 +264,83 @@ impl MainWindow {
         let (schema_sender, schema_receiver) = std::sync::mpsc::channel::<SchemaUpdate>();
         let (conn_sender, conn_receiver) = std::sync::mpsc::channel::<ConnectionResult>();
 
-        let state_for_schema = state.clone();
-        let schema_sender_for_conn = schema_sender.clone();
-        app::add_idle3(move |_| {
+        // Wrap receivers in Rc<RefCell> to share across timeout callbacks
+        let schema_receiver: Rc<RefCell<std::sync::mpsc::Receiver<SchemaUpdate>>> =
+            Rc::new(RefCell::new(schema_receiver));
+        let conn_receiver: Rc<RefCell<std::sync::mpsc::Receiver<ConnectionResult>>> =
+            Rc::new(RefCell::new(conn_receiver));
+
+        fn schedule_poll(
+            schema_receiver: Rc<RefCell<std::sync::mpsc::Receiver<SchemaUpdate>>>,
+            conn_receiver: Rc<RefCell<std::sync::mpsc::Receiver<ConnectionResult>>>,
+            state: Rc<RefCell<MainWindowState>>,
+            schema_sender: std::sync::mpsc::Sender<SchemaUpdate>,
+        ) {
             // Check for schema updates
-            while let Ok(update) = schema_receiver.try_recv() {
-                let s = state_for_schema.borrow();
-                *s.sql_editor.get_intellisense_data().borrow_mut() = update.data;
-                s.sql_editor.get_highlighter().borrow_mut().set_highlight_data(update.highlight_data);
+            {
+                let r = schema_receiver.borrow();
+                while let Ok(update) = r.try_recv() {
+                    let s = state.borrow();
+                    *s.sql_editor.get_intellisense_data().borrow_mut() = update.data;
+                    s.sql_editor.get_highlighter().borrow_mut().set_highlight_data(update.highlight_data);
+                }
             }
 
             // Check for connection results
-            while let Ok(result) = conn_receiver.try_recv() {
-                let mut s = state_for_schema.borrow_mut();
-                match result {
-                    ConnectionResult::Success(info) => {
-                        s.status_bar.set_label(&format!("Connected: {} | Ctrl+Space for autocomplete", info.display_string()));
-                        s.object_browser.refresh();
-                        s.sql_editor.focus();
+            {
+                let r = conn_receiver.borrow();
+                while let Ok(result) = r.try_recv() {
+                    let mut s = state.borrow_mut();
+                    match result {
+                        ConnectionResult::Success(info) => {
+                            s.status_bar.set_label(&format!("Connected: {} | Ctrl+Space for autocomplete", info.display_string()));
+                            s.object_browser.refresh();
+                            s.sql_editor.focus();
 
-                        // Start schema update after successful connection
-                        let schema_sender = schema_sender_for_conn.clone();
-                        let connection = s.connection.clone();
-                        thread::spawn(move || {
-                            let conn_guard = lock_connection(&connection);
-                            if let Some(conn) = conn_guard.get_connection() {
-                                let mut data = IntellisenseData::new();
-                                let mut highlight_data = HighlightData::new();
-                                if let Ok(tables) = ObjectBrowser::get_tables(conn.as_ref()) {
-                                    highlight_data.tables = tables.clone();
-                                    data.tables = tables;
+                            // Start schema update after successful connection
+                            let schema_sender = schema_sender.clone();
+                            let connection = s.connection.clone();
+                            thread::spawn(move || {
+                                let conn_guard = lock_connection(&connection);
+                                if let Some(conn) = conn_guard.get_connection() {
+                                    let mut data = IntellisenseData::new();
+                                    let mut highlight_data = HighlightData::new();
+                                    if let Ok(tables) = ObjectBrowser::get_tables(conn.as_ref()) {
+                                        highlight_data.tables = tables.clone();
+                                        data.tables = tables;
+                                    }
+                                    if let Ok(views) = ObjectBrowser::get_views(conn.as_ref()) {
+                                        highlight_data.views = views.clone();
+                                        data.views = views;
+                                    }
+                                    let _ = schema_sender.send(SchemaUpdate { data, highlight_data });
+                                    app::awake();
                                 }
-                                if let Ok(views) = ObjectBrowser::get_views(conn.as_ref()) {
-                                    highlight_data.views = views.clone();
-                                    data.views = views;
-                                }
-                                let _ = schema_sender.send(SchemaUpdate { data, highlight_data });
-                                app::awake();
-                            }
-                        });
-                    }
-                    ConnectionResult::Failure(err) => {
-                        s.status_bar.set_label("Connection failed");
-                        fltk::dialog::alert_default(&format!("Connection failed: {}", err));
+                            });
+                        }
+                        ConnectionResult::Failure(err) => {
+                            s.status_bar.set_label("Connection failed");
+                            fltk::dialog::alert_default(&format!("Connection failed: {}", err));
+                        }
                     }
                 }
             }
-        });
+
+            // Reschedule for next poll
+            let schema_receiver = schema_receiver.clone();
+            let conn_receiver = conn_receiver.clone();
+            let state = state.clone();
+            let schema_sender = schema_sender.clone();
+
+            app::add_timeout(0.05, move || {
+                schedule_poll(schema_receiver, conn_receiver, state, schema_sender);
+            });
+        }
+
+        // Start polling
+        let state_for_poll = state.clone();
+        let schema_sender_for_poll = schema_sender.clone();
+        schedule_poll(schema_receiver, conn_receiver, state_for_poll, schema_sender_for_poll);
 
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
             let state_for_menu = state.clone();
