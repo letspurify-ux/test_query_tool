@@ -160,14 +160,19 @@ impl MainWindow {
     }
 
     fn adjust_query_layout(state: &mut AppState) {
-        let right_height = state.right_flex.h();
+        let mut right_flex = state.right_flex.clone();
+        let sql_group = state.sql_editor.get_group();
+        Self::adjust_query_layout_with(&mut right_flex, &sql_group);
+    }
+
+    fn adjust_query_layout_with(right_flex: &mut fltk::group::Flex, sql_group: &fltk::group::Group) {
+        let right_height = right_flex.h();
         if right_height <= 0 {
             return;
         }
         let desired_height = ((right_height as f32) * 0.4).round() as i32;
-        let sql_group = state.sql_editor.get_group();
-        state.right_flex.fixed(sql_group, desired_height);
-        state.right_flex.layout();
+        right_flex.fixed(sql_group, desired_height);
+        right_flex.layout();
     }
 
     pub fn setup_callbacks(&mut self) {
@@ -241,8 +246,11 @@ impl MainWindow {
                 false
             }
             fltk::enums::Event::Resize => {
-                let mut s = state_for_window.borrow_mut();
-                MainWindow::adjust_query_layout(&mut s);
+                let (mut right_flex, sql_group) = {
+                    let s = state_for_window.borrow();
+                    (s.right_flex.clone(), s.sql_editor.get_group())
+                };
+                MainWindow::adjust_query_layout_with(&mut right_flex, &sql_group);
                 false
             }
             _ => false,
