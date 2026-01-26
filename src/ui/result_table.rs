@@ -3,6 +3,7 @@ use fltk::{
     enums::{Event, FrameType, Key, Shortcut},
     menu::MenuButton,
     prelude::*,
+    widget::Widget,
 };
 use fltk_table::{SmartTable, TableOpts};
 use std::cell::RefCell;
@@ -416,7 +417,14 @@ impl ResultTableWidget {
             }
         }
 
-        menu.hide();
+        // FLTK memory management: widgets created without a parent must be explicitly deleted.
+        // hide() alone does not release memory - the widget must be removed from parent
+        // and deleted. Since this MenuButton was created with no parent (current_group=None),
+        // we must delete it explicitly to prevent memory leak.
+        unsafe {
+            let widget = Widget::from_widget_ptr(menu.as_widget_ptr());
+            Widget::delete(widget);
+        }
     }
 
     fn copy_selected_to_clipboard(
@@ -889,6 +897,29 @@ impl ResultTableWidget {
 
     pub fn get_widget(&self) -> SmartTable {
         self.table.clone()
+    }
+
+    /// Cleanup method to release resources before the widget is deleted.
+    ///
+    /// FLTK memory management requires that:
+    /// 1. Callbacks capturing Rc<RefCell<T>> must be cleared to decrement reference counts
+    /// 2. Widgets must be removed from their parent before deletion
+    /// 3. Data buffers should be cleared to release memory
+    ///
+    /// This method should be called before the parent Group is deleted to ensure
+    /// proper memory cleanup of captured closures and shared data.
+    pub fn cleanup(&mut self) {
+        // Clear the event handler callback to release captured Rc<RefCell<T>> references.
+        // The original handler captures: table_for_handle, headers_for_handle,
+        // full_data_for_handle, and drag_state_for_handle.
+        // Setting an empty handler releases these references.
+        self.table.handle(|_, _| false);
+
+        // Clear all data buffers to release memory
+        self.headers.borrow_mut().clear();
+        self.pending_rows.borrow_mut().clear();
+        self.pending_widths.borrow_mut().clear();
+        self.full_data.borrow_mut().clear();
     }
 }
 
