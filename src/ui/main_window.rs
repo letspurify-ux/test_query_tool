@@ -58,11 +58,6 @@ enum ConnectionResult {
 }
 
 impl MainWindow {
-    fn schedule_awake(handle: app::TimeoutHandle) {
-        app::awake();
-        app::repeat_timeout3(0.1, handle);
-    }
-
     pub fn new() -> Self {
         let connection = create_shared_connection();
         let mut window = Window::default()
@@ -580,7 +575,6 @@ impl MainWindow {
         app::background(bg_r, bg_g, bg_b);
         let (fg_r, fg_g, fg_b) = theme::app_foreground().to_rgb();
         app::foreground(fg_r, fg_g, fg_b);
-        app::add_timeout3(0.1, Self::schedule_awake);
 
         let mut main_window = MainWindow::new();
         main_window.setup_callbacks();

@@ -1322,9 +1322,7 @@ impl SqlEditorWidget {
         let _ = close_btn.take_focus();
 
         while dialog.shown() {
-            if app::wait_for(0.05).is_err() {
-                app::wait();
-            }
+            app::wait();
             if receiver.try_recv().is_ok() {
                 dialog.hide();
             }

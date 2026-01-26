@@ -63,9 +63,7 @@ fn show_info_dialog(title: &str, content: &str, width: i32, height: i32) {
     fltk::group::Group::set_current(current_group.as_ref());
 
     while dialog.shown() {
-        if app::wait_for(0.05).is_err() {
-            app::wait();
-        }
+        app::wait();
     }
 }
 
