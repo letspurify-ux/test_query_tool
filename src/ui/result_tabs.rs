@@ -61,8 +61,10 @@ impl ResultTabsWidget {
     }
 
     pub fn clear(&mut self) {
-        self.tabs.clear();
-        self.data.borrow_mut().clear();
+        let mut tabs = self.data.borrow_mut();
+        for tab in tabs.drain(..) {
+            self.delete_tab(tab);
+        }
         *self.active_index.borrow_mut() = None;
     }
 
@@ -186,6 +188,14 @@ impl ResultTabsWidget {
         if let Some(mut table) = self.current_table() {
             table.select_all();
         }
+    }
+
+    fn delete_tab(&mut self, tab: ResultTab) {
+        let mut group = tab.group;
+        if self.tabs.find(&group) >= 0 {
+            self.tabs.remove(&group);
+        }
+        fltk::group::Group::delete(group);
     }
 }
 
