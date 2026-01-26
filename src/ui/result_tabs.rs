@@ -1,6 +1,7 @@
 use fltk::{
     group::{Group, Tabs, TabsOverflow},
     prelude::*,
+    widget::Widget,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -205,8 +206,28 @@ impl ResultTabsWidget {
         }
     }
 
-    fn delete_tab(&mut self, tab: ResultTab) {
-        let group = tab.group;
+    fn delete_tab(&mut self, mut tab: ResultTab) {
+        // FLTK memory management: proper cleanup order is critical
+        // 1. Clear callbacks on child widgets to release captured Rc<RefCell<T>> references
+        // 2. Remove child widgets from parent before deletion
+        // 3. Delete child widgets
+        // 4. Delete parent container
+
+        // Step 1: Cleanup the table widget (clears callbacks and data buffers)
+        tab.table.cleanup();
+
+        // Step 2 & 3: Get the SmartTable widget and remove from group, then delete
+        let table_widget = tab.table.get_widget();
+        let mut group = tab.group;
+        group.remove(&*table_widget);
+
+        // Delete the SmartTable widget
+        unsafe {
+            let widget = Widget::from_widget_ptr(table_widget.as_widget_ptr());
+            Widget::delete(widget);
+        }
+
+        // Step 4: Remove group from tabs and delete
         if self.tabs.find(&group) >= 0 {
             self.tabs.remove(&group);
         }
