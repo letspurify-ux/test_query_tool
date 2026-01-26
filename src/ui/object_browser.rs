@@ -659,12 +659,6 @@ impl ObjectBrowserWidget {
                     }
                 }
             }
-
-            // FLTK memory management: widgets created without a parent must be deleted.
-            unsafe {
-                let widget = Widget::from_widget_ptr(menu.as_widget_ptr());
-                Widget::delete(widget);
-            }
         }
     }
 

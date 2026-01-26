@@ -310,54 +310,80 @@ impl MainWindow {
             state: Rc<RefCell<AppState>>,
             schema_sender: std::sync::mpsc::Sender<SchemaUpdate>,
         ) {
+            let mut schema_disconnected = false;
+            let mut conn_disconnected = false;
+
             // Check for schema updates
             {
                 let r = schema_receiver.borrow();
-                while let Ok(update) = r.try_recv() {
-                    let s = state.borrow();
-                    *s.sql_editor.get_intellisense_data().borrow_mut() = update.data;
-                    s.sql_editor.get_highlighter().borrow_mut().set_highlight_data(update.highlight_data);
+                loop {
+                    match r.try_recv() {
+                        Ok(update) => {
+                            let s = state.borrow();
+                            *s.sql_editor.get_intellisense_data().borrow_mut() = update.data;
+                            s.sql_editor.get_highlighter().borrow_mut().set_highlight_data(update.highlight_data);
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            schema_disconnected = true;
+                            break;
+                        }
+                    }
                 }
             }
 
             // Check for connection results
             {
                 let r = conn_receiver.borrow();
-                while let Ok(result) = r.try_recv() {
-                    let mut s = state.borrow_mut();
-                    match result {
-                        ConnectionResult::Success(info) => {
-                            s.status_bar.set_label(&format!("Connected: {} | Ctrl+Space for autocomplete", info.display_string()));
-                            s.object_browser.refresh();
-                            s.sql_editor.focus();
+                loop {
+                    match r.try_recv() {
+                        Ok(result) => {
+                            let mut s = state.borrow_mut();
+                            match result {
+                                ConnectionResult::Success(info) => {
+                                    s.status_bar.set_label(&format!("Connected: {} | Ctrl+Space for autocomplete", info.display_string()));
+                                    s.object_browser.refresh();
+                                    s.sql_editor.focus();
 
-                            // Start schema update after successful connection
-                            let schema_sender = schema_sender.clone();
-                            let connection = s.connection.clone();
-                            thread::spawn(move || {
-                                let conn_guard = lock_connection(&connection);
-                                if let Some(conn) = conn_guard.get_connection() {
-                                    let mut data = IntellisenseData::new();
-                                    let mut highlight_data = HighlightData::new();
-                                    if let Ok(tables) = ObjectBrowser::get_tables(conn.as_ref()) {
-                                        highlight_data.tables = tables.clone();
-                                        data.tables = tables;
-                                    }
-                                    if let Ok(views) = ObjectBrowser::get_views(conn.as_ref()) {
-                                        highlight_data.views = views.clone();
-                                        data.views = views;
-                                    }
-                                    let _ = schema_sender.send(SchemaUpdate { data, highlight_data });
-                                    app::awake();
+                                    // Start schema update after successful connection
+                                    let schema_sender = schema_sender.clone();
+                                    let connection = s.connection.clone();
+                                    thread::spawn(move || {
+                                        let conn_guard = lock_connection(&connection);
+                                        if let Some(conn) = conn_guard.get_connection() {
+                                            let mut data = IntellisenseData::new();
+                                            let mut highlight_data = HighlightData::new();
+                                            if let Ok(tables) = ObjectBrowser::get_tables(conn.as_ref()) {
+                                                highlight_data.tables = tables.clone();
+                                                data.tables = tables;
+                                            }
+                                            if let Ok(views) = ObjectBrowser::get_views(conn.as_ref()) {
+                                                highlight_data.views = views.clone();
+                                                data.views = views;
+                                            }
+                                            let _ = schema_sender.send(SchemaUpdate { data, highlight_data });
+                                            app::awake();
+                                        }
+                                    });
                                 }
-                            });
+                                ConnectionResult::Failure(err) => {
+                                    s.status_bar.set_label("Connection failed");
+                                    fltk::dialog::alert_default(&format!("Connection failed: {}", err));
+                                }
+                            }
                         }
-                        ConnectionResult::Failure(err) => {
-                            s.status_bar.set_label("Connection failed");
-                            fltk::dialog::alert_default(&format!("Connection failed: {}", err));
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            conn_disconnected = true;
+                            break;
                         }
                     }
                 }
+            }
+
+            // Stop polling if both channels are disconnected
+            if schema_disconnected && conn_disconnected {
+                return;
             }
 
             // Reschedule for next poll
