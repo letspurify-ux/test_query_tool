@@ -151,8 +151,22 @@ impl SqlHighlighter {
 
     /// Highlights the given text with a performance window around the cursor position.
     pub fn highlight_around_cursor(&self, text: &str, style_buffer: &mut TextBuffer, cursor_pos: usize) {
-        let style_text = self.generate_styles_windowed(text, cursor_pos);
-        style_buffer.set_text(&style_text);
+        if text.len() <= HIGHLIGHT_WINDOW_THRESHOLD {
+            let style_text = self.generate_styles(text);
+            style_buffer.set_text(&style_text);
+            return;
+        }
+
+        if style_buffer.length() != text.len() as i32 {
+            let default_styles: String = std::iter::repeat(STYLE_DEFAULT).take(text.len()).collect();
+            style_buffer.set_text(&default_styles);
+        }
+
+        let cursor_pos = cursor_pos.min(text.len());
+        let (range_start, range_end) = windowed_range(text, cursor_pos);
+        let window_text = &text[range_start..range_end];
+        let window_styles = self.generate_styles(window_text);
+        style_buffer.replace(range_start as i32, range_end as i32, &window_styles);
     }
 
     /// Generates the style string for the given text
