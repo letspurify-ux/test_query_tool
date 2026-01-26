@@ -240,9 +240,11 @@ impl MainWindow {
         let state_for_window = state.clone();
         state_borrow.window.handle(move |_w, ev| match ev {
             fltk::enums::Event::Push => {
-                let s = state_for_window.borrow();
-                s.sql_editor
-                    .hide_intellisense_if_outside(app::event_x_root(), app::event_y_root());
+                let sql_editor = {
+                    let s = state_for_window.borrow();
+                    s.sql_editor.clone()
+                };
+                sql_editor.hide_intellisense_if_outside(app::event_x_root(), app::event_y_root());
                 false
             }
             fltk::enums::Event::Resize => {
