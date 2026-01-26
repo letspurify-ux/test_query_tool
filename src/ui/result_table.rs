@@ -915,6 +915,22 @@ impl ResultTableWidget {
         // Setting an empty handler releases these references.
         self.table.handle(|_, _| false);
 
+        // Clear SmartTable internal data (Arc<Mutex<CellMatrix>>).
+        // SmartTable stores cell data internally via Arc, and set_opts() sets up
+        // a draw_cell callback that captures Arc clones of data, row_headers, and col_headers.
+        // Clearing the internal data releases the actual memory, even if Arc references
+        // remain in the draw_cell callback until the widget is fully destroyed.
+        {
+            let data_ref = self.table.data_ref();
+            if let Ok(mut data) = data_ref.try_lock() {
+                data.clear();
+            };
+        }
+
+        // Reset table to 0x0 to clear row/column headers and minimize internal state.
+        // This triggers set_opts which recreates empty header vectors.
+        self.apply_table_opts(0, 0);
+
         // Clear all data buffers to release memory
         self.headers.borrow_mut().clear();
         self.pending_rows.borrow_mut().clear();
