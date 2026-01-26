@@ -320,9 +320,7 @@ impl ConnectionDialog {
 
         let mut saved_browser = saved_browser.clone();
         while dialog.shown() {
-            if app::wait_for(0.05).is_err() {
-                app::wait();
-            }
+            app::wait();
             while let Ok(message) = receiver.try_recv() {
                 match message {
                     DialogMessage::DeleteSelected => {
