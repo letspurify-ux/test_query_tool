@@ -74,8 +74,8 @@ impl ResultTabsWidget {
     }
 
     pub fn clear(&mut self) {
-        let mut tabs = self.data.borrow_mut();
-        for tab in tabs.drain(..) {
+        let tabs_to_delete: Vec<_> = self.data.borrow_mut().drain(..).collect();
+        for tab in tabs_to_delete {
             self.delete_tab(tab);
         }
         *self.active_index.borrow_mut() = None;
@@ -204,7 +204,7 @@ impl ResultTabsWidget {
     }
 
     fn delete_tab(&mut self, tab: ResultTab) {
-        let mut group = tab.group;
+        let group = tab.group;
         if self.tabs.find(&group) >= 0 {
             self.tabs.remove(&group);
         }
