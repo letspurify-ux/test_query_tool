@@ -629,8 +629,8 @@ impl ResultTableWidget {
         *self.full_data.borrow_mut() = result.rows.clone();
         for (row_idx, row) in result.rows.iter().enumerate() {
             for (col_idx, cell) in row.iter().enumerate() {
-                let display_text = if cell.chars().count() > 50 {
-                    let truncated: String = cell.chars().take(47).collect();
+                let display_text = if cell.len() > 50 {
+                    let truncated = String::from_utf8_lossy(&cell.as_bytes()[..47]).to_string();
                     format!("{}...", truncated)
                 } else {
                     cell.clone()
@@ -756,8 +756,8 @@ impl ResultTableWidget {
             let row_idx = current_rows + row_offset as i32;
             for (col_idx, cell) in row.iter().enumerate() {
                 if (col_idx as i32) < cols {
-                    let display_text = if cell.chars().count() > 50 {
-                        let truncated: String = cell.chars().take(47).collect();
+                    let display_text = if cell.len() > 50 {
+                        let truncated = String::from_utf8_lossy(&cell.as_bytes()[..47]).to_string();
                         format!("{}...", truncated)
                     } else {
                         cell.clone()

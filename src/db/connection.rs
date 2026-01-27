@@ -2,6 +2,8 @@ use oracle::{Connection, Error as OracleError};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::db::session::SessionState;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConnectionInfo {
     pub name: String,
@@ -64,6 +66,7 @@ pub struct DatabaseConnection {
     info: ConnectionInfo,
     connected: bool,
     auto_commit: bool,
+    session: Arc<Mutex<SessionState>>,
 }
 
 impl DatabaseConnection {
@@ -73,6 +76,7 @@ impl DatabaseConnection {
             info: ConnectionInfo::default(),
             connected: false,
             auto_commit: false,
+            session: Arc::new(Mutex::new(SessionState::default())),
         }
     }
 
@@ -90,6 +94,13 @@ impl DatabaseConnection {
         self.connection = Some(connection);
         self.info = info;
         self.connected = true;
+        match self.session.lock() {
+            Ok(mut session) => session.reset(),
+            Err(poisoned) => {
+                eprintln!("Warning: session state lock was poisoned; recovering.");
+                poisoned.into_inner().reset();
+            }
+        }
 
         Ok(())
     }
@@ -97,6 +108,13 @@ impl DatabaseConnection {
     pub fn disconnect(&mut self) {
         self.connection = None;
         self.connected = false;
+        match self.session.lock() {
+            Ok(mut session) => session.reset(),
+            Err(poisoned) => {
+                eprintln!("Warning: session state lock was poisoned; recovering.");
+                poisoned.into_inner().reset();
+            }
+        }
     }
 
     pub fn is_connected(&self) -> bool {
@@ -117,6 +135,10 @@ impl DatabaseConnection {
 
     pub fn auto_commit(&self) -> bool {
         self.auto_commit
+    }
+
+    pub fn session_state(&self) -> Arc<Mutex<SessionState>> {
+        Arc::clone(&self.session)
     }
 
     pub fn test_connection(info: &ConnectionInfo) -> Result<(), OracleError> {

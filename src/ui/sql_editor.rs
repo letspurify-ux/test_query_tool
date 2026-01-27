@@ -9,15 +9,18 @@ use fltk::{
     prelude::*,
     text::{TextBuffer, TextEditor, WrapMode},
 };
-use oracle::Error as OracleError;
+use oracle::{Connection, Error as OracleError};
 use std::collections::HashSet;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::db::{lock_connection, QueryExecutor, QueryResult, SharedConnection};
+use crate::db::{
+    lock_connection, BindValue, BindVar, ColumnInfo, CursorResult, QueryExecutor,
+    QueryResult, ScriptItem, SessionState, SharedConnection, ToolCommand,
+};
 use crate::ui::intellisense::{
     detect_sql_context, get_word_at_cursor, IntellisenseData, IntellisensePopup, SqlContext,
     SQL_KEYWORDS,
@@ -750,6 +753,39 @@ impl SqlEditorWidget {
                     // KeyUp fires AFTER the character is inserted into the buffer.
                     // Filter/show intellisense here.
                     let key = fltk::app::event_key();
+                    let event_text = fltk::app::event_text();
+                    let state = fltk::app::event_state();
+                    let ctrl_or_cmd = state.contains(fltk::enums::Shortcut::Ctrl)
+                        || state.contains(fltk::enums::Shortcut::Command);
+                    let alt = state.contains(fltk::enums::Shortcut::Alt);
+
+                    if event_text.is_empty()
+                        && !ctrl_or_cmd
+                        && !alt
+                        && !matches!(
+                            key,
+                            Key::BackSpace
+                                | Key::Delete
+                                | Key::Left
+                                | Key::Right
+                                | Key::Up
+                                | Key::Down
+                                | Key::Home
+                                | Key::End
+                                | Key::PageUp
+                                | Key::PageDown
+                                | Key::Enter
+                                | Key::KPEnter
+                                | Key::Tab
+                                | Key::Escape
+                        )
+                    {
+                        if popup_visible {
+                            intellisense_popup_for_handle.borrow_mut().hide();
+                            *completion_range_for_handle.borrow_mut() = None;
+                        }
+                        return false;
+                    }
 
                     if matches!(key, Key::Up | Key::Down)
                         && *suppress_nav_for_handle.borrow()
@@ -827,17 +863,10 @@ impl SqlEditorWidget {
                             *completion_range_for_handle.borrow_mut() = None;
                         }
                     } else {
-                        let typed_char = fltk::app::event_text().chars().next().or_else(|| {
-                            let bits = key.bits();
-                            if bits >= 0x20 && bits <= 0x7e {
-                                key.to_char()
-                            } else {
-                                None
-                            }
-                        });
+                        let typed_byte = event_text.as_bytes().first().copied();
 
-                        if let Some(ch) = typed_char {
-                            if ch == '.' {
+                        if let Some(byte) = typed_byte {
+                            if byte == b'.' {
                                 Self::trigger_intellisense(
                                     ed,
                                     &buffer_for_handle,
@@ -848,7 +877,7 @@ impl SqlEditorWidget {
                                     &connection_for_handle,
                                     &pending_intellisense_for_handle,
                                 );
-                            } else if ch.is_alphanumeric() || ch == '_' || ch == '$' {
+                            } else if Self::is_identifier_byte(byte) {
                                 // Alphanumeric typed - show/update popup if word is long enough
                                 if word.len() >= 2 {
                                     Self::trigger_intellisense(
@@ -1153,21 +1182,18 @@ impl SqlEditorWidget {
         if rel_cursor > text.len() {
             rel_cursor = text.len();
         }
-        while rel_cursor > 0 && !text.is_char_boundary(rel_cursor) {
-            rel_cursor -= 1;
-        }
-        let mut stmt_start = text[..rel_cursor].rfind(';').map(|pos| pos + 1).unwrap_or(0);
-        let mut stmt_end = text[rel_cursor..]
-            .find(';')
+        let bytes = text.as_bytes();
+        let stmt_start = bytes[..rel_cursor]
+            .iter()
+            .rposition(|&b| b == b';')
+            .map(|pos| pos + 1)
+            .unwrap_or(0);
+        let stmt_end = bytes[rel_cursor..]
+            .iter()
+            .position(|&b| b == b';')
             .map(|pos| rel_cursor + pos)
             .unwrap_or(text.len());
-        while stmt_start > 0 && !text.is_char_boundary(stmt_start) {
-            stmt_start -= 1;
-        }
-        while stmt_end < text.len() && !text.is_char_boundary(stmt_end) {
-            stmt_end += 1;
-        }
-        text[stmt_start..stmt_end].to_string()
+        text.get(stmt_start..stmt_end).unwrap_or("").to_string()
     }
 
     fn qualifier_before_word(buffer: &TextBuffer, word_start: usize) -> Option<String> {
@@ -1188,9 +1214,6 @@ impl SqlEditorWidget {
         let mut rel_word_start = word_start - start;
         if rel_word_start > text.len() {
             rel_word_start = text.len();
-        }
-        while rel_word_start > 0 && !text.is_char_boundary(rel_word_start) {
-            rel_word_start -= 1;
         }
         if rel_word_start == 0 {
             return None;
@@ -1865,6 +1888,16 @@ impl SqlEditorWidget {
         let sql = self.buffer.text();
         let cursor_pos = self.editor.insert_position() as usize;
         if let Some(statement) = QueryExecutor::statement_at_cursor(&sql, cursor_pos) {
+            let items = QueryExecutor::split_script_items(&statement);
+            if items.len() > 1 {
+                if let Some(ScriptItem::Statement(stmt)) = items
+                    .iter()
+                    .find(|item| matches!(item, ScriptItem::Statement(_)))
+                {
+                    self.execute_sql(stmt);
+                    return;
+                }
+            }
             self.execute_sql(&statement);
         } else {
             fltk::dialog::alert_default("No SQL at cursor");
@@ -2466,7 +2499,7 @@ impl SqlEditorWidget {
                 continue;
             }
 
-            if c.is_alphanumeric() || c == '_' || c == '$' || c == '#' {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '#' {
                 current.push(c);
                 i += 1;
                 continue;
@@ -2523,17 +2556,17 @@ impl SqlEditorWidget {
             let sql_text = sql.to_string();
             let sender = self.progress_sender.clone();
             let conn = db_conn.clone();
+            let session = conn_guard.session_state();
             let query_running = self.query_running.clone();
 
             *query_running.borrow_mut() = true;
 
-            // Change cursor to wait and flush UI before executing query
             set_cursor(Cursor::Wait);
             app::flush();
 
             thread::spawn(move || {
-                let statements = QueryExecutor::split_statements_with_blocks(&sql_text);
-                if statements.is_empty() {
+                let items = QueryExecutor::split_script_items(&sql_text);
+                if items.is_empty() {
                     let _ = sender.send(QueryProgress::BatchFinished);
                     app::awake();
                     return;
@@ -2556,117 +2589,1315 @@ impl SqlEditorWidget {
                     return;
                 }
 
-                for (index, statement) in statements.iter().enumerate() {
-                    let trimmed = statement.trim();
-                    if trimmed.is_empty() {
-                        continue;
+                let mut result_index = 0usize;
+                let mut continue_on_error = match session.lock() {
+                    Ok(guard) => guard.continue_on_error,
+                    Err(poisoned) => {
+                        eprintln!("Warning: session state lock was poisoned; recovering.");
+                        poisoned.into_inner().continue_on_error
+                    }
+                };
+                let mut stop_execution = false;
+
+                for item in items {
+                    if stop_execution {
+                        break;
                     }
 
-                    let is_select = QueryExecutor::is_select_statement(trimmed);
+                    match item {
+                        ScriptItem::ToolCommand(command) => {
+                            let mut command_error = false;
+                            match command {
+                                ToolCommand::Var { name, data_type } => {
+                                    let normalized = SessionState::normalize_name(&name);
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    guard.binds.insert(
+                                        normalized.clone(),
+                                        BindVar::new(&normalized, data_type.clone()),
+                                    );
+                                    let message = format!(
+                                        "Variable :{} declared as {}",
+                                        normalized,
+                                        data_type.display()
+                                    );
+                                    SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        &format!("VAR {} {}", normalized, data_type.display()),
+                                        message,
+                                        true,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                }
+                                ToolCommand::Print { name } => {
+                                    let binds_snapshot = match session.lock() {
+                                        Ok(guard) => guard.binds.clone(),
+                                        Err(poisoned) => {
+                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                            poisoned.into_inner().binds.clone()
+                                        }
+                                    };
 
-                    let _ = sender.send(QueryProgress::StatementStart { index });
-                    app::awake();
+                                    if let Some(name) = name {
+                                        let key = SessionState::normalize_name(&name);
+                                        if let Some(bind) = binds_snapshot.get(&key) {
+                                            match &bind.value {
+                                                BindValue::Scalar(value) => {
+                                                    let columns =
+                                                        vec!["NAME".to_string(), "VALUE".to_string()];
+                                                    let rows = vec![vec![
+                                                        key.clone(),
+                                                        value.clone().unwrap_or_else(|| "NULL".to_string()),
+                                                    ]];
+                                                    SqlEditorWidget::emit_select_result(
+                                                        &sender,
+                                                        &conn_name,
+                                                        result_index,
+                                                        &format!("PRINT {}", key),
+                                                        columns,
+                                                        rows,
+                                                        true,
+                                                    );
+                                                }
+                                                BindValue::Cursor(Some(cursor)) => {
+                                                    SqlEditorWidget::emit_select_result(
+                                                        &sender,
+                                                        &conn_name,
+                                                        result_index,
+                                                        &format!("PRINT {}", key),
+                                                        cursor.columns.clone(),
+                                                        cursor.rows.clone(),
+                                                        true,
+                                                    );
+                                                }
+                                                BindValue::Cursor(None) => {
+                                                    SqlEditorWidget::emit_non_select_result(
+                                                        &sender,
+                                                        &conn_name,
+                                                        result_index,
+                                                        &format!("PRINT {}", key),
+                                                        format!(
+                                                            "Error: Cursor :{} has no data to print.",
+                                                            key
+                                                        ),
+                                                        false,
+                                                        false,
+                                                    );
+                                                    command_error = true;
+                                                }
+                                            }
+                                        } else {
+                                            SqlEditorWidget::emit_non_select_result(
+                                                &sender,
+                                                &conn_name,
+                                                result_index,
+                                                &format!("PRINT {}", key),
+                                                format!("Error: Bind variable :{} is not defined.", key),
+                                                false,
+                                                false,
+                                            );
+                                            command_error = true;
+                                        }
+                                        result_index += 1;
+                                    } else if binds_snapshot.is_empty() {
+                                        SqlEditorWidget::emit_non_select_result(
+                                            &sender,
+                                            &conn_name,
+                                            result_index,
+                                            "PRINT",
+                                            "No bind variables declared.".to_string(),
+                                            true,
+                                            false,
+                                        );
+                                        result_index += 1;
+                                    } else {
+                                        let mut summary_rows: Vec<Vec<String>> = Vec::new();
+                                        let mut cursor_results: Vec<(String, CursorResult)> = Vec::new();
 
-                    let mut buffered_rows: Vec<Vec<String>> = Vec::new();
-                    let mut last_flush = std::time::Instant::now();
-                    let statement_start = std::time::Instant::now();
-                    let mut timed_out = false;
+                                        for (name, bind) in binds_snapshot {
+                                            let value_display = match &bind.value {
+                                                BindValue::Scalar(value) => {
+                                                    value.clone().unwrap_or_else(|| "NULL".to_string())
+                                                }
+                                                BindValue::Cursor(Some(cursor)) => {
+                                                    cursor_results.push((name.clone(), cursor.clone()));
+                                                    format!("REFCURSOR ({} rows)", cursor.rows.len())
+                                                }
+                                                BindValue::Cursor(None) => "REFCURSOR (empty)".to_string(),
+                                            };
 
-                    let mut result = if is_select {
-                        match QueryExecutor::execute_select_streaming(
-                            conn.as_ref(),
-                            trimmed,
-                            &mut |columns| {
-                                let names = columns
-                                    .iter()
-                                    .map(|col| col.name.clone())
-                                    .collect::<Vec<String>>();
-                                let _ = sender.send(QueryProgress::SelectStart {
+                                            summary_rows.push(vec![
+                                                name.clone(),
+                                                bind.data_type.display(),
+                                                value_display,
+                                            ]);
+                                        }
+
+                                        SqlEditorWidget::emit_select_result(
+                                            &sender,
+                                            &conn_name,
+                                            result_index,
+                                            "PRINT",
+                                            vec![
+                                                "NAME".to_string(),
+                                                "TYPE".to_string(),
+                                                "VALUE".to_string(),
+                                            ],
+                                            summary_rows,
+                                            true,
+                                        );
+                                        result_index += 1;
+
+                                        for (cursor_name, cursor) in cursor_results {
+                                            SqlEditorWidget::emit_select_result(
+                                                &sender,
+                                                &conn_name,
+                                                result_index,
+                                                &format!("PRINT {}", cursor_name),
+                                                cursor.columns.clone(),
+                                                cursor.rows.clone(),
+                                                true,
+                                            );
+                                            result_index += 1;
+                                        }
+                                    }
+                                }
+                                ToolCommand::SetServerOutput { enabled, size } => {
+                                    let default_size = 1_000_000u32;
+                                    let current_size = match session.lock() {
+                                        Ok(guard) => guard.server_output.size,
+                                        Err(poisoned) => {
+                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                            poisoned.into_inner().server_output.size
+                                        }
+                                    };
+                                    let mut message = String::new();
+                                    let mut success = true;
+
+                                    if enabled {
+                                        let desired_size = size.unwrap_or(current_size);
+                                        let mut applied_size = desired_size;
+                                        let mut enable_result =
+                                            QueryExecutor::enable_dbms_output(conn.as_ref(), desired_size);
+
+                                        if enable_result.is_err()
+                                            && size.is_some()
+                                            && desired_size != default_size
+                                        {
+                                            if QueryExecutor::enable_dbms_output(
+                                                conn.as_ref(),
+                                                default_size,
+                                            )
+                                            .is_ok()
+                                            {
+                                                applied_size = default_size;
+                                                message = format!(
+                                                    "SERVEROUTPUT enabled with size {} (requested {} not supported)",
+                                                    applied_size, desired_size
+                                                );
+                                                enable_result = Ok(());
+                                            }
+                                        }
+
+                                        match enable_result {
+                                            Ok(()) => {
+                                                let mut guard = match session.lock() {
+                                                    Ok(guard) => guard,
+                                                    Err(poisoned) => {
+                                                        eprintln!("Warning: session state lock was poisoned; recovering.");
+                                                        poisoned.into_inner()
+                                                    }
+                                                };
+                                                guard.server_output.enabled = true;
+                                                guard.server_output.size = applied_size;
+                                                if message.is_empty() {
+                                                    message = format!(
+                                                        "SERVEROUTPUT enabled (size {})",
+                                                        applied_size
+                                                    );
+                                                }
+                                            }
+                                            Err(err) => {
+                                                success = false;
+                                                message =
+                                                    format!("SERVEROUTPUT enable failed: {}", err);
+                                            }
+                                        }
+                                    } else {
+                                        match QueryExecutor::disable_dbms_output(conn.as_ref()) {
+                                            Ok(()) => {
+                                                let mut guard = match session.lock() {
+                                                    Ok(guard) => guard,
+                                                    Err(poisoned) => {
+                                                        eprintln!("Warning: session state lock was poisoned; recovering.");
+                                                        poisoned.into_inner()
+                                                    }
+                                                };
+                                                guard.server_output.enabled = false;
+                                                message = "SERVEROUTPUT disabled".to_string();
+                                            }
+                                            Err(err) => {
+                                                success = false;
+                                                message =
+                                                    format!("SERVEROUTPUT disable failed: {}", err);
+                                            }
+                                        }
+                                    }
+
+                                    SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        "SET SERVEROUTPUT",
+                                        message,
+                                        success,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                    if !success {
+                                        command_error = true;
+                                    }
+                                }
+                                ToolCommand::ShowErrors {
+                                    object_type,
+                                    object_name,
+                                } => {
+                                    let mut target = None;
+                                    if object_type.is_none() {
+                                        target = match session.lock() {
+                                            Ok(guard) => guard.last_compiled.clone(),
+                                            Err(poisoned) => {
+                                                eprintln!("Warning: session state lock was poisoned; recovering.");
+                                                poisoned.into_inner().last_compiled.clone()
+                                            }
+                                        };
+                                    } else if let (Some(obj_type), Some(obj_name)) =
+                                        (object_type.clone(), object_name.clone())
+                                    {
+                                        let (owner, name) = if let Some(dot) = obj_name.find('.') {
+                                            let (owner_raw, name_raw) = obj_name.split_at(dot);
+                                            (
+                                                Some(SqlEditorWidget::normalize_object_name(owner_raw)),
+                                                SqlEditorWidget::normalize_object_name(
+                                                    name_raw.trim_start_matches('.'),
+                                                ),
+                                            )
+                                        } else {
+                                            (
+                                                None,
+                                                SqlEditorWidget::normalize_object_name(&obj_name),
+                                            )
+                                        };
+
+                                        target = Some(crate::db::CompiledObject {
+                                            owner,
+                                            object_type: obj_type.to_uppercase(),
+                                            name,
+                                        });
+                                    }
+
+                                    if let Some(object) = target {
+                                        match QueryExecutor::fetch_compilation_errors(
+                                            conn.as_ref(),
+                                            &object,
+                                        ) {
+                                            Ok(rows) => {
+                                                if rows.is_empty() {
+                                                    SqlEditorWidget::emit_non_select_result(
+                                                        &sender,
+                                                        &conn_name,
+                                                        result_index,
+                                                        "SHOW ERRORS",
+                                                        "No errors found.".to_string(),
+                                                        true,
+                                                        false,
+                                                    );
+                                                    result_index += 1;
+                                                } else {
+                                                    SqlEditorWidget::emit_select_result(
+                                                        &sender,
+                                                        &conn_name,
+                                                        result_index,
+                                                        "SHOW ERRORS",
+                                                        vec![
+                                                            "LINE".to_string(),
+                                                            "POSITION".to_string(),
+                                                            "TEXT".to_string(),
+                                                        ],
+                                                        rows,
+                                                        true,
+                                                    );
+                                                    result_index += 1;
+                                                }
+                                            }
+                                            Err(err) => {
+                                                SqlEditorWidget::emit_non_select_result(
+                                                    &sender,
+                                                    &conn_name,
+                                                    result_index,
+                                                    "SHOW ERRORS",
+                                                    format!("Error: {}", err),
+                                                    false,
+                                                    false,
+                                                );
+                                                result_index += 1;
+                                                command_error = true;
+                                            }
+                                        }
+                                    } else {
+                                        SqlEditorWidget::emit_non_select_result(
+                                            &sender,
+                                            &conn_name,
+                                            result_index,
+                                            "SHOW ERRORS",
+                                            "Error: No compiled object found to show errors.".to_string(),
+                                            false,
+                                            false,
+                                        );
+                                        result_index += 1;
+                                        command_error = true;
+                                    }
+                                }
+                                ToolCommand::Prompt { text } => {
+                                    SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        "PROMPT",
+                                        text,
+                                        true,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                }
+                                ToolCommand::SetErrorContinue { enabled } => {
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    guard.continue_on_error = enabled;
+                                    continue_on_error = enabled;
+
+                                    SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        "SET ERRORCONTINUE",
+                                        format!(
+                                            "ERRORCONTINUE {}",
+                                            if enabled { "ON" } else { "OFF" }
+                                        ),
+                                        true,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                }
+                                ToolCommand::Unsupported {
+                                    raw,
+                                    message,
+                                    is_error,
+                                } => {
+                                    if is_error {
+                                        SqlEditorWidget::emit_non_select_result(
+                                            &sender,
+                                            &conn_name,
+                                            result_index,
+                                            &raw,
+                                            format!("Error: {}", message),
+                                            false,
+                                            false,
+                                        );
+                                        command_error = true;
+                                    } else {
+                                        SqlEditorWidget::emit_non_select_result(
+                                            &sender,
+                                            &conn_name,
+                                            result_index,
+                                            &raw,
+                                            format!("Warning: {}", message),
+                                            true,
+                                            false,
+                                        );
+                                    }
+                                    result_index += 1;
+                                }
+                            }
+
+                            if command_error && !continue_on_error {
+                                stop_execution = true;
+                            }
+                        }
+                        ScriptItem::Statement(statement) => {
+                            let trimmed = statement.trim_start_matches(';').trim();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+
+                            let cleaned = SqlEditorWidget::strip_leading_comments(trimmed);
+                            let upper = cleaned.to_uppercase();
+
+                            if upper.starts_with("COMMIT") {
+                                let mut timed_out = false;
+                                let result = match conn.commit() {
+                                    Ok(()) => QueryResult {
+                                        sql: trimmed.to_string(),
+                                        columns: vec![],
+                                        rows: vec![],
+                                        row_count: 0,
+                                        execution_time: Duration::from_secs(0),
+                                        message: "Commit complete".to_string(),
+                                        is_select: false,
+                                        success: true,
+                                    },
+                                    Err(err) => {
+                                        timed_out = SqlEditorWidget::is_timeout_error(&err);
+                                        QueryResult::new_error(trimmed, &err.to_string())
+                                    }
+                                };
+                                let result_success = result.success;
+                                let index = result_index;
+                                let _ = sender.send(QueryProgress::StatementStart { index });
+                                app::awake();
+                                let _ = sender.send(QueryProgress::StatementFinished {
                                     index,
-                                    columns: names,
+                                    result,
+                                    connection_name: conn_name.clone(),
+                                    timed_out,
                                 });
                                 app::awake();
-                            },
-                            &mut |row| {
-                                // Check client-side timeout during row streaming
-                                if let Some(timeout_duration) = query_timeout {
-                                    if statement_start.elapsed() >= timeout_duration {
-                                        return false; // Stop fetching
+                                result_index += 1;
+                                if timed_out {
+                                    stop_execution = true;
+                                } else if !result_success && !continue_on_error {
+                                    stop_execution = true;
+                                }
+                                continue;
+                            }
+
+                            if upper.starts_with("ROLLBACK") {
+                                let mut timed_out = false;
+                                let result = match conn.rollback() {
+                                    Ok(()) => QueryResult {
+                                        sql: trimmed.to_string(),
+                                        columns: vec![],
+                                        rows: vec![],
+                                        row_count: 0,
+                                        execution_time: Duration::from_secs(0),
+                                        message: "Rollback complete".to_string(),
+                                        is_select: false,
+                                        success: true,
+                                    },
+                                    Err(err) => {
+                                        timed_out = SqlEditorWidget::is_timeout_error(&err);
+                                        QueryResult::new_error(trimmed, &err.to_string())
+                                    }
+                                };
+                                let result_success = result.success;
+                                let index = result_index;
+                                let _ = sender.send(QueryProgress::StatementStart { index });
+                                app::awake();
+                                let _ = sender.send(QueryProgress::StatementFinished {
+                                    index,
+                                    result,
+                                    connection_name: conn_name.clone(),
+                                    timed_out,
+                                });
+                                app::awake();
+                                result_index += 1;
+                                if timed_out {
+                                    stop_execution = true;
+                                } else if !result_success && !continue_on_error {
+                                    stop_execution = true;
+                                }
+                                continue;
+                            }
+
+                            let compiled_object = QueryExecutor::parse_compiled_object(trimmed);
+                            let is_compiled_plsql = compiled_object.is_some();
+                            if let Some(object) = compiled_object.clone() {
+                                let mut guard = match session.lock() {
+                                    Ok(guard) => guard,
+                                    Err(poisoned) => {
+                                        eprintln!("Warning: session state lock was poisoned; recovering.");
+                                        poisoned.into_inner()
+                                    }
+                                };
+                                guard.last_compiled = Some(object);
+                            }
+
+                            let exec_call = QueryExecutor::normalize_exec_call(trimmed);
+                            if exec_call.is_some() {
+                                if let Err(message) = QueryExecutor::check_named_positional_mix(trimmed) {
+                                    SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        trimmed,
+                                        format!("Error: {}", message),
+                                        false,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                    if !continue_on_error {
+                                        stop_execution = true;
+                                    }
+                                    continue;
+                                }
+                            }
+
+                            let is_plsql_block =
+                                upper.starts_with("BEGIN") || upper.starts_with("DECLARE");
+                            let is_select = QueryExecutor::is_select_statement(trimmed);
+
+                            if exec_call.is_some() || is_plsql_block {
+                                let mut sql_to_execute =
+                                    exec_call.unwrap_or_else(|| trimmed.to_string());
+                                if is_plsql_block {
+                                    sql_to_execute =
+                                        SqlEditorWidget::ensure_plsql_terminator(&sql_to_execute);
+                                }
+                                let binds = match session.lock() {
+                                    Ok(guard) => QueryExecutor::resolve_binds(&sql_to_execute, &guard),
+                                    Err(poisoned) => {
+                                        eprintln!("Warning: session state lock was poisoned; recovering.");
+                                        QueryExecutor::resolve_binds(&sql_to_execute, &poisoned.into_inner())
+                                    }
+                                };
+
+                                let binds = match binds {
+                                    Ok(binds) => binds,
+                                    Err(message) => {
+                                        SqlEditorWidget::emit_non_select_result(
+                                            &sender,
+                                            &conn_name,
+                                            result_index,
+                                            trimmed,
+                                            format!("Error: {}", message),
+                                            false,
+                                            false,
+                                        );
+                                        result_index += 1;
+                                        if !continue_on_error {
+                                            stop_execution = true;
+                                        }
+                                        continue;
+                                    }
+                                };
+
+                                let statement_start = Instant::now();
+                                let mut timed_out = false;
+                                let stmt = match QueryExecutor::execute_with_binds(
+                                    conn.as_ref(),
+                                    &sql_to_execute,
+                                    &binds,
+                                ) {
+                                    Ok(stmt) => stmt,
+                                    Err(err) => {
+                                        timed_out = SqlEditorWidget::is_timeout_error(&err);
+                                        let message = if timed_out {
+                                            SqlEditorWidget::timeout_message(query_timeout)
+                                        } else {
+                                            err.to_string()
+                                        };
+                                        let index = result_index;
+                                        let _ = sender.send(QueryProgress::StatementStart { index });
+                                        app::awake();
+                                        let result = QueryResult::new_error(trimmed, &message);
+                                        let _ = sender.send(QueryProgress::StatementFinished {
+                                            index,
+                                            result,
+                                            connection_name: conn_name.clone(),
+                                            timed_out,
+                                        });
+                                        app::awake();
+                                        result_index += 1;
+                                        if timed_out || !continue_on_error {
+                                            stop_execution = true;
+                                        }
+                                        continue;
+                                    }
+                                };
+
+                                let mut result = QueryResult {
+                                    sql: trimmed.to_string(),
+                                    columns: vec![],
+                                    rows: vec![],
+                                    row_count: 0,
+                                    execution_time: statement_start.elapsed(),
+                                    message: "PL/SQL procedure successfully completed".to_string(),
+                                    is_select: false,
+                                    success: true,
+                                };
+
+                                let mut out_messages: Vec<String> = Vec::new();
+                                if let Ok(updates) =
+                                    QueryExecutor::fetch_scalar_bind_updates(&stmt, &binds)
+                                {
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    for (name, value) in updates {
+                                        if let Some(bind) = guard.binds.get_mut(&name) {
+                                            bind.value = value.clone();
+                                        }
+                                        if let BindValue::Scalar(val) = value {
+                                            out_messages.push(format!(
+                                                ":{} = {}",
+                                                name,
+                                                val.unwrap_or_else(|| "NULL".to_string())
+                                            ));
+                                        }
                                     }
                                 }
 
-                                buffered_rows.push(row);
-                                if last_flush.elapsed() >= Duration::from_secs(1) {
+                                if !out_messages.is_empty() {
+                                    result.message =
+                                        format!("{} | OUT: {}", result.message, out_messages.join(", "));
+                                }
+
+                                if auto_commit {
+                                    if let Err(err) = conn.commit() {
+                                        result = QueryResult::new_error(
+                                            trimmed,
+                                            &format!("Auto-commit failed: {}", err),
+                                        );
+                                    } else {
+                                        result.message =
+                                            format!("{} | Auto-commit applied", result.message);
+                                    }
+                                }
+
+                                let index = result_index;
+                                let _ = sender.send(QueryProgress::StatementStart { index });
+                                app::awake();
+                                let _ = sender.send(QueryProgress::StatementFinished {
+                                    index,
+                                    result: result.clone(),
+                                    connection_name: conn_name.clone(),
+                                    timed_out,
+                                });
+                                app::awake();
+                                result_index += 1;
+
+                                let ref_cursors =
+                                    QueryExecutor::extract_ref_cursors(&stmt, &binds)
+                                        .unwrap_or_default();
+                                let implicit_results =
+                                    QueryExecutor::extract_implicit_results(&stmt)
+                                        .unwrap_or_default();
+
+                                for (cursor_name, mut cursor) in ref_cursors {
+                                    if stop_execution {
+                                        break;
+                                    }
+                                    let index = result_index;
+                                    let _ = sender.send(QueryProgress::StatementStart { index });
+                                    app::awake();
+
+                                    let mut buffered_rows: Vec<Vec<String>> = Vec::new();
+                                    let mut cursor_rows: Vec<Vec<String>> = Vec::new();
+                                    let mut last_flush = Instant::now();
+                                    let cursor_start = Instant::now();
+                                    let mut cursor_timed_out = false;
+
+                                    let cursor_label = format!("REFCURSOR :{}", cursor_name);
+                                    let cursor_result = QueryExecutor::execute_ref_cursor_streaming(
+                                        &mut cursor,
+                                        &cursor_label,
+                                        &mut |columns| {
+                                            let names = columns
+                                                .iter()
+                                                .map(|col| col.name.clone())
+                                                .collect::<Vec<String>>();
+                                            let _ = sender.send(QueryProgress::SelectStart {
+                                                index,
+                                                columns: names,
+                                            });
+                                            app::awake();
+                                        },
+                                        &mut |row| {
+                                            if let Some(timeout_duration) = query_timeout {
+                                                if cursor_start.elapsed() >= timeout_duration {
+                                                    cursor_timed_out = true;
+                                                    return false;
+                                                }
+                                            }
+                                            cursor_rows.push(row.clone());
+                                            buffered_rows.push(row);
+                                            if last_flush.elapsed() >= Duration::from_secs(1) {
+                                                let rows = std::mem::take(&mut buffered_rows);
+                                                let _ =
+                                                    sender.send(QueryProgress::Rows { index, rows });
+                                                app::awake();
+                                                last_flush = Instant::now();
+                                            }
+                                            true
+                                        },
+                                    );
+
+                                    match cursor_result {
+                                        Ok((mut query_result, was_cancelled)) => {
+                                            if !buffered_rows.is_empty() {
+                                                let rows = std::mem::take(&mut buffered_rows);
+                                                let _ =
+                                                    sender.send(QueryProgress::Rows { index, rows });
+                                                app::awake();
+                                            }
+
+                                            if was_cancelled || cursor_timed_out {
+                                                query_result.message =
+                                                    SqlEditorWidget::timeout_message(query_timeout);
+                                                query_result.success = false;
+                                                cursor_timed_out = true;
+                                            }
+
+                                            let column_names: Vec<String> = query_result
+                                                .columns
+                                                .iter()
+                                                .map(|c| c.name.clone())
+                                                .collect();
+
+                                            let _ = sender.send(QueryProgress::StatementFinished {
+                                                index,
+                                                result: query_result.clone(),
+                                                connection_name: conn_name.clone(),
+                                                timed_out: cursor_timed_out,
+                                            });
+                                            app::awake();
+                                            result_index += 1;
+
+                                            let mut guard = match session.lock() {
+                                                Ok(guard) => guard,
+                                                Err(poisoned) => {
+                                                    eprintln!("Warning: session state lock was poisoned; recovering.");
+                                                    poisoned.into_inner()
+                                                }
+                                            };
+                                            if let Some(bind) = guard.binds.get_mut(&cursor_name) {
+                                                bind.value = BindValue::Cursor(Some(CursorResult {
+                                                    columns: column_names,
+                                                    rows: cursor_rows,
+                                                }));
+                                            }
+
+                                            if cursor_timed_out {
+                                                stop_execution = true;
+                                                break;
+                                            }
+                                            if !query_result.success && !continue_on_error {
+                                                stop_execution = true;
+                                                break;
+                                            }
+                                        }
+                                        Err(err) => {
+                                            cursor_timed_out = SqlEditorWidget::is_timeout_error(&err);
+                                            let message = if cursor_timed_out {
+                                                SqlEditorWidget::timeout_message(query_timeout)
+                                            } else {
+                                                err.to_string()
+                                            };
+                                            let _ = sender.send(QueryProgress::StatementFinished {
+                                                index,
+                                                result: QueryResult::new_error(&cursor_label, &message),
+                                                connection_name: conn_name.clone(),
+                                                timed_out: cursor_timed_out,
+                                            });
+                                            app::awake();
+                                            result_index += 1;
+
+                                            if cursor_timed_out || !continue_on_error {
+                                                stop_execution = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                for (idx, mut cursor) in implicit_results.into_iter().enumerate() {
+                                    if stop_execution {
+                                        break;
+                                    }
+                                    let index = result_index;
+                                    let _ = sender.send(QueryProgress::StatementStart { index });
+                                    app::awake();
+
+                                    let mut buffered_rows: Vec<Vec<String>> = Vec::new();
+                                    let mut last_flush = Instant::now();
+                                    let cursor_start = Instant::now();
+                                    let mut cursor_timed_out = false;
+                                    let cursor_label = format!("IMPLICIT RESULT {}", idx + 1);
+
+                                    let cursor_result = QueryExecutor::execute_ref_cursor_streaming(
+                                        &mut cursor,
+                                        &cursor_label,
+                                        &mut |columns| {
+                                            let names = columns
+                                                .iter()
+                                                .map(|col| col.name.clone())
+                                                .collect::<Vec<String>>();
+                                            let _ = sender.send(QueryProgress::SelectStart {
+                                                index,
+                                                columns: names,
+                                            });
+                                            app::awake();
+                                        },
+                                        &mut |row| {
+                                            if let Some(timeout_duration) = query_timeout {
+                                                if cursor_start.elapsed() >= timeout_duration {
+                                                    cursor_timed_out = true;
+                                                    return false;
+                                                }
+                                            }
+                                            buffered_rows.push(row);
+                                            if last_flush.elapsed() >= Duration::from_secs(1) {
+                                                let rows = std::mem::take(&mut buffered_rows);
+                                                let _ =
+                                                    sender.send(QueryProgress::Rows { index, rows });
+                                                app::awake();
+                                                last_flush = Instant::now();
+                                            }
+                                            true
+                                        },
+                                    );
+
+                                    match cursor_result {
+                                        Ok((mut query_result, was_cancelled)) => {
+                                            if !buffered_rows.is_empty() {
+                                                let rows = std::mem::take(&mut buffered_rows);
+                                                let _ =
+                                                    sender.send(QueryProgress::Rows { index, rows });
+                                                app::awake();
+                                            }
+
+                                            if was_cancelled || cursor_timed_out {
+                                                query_result.message =
+                                                    SqlEditorWidget::timeout_message(query_timeout);
+                                                query_result.success = false;
+                                                cursor_timed_out = true;
+                                            }
+
+                                            let _ = sender.send(QueryProgress::StatementFinished {
+                                                index,
+                                                result: query_result.clone(),
+                                                connection_name: conn_name.clone(),
+                                                timed_out: cursor_timed_out,
+                                            });
+                                            app::awake();
+                                            result_index += 1;
+
+                                            if cursor_timed_out {
+                                                stop_execution = true;
+                                                break;
+                                            }
+                                            if !query_result.success && !continue_on_error {
+                                                stop_execution = true;
+                                                break;
+                                            }
+                                        }
+                                        Err(err) => {
+                                            cursor_timed_out = SqlEditorWidget::is_timeout_error(&err);
+                                            let message = if cursor_timed_out {
+                                                SqlEditorWidget::timeout_message(query_timeout)
+                                            } else {
+                                                err.to_string()
+                                            };
+                                            let _ = sender.send(QueryProgress::StatementFinished {
+                                                index,
+                                                result: QueryResult::new_error(&cursor_label, &message),
+                                                connection_name: conn_name.clone(),
+                                                timed_out: cursor_timed_out,
+                                            });
+                                            app::awake();
+                                            result_index += 1;
+
+                                            if cursor_timed_out || !continue_on_error {
+                                                stop_execution = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                let _ = SqlEditorWidget::emit_dbms_output(
+                                    &sender,
+                                    &conn_name,
+                                    conn.as_ref(),
+                                    &session,
+                                    &mut result_index,
+                                );
+
+                                if timed_out {
+                                    stop_execution = true;
+                                } else if !result.success && !continue_on_error {
+                                    stop_execution = true;
+                                }
+                            } else if is_select {
+                                let sql_to_execute =
+                                    trimmed.trim_end_matches(';').trim().to_string();
+                                let binds = match session.lock() {
+                                    Ok(guard) => QueryExecutor::resolve_binds(&sql_to_execute, &guard),
+                                    Err(poisoned) => {
+                                        eprintln!("Warning: session state lock was poisoned; recovering.");
+                                        QueryExecutor::resolve_binds(&sql_to_execute, &poisoned.into_inner())
+                                    }
+                                };
+
+                                let binds = match binds {
+                                    Ok(binds) => binds,
+                                    Err(message) => {
+                                        SqlEditorWidget::emit_non_select_result(
+                                            &sender,
+                                            &conn_name,
+                                            result_index,
+                                            trimmed,
+                                            format!("Error: {}", message),
+                                            false,
+                                            false,
+                                        );
+                                        result_index += 1;
+                                        if !continue_on_error {
+                                            stop_execution = true;
+                                        }
+                                        continue;
+                                    }
+                                };
+
+                                let index = result_index;
+                                let _ = sender.send(QueryProgress::StatementStart { index });
+                                app::awake();
+
+                                let mut buffered_rows: Vec<Vec<String>> = Vec::new();
+                                let mut last_flush = Instant::now();
+                                let statement_start = Instant::now();
+                                let mut timed_out = false;
+
+                                let result = match QueryExecutor::execute_select_streaming_with_binds(
+                                    conn.as_ref(),
+                                    &sql_to_execute,
+                                    &binds,
+                                    &mut |columns| {
+                                        let names = columns
+                                            .iter()
+                                            .map(|col| col.name.clone())
+                                            .collect::<Vec<String>>();
+                                        let _ = sender.send(QueryProgress::SelectStart {
+                                            index,
+                                            columns: names,
+                                        });
+                                        app::awake();
+                                    },
+                                    &mut |row| {
+                                        if let Some(timeout_duration) = query_timeout {
+                                            if statement_start.elapsed() >= timeout_duration {
+                                                timed_out = true;
+                                                return false;
+                                            }
+                                        }
+
+                                        buffered_rows.push(row);
+                                        if last_flush.elapsed() >= Duration::from_secs(1) {
+                                            let rows = std::mem::take(&mut buffered_rows);
+                                            let _ = sender.send(QueryProgress::Rows { index, rows });
+                                            app::awake();
+                                            last_flush = Instant::now();
+                                        }
+                                        true
+                                    },
+                                ) {
+                                    Ok((mut query_result, was_cancelled)) => {
+                                        if was_cancelled || timed_out {
+                                            query_result.message =
+                                                SqlEditorWidget::timeout_message(query_timeout);
+                                            query_result.success = false;
+                                            timed_out = true;
+                                        }
+                                        query_result
+                                    }
+                                    Err(err) => {
+                                        timed_out = SqlEditorWidget::is_timeout_error(&err);
+                                        let message = if timed_out {
+                                            SqlEditorWidget::timeout_message(query_timeout)
+                                        } else {
+                                            err.to_string()
+                                        };
+                                        QueryResult::new_error(trimmed, &message)
+                                    }
+                                };
+
+                                if !buffered_rows.is_empty() {
                                     let rows = std::mem::take(&mut buffered_rows);
                                     let _ = sender.send(QueryProgress::Rows { index, rows });
                                     app::awake();
-                                    last_flush = std::time::Instant::now();
                                 }
-                                true // Continue fetching
-                            },
-                        ) {
-                            Ok((mut query_result, was_cancelled)) => {
-                                if was_cancelled {
-                                    timed_out = true;
-                                    query_result.message = Self::timeout_message(query_timeout);
+
+                                let _ = sender.send(QueryProgress::StatementFinished {
+                                    index,
+                                    result: result.clone(),
+                                    connection_name: conn_name.clone(),
+                                    timed_out,
+                                });
+                                app::awake();
+                                result_index += 1;
+
+                                let _ = SqlEditorWidget::emit_dbms_output(
+                                    &sender,
+                                    &conn_name,
+                                    conn.as_ref(),
+                                    &session,
+                                    &mut result_index,
+                                );
+
+                                if timed_out {
+                                    stop_execution = true;
+                                } else if !result.success && !continue_on_error {
+                                    stop_execution = true;
                                 }
-                                query_result
-                            }
-                            Err(err) => {
-                                timed_out = Self::is_timeout_error(&err);
-                                let message = if timed_out {
-                                    Self::timeout_message(query_timeout)
+                            } else {
+                                let sql_to_execute = if is_compiled_plsql {
+                                    SqlEditorWidget::ensure_plsql_terminator(trimmed)
                                 } else {
-                                    err.to_string()
+                                    trimmed.trim_end_matches(';').trim().to_string()
                                 };
-                                QueryResult::new_error(trimmed, &message)
-                            }
-                        }
-                    } else {
-                        match QueryExecutor::execute(conn.as_ref(), trimmed) {
-                            Ok(result) => result,
-                            Err(err) => {
-                                timed_out = Self::is_timeout_error(&err);
-                                let message = if timed_out {
-                                    Self::timeout_message(query_timeout)
+                                let binds = match session.lock() {
+                                    Ok(guard) => QueryExecutor::resolve_binds(&sql_to_execute, &guard),
+                                    Err(poisoned) => {
+                                        eprintln!("Warning: session state lock was poisoned; recovering.");
+                                        QueryExecutor::resolve_binds(&sql_to_execute, &poisoned.into_inner())
+                                    }
+                                };
+
+                                let binds = match binds {
+                                    Ok(binds) => binds,
+                                    Err(message) => {
+                                        SqlEditorWidget::emit_non_select_result(
+                                            &sender,
+                                            &conn_name,
+                                            result_index,
+                                            trimmed,
+                                            format!("Error: {}", message),
+                                            false,
+                                            false,
+                                        );
+                                        result_index += 1;
+                                        if !continue_on_error {
+                                            stop_execution = true;
+                                        }
+                                        continue;
+                                    }
+                                };
+
+                                let statement_start = Instant::now();
+                                let mut timed_out = false;
+                                let stmt = match QueryExecutor::execute_with_binds(
+                                    conn.as_ref(),
+                                    &sql_to_execute,
+                                    &binds,
+                                ) {
+                                    Ok(stmt) => stmt,
+                                    Err(err) => {
+                                        timed_out = SqlEditorWidget::is_timeout_error(&err);
+                                        let message = if timed_out {
+                                            SqlEditorWidget::timeout_message(query_timeout)
+                                        } else {
+                                            err.to_string()
+                                        };
+                                        let index = result_index;
+                                        let _ = sender.send(QueryProgress::StatementStart { index });
+                                        app::awake();
+                                        let result = QueryResult::new_error(trimmed, &message);
+                                        let _ = sender.send(QueryProgress::StatementFinished {
+                                            index,
+                                            result,
+                                            connection_name: conn_name.clone(),
+                                            timed_out,
+                                        });
+                                        app::awake();
+                                        result_index += 1;
+                                        if timed_out || !continue_on_error {
+                                            stop_execution = true;
+                                        }
+                                        continue;
+                                    }
+                                };
+
+                                let execution_time = statement_start.elapsed();
+                                let dml_type = if upper.starts_with("INSERT") {
+                                    Some("INSERT")
+                                } else if upper.starts_with("UPDATE") {
+                                    Some("UPDATE")
+                                } else if upper.starts_with("DELETE") {
+                                    Some("DELETE")
+                                } else if upper.starts_with("MERGE") {
+                                    Some("MERGE")
                                 } else {
-                                    err.to_string()
+                                    None
                                 };
-                                QueryResult::new_error(trimmed, &message)
+
+                                let mut result = if let Some(statement_type) = dml_type {
+                                    let affected_rows = stmt.row_count().unwrap_or(0);
+                                    QueryResult::new_dml(
+                                        trimmed,
+                                        affected_rows,
+                                        execution_time,
+                                        statement_type,
+                                    )
+                                } else {
+                                    QueryResult {
+                                        sql: trimmed.to_string(),
+                                        columns: vec![],
+                                        rows: vec![],
+                                        row_count: 0,
+                                        execution_time,
+                                        message: if upper.starts_with("CREATE")
+                                            || upper.starts_with("ALTER")
+                                            || upper.starts_with("DROP")
+                                            || upper.starts_with("TRUNCATE")
+                                            || upper.starts_with("RENAME")
+                                            || upper.starts_with("GRANT")
+                                            || upper.starts_with("REVOKE")
+                                            || upper.starts_with("COMMENT")
+                                        {
+                                            SqlEditorWidget::ddl_message(&upper)
+                                        } else {
+                                            "Statement executed successfully".to_string()
+                                        },
+                                        is_select: false,
+                                        success: true,
+                                    }
+                                };
+
+                                let mut out_messages: Vec<String> = Vec::new();
+                                if let Ok(updates) =
+                                    QueryExecutor::fetch_scalar_bind_updates(&stmt, &binds)
+                                {
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    for (name, value) in updates {
+                                        if let Some(bind) = guard.binds.get_mut(&name) {
+                                            bind.value = value.clone();
+                                        }
+                                        if let BindValue::Scalar(val) = value {
+                                            out_messages.push(format!(
+                                                ":{} = {}",
+                                                name,
+                                                val.unwrap_or_else(|| "NULL".to_string())
+                                            ));
+                                        }
+                                    }
+                                }
+
+                                if !out_messages.is_empty() {
+                                    result.message =
+                                        format!("{} | OUT: {}", result.message, out_messages.join(", "));
+                                }
+
+                                let mut compile_errors: Option<Vec<Vec<String>>> = None;
+                                if let Some(object) = compiled_object.clone() {
+                                    match QueryExecutor::fetch_compilation_errors(
+                                        conn.as_ref(),
+                                        &object,
+                                    ) {
+                                        Ok(rows) => {
+                                            if !rows.is_empty() {
+                                                result.message = format!(
+                                                    "{} | Compiled with errors",
+                                                    result.message
+                                                );
+                                                result.success = false;
+                                                compile_errors = Some(rows);
+                                            }
+                                        }
+                                        Err(err) => {
+                                            result.message = format!(
+                                                "{} | Failed to fetch compilation errors: {}",
+                                                result.message, err
+                                            );
+                                            result.success = false;
+                                        }
+                                    }
+                                }
+
+                                if dml_type.is_some() && !auto_commit && result.success {
+                                    result.message =
+                                        format!("{} | Commit required", result.message);
+                                }
+
+                                if auto_commit && result.success {
+                                    if let Err(err) = conn.commit() {
+                                        result = QueryResult::new_error(
+                                            trimmed,
+                                            &format!("Auto-commit failed: {}", err),
+                                        );
+                                    } else {
+                                        result.message =
+                                            format!("{} | Auto-commit applied", result.message);
+                                    }
+                                }
+
+                                let index = result_index;
+                                let _ = sender.send(QueryProgress::StatementStart { index });
+                                app::awake();
+                                let _ = sender.send(QueryProgress::StatementFinished {
+                                    index,
+                                    result: result.clone(),
+                                    connection_name: conn_name.clone(),
+                                    timed_out,
+                                });
+                                app::awake();
+                                result_index += 1;
+
+                                if let Some(rows) = compile_errors {
+                                    SqlEditorWidget::emit_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        "COMPILE ERRORS",
+                                        vec![
+                                            "LINE".to_string(),
+                                            "POSITION".to_string(),
+                                            "TEXT".to_string(),
+                                        ],
+                                        rows,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                }
+
+                                let _ = SqlEditorWidget::emit_dbms_output(
+                                    &sender,
+                                    &conn_name,
+                                    conn.as_ref(),
+                                    &session,
+                                    &mut result_index,
+                                );
+
+                                if timed_out {
+                                    stop_execution = true;
+                                } else if !result.success && !continue_on_error {
+                                    stop_execution = true;
+                                }
                             }
                         }
-                    };
-
-                    if !buffered_rows.is_empty() {
-                        let rows = std::mem::take(&mut buffered_rows);
-                        let _ = sender.send(QueryProgress::Rows { index, rows });
-                        app::awake();
-                    }
-
-                    if auto_commit && !result.is_select {
-                        if let Err(err) = conn.commit() {
-                            result = QueryResult::new_error(
-                                trimmed,
-                                &format!("Auto-commit failed: {}", err),
-                            );
-                        } else {
-                            result.message = format!("{} | Auto-commit applied", result.message);
-                        }
-                    }
-
-                    let _ = sender.send(QueryProgress::StatementFinished {
-                        index,
-                        result,
-                        connection_name: conn_name.clone(),
-                        timed_out,
-                    });
-                    app::awake();
-
-                    if timed_out {
-                        let _ = conn.set_call_timeout(previous_timeout);
-                        let _ = sender.send(QueryProgress::BatchFinished);
-                        app::awake();
-                        return;
                     }
                 }
 
@@ -2674,6 +3905,207 @@ impl SqlEditorWidget {
                 let _ = sender.send(QueryProgress::BatchFinished);
                 app::awake();
             });
+        }
+    }
+
+    fn emit_non_select_result(
+        sender: &mpsc::Sender<QueryProgress>,
+        conn_name: &str,
+        index: usize,
+        sql: &str,
+        message: String,
+        success: bool,
+        timed_out: bool,
+    ) {
+        let _ = sender.send(QueryProgress::StatementStart { index });
+        app::awake();
+        let result = QueryResult {
+            sql: sql.to_string(),
+            columns: vec![],
+            rows: vec![],
+            row_count: 0,
+            execution_time: Duration::from_secs(0),
+            message,
+            is_select: false,
+            success,
+        };
+        let _ = sender.send(QueryProgress::StatementFinished {
+            index,
+            result,
+            connection_name: conn_name.to_string(),
+            timed_out,
+        });
+        app::awake();
+    }
+
+    fn emit_select_result(
+        sender: &mpsc::Sender<QueryProgress>,
+        conn_name: &str,
+        index: usize,
+        sql: &str,
+        column_names: Vec<String>,
+        rows: Vec<Vec<String>>,
+        success: bool,
+    ) {
+        let _ = sender.send(QueryProgress::StatementStart { index });
+        app::awake();
+        let _ = sender.send(QueryProgress::SelectStart {
+            index,
+            columns: column_names.clone(),
+        });
+        app::awake();
+        if !rows.is_empty() {
+            let _ = sender.send(QueryProgress::Rows {
+                index,
+                rows: rows.clone(),
+            });
+            app::awake();
+        }
+        let column_info: Vec<ColumnInfo> = column_names
+            .iter()
+            .map(|name| ColumnInfo {
+                name: name.clone(),
+                data_type: "VARCHAR2".to_string(),
+            })
+            .collect();
+        let mut result = QueryResult::new_select(sql, column_info, rows, Duration::from_secs(0));
+        result.success = success;
+        let _ = sender.send(QueryProgress::StatementFinished {
+            index,
+            result,
+            connection_name: conn_name.to_string(),
+            timed_out: false,
+        });
+        app::awake();
+    }
+
+    fn emit_dbms_output(
+        sender: &mpsc::Sender<QueryProgress>,
+        conn_name: &str,
+        conn: &Connection,
+        session: &Arc<Mutex<SessionState>>,
+        result_index: &mut usize,
+    ) -> Result<(), OracleError> {
+        let (enabled, size) = match session.lock() {
+            Ok(guard) => (guard.server_output.enabled, guard.server_output.size),
+            Err(poisoned) => {
+                eprintln!("Warning: session state lock was poisoned; recovering.");
+                let guard = poisoned.into_inner();
+                (guard.server_output.enabled, guard.server_output.size)
+            }
+        };
+
+        if !enabled {
+            return Ok(());
+        }
+
+        let max_lines = (size / 80).max(1).min(10_000);
+        let lines = QueryExecutor::get_dbms_output(conn, max_lines)?;
+        if lines.is_empty() {
+            return Ok(());
+        }
+
+        let rows = lines
+            .into_iter()
+            .map(|line| vec![line])
+            .collect::<Vec<Vec<String>>>();
+        let index = *result_index;
+        SqlEditorWidget::emit_select_result(
+            sender,
+            conn_name,
+            index,
+            "DBMS_OUTPUT",
+            vec!["DBMS_OUTPUT".to_string()],
+            rows,
+            true,
+        );
+        *result_index += 1;
+        Ok(())
+    }
+
+    fn ensure_plsql_terminator(sql: &str) -> String {
+        let trimmed = sql.trim_end();
+        if trimmed.ends_with(';') {
+            trimmed.to_string()
+        } else {
+            format!("{};", trimmed)
+        }
+    }
+
+    fn strip_leading_comments(sql: &str) -> String {
+        let mut remaining = sql;
+
+        loop {
+            let trimmed = remaining.trim_start();
+
+            if trimmed.starts_with("--") {
+                if let Some(line_end) = trimmed.find('\n') {
+                    remaining = &trimmed[line_end + 1..];
+                    continue;
+                }
+                return String::new();
+            }
+
+            if trimmed.starts_with("/*") {
+                if let Some(block_end) = trimmed.find("*/") {
+                    remaining = &trimmed[block_end + 2..];
+                    continue;
+                }
+                return String::new();
+            }
+
+            return trimmed.to_string();
+        }
+    }
+
+    fn normalize_object_name(value: &str) -> String {
+        let trimmed = value.trim();
+        if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+            trimmed.trim_matches('"').to_string()
+        } else {
+            trimmed.to_uppercase()
+        }
+    }
+
+    fn ddl_message(sql_upper: &str) -> String {
+        if sql_upper.starts_with("CREATE") {
+            if sql_upper.contains(" TABLE ") {
+                "Table created".to_string()
+            } else if sql_upper.contains(" VIEW ") {
+                "View created".to_string()
+            } else if sql_upper.contains(" INDEX ") {
+                "Index created".to_string()
+            } else if sql_upper.contains(" PROCEDURE ") {
+                "Procedure created".to_string()
+            } else if sql_upper.contains(" FUNCTION ") {
+                "Function created".to_string()
+            } else if sql_upper.contains(" PACKAGE ") {
+                "Package created".to_string()
+            } else if sql_upper.contains(" TRIGGER ") {
+                "Trigger created".to_string()
+            } else if sql_upper.contains(" SEQUENCE ") {
+                "Sequence created".to_string()
+            } else if sql_upper.contains(" SYNONYM ") {
+                "Synonym created".to_string()
+            } else if sql_upper.contains(" TYPE ") {
+                "Type created".to_string()
+            } else {
+                "Object created".to_string()
+            }
+        } else if sql_upper.starts_with("ALTER") {
+            "Object altered".to_string()
+        } else if sql_upper.starts_with("DROP") {
+            "Object dropped".to_string()
+        } else if sql_upper.starts_with("TRUNCATE") {
+            "Table truncated".to_string()
+        } else if sql_upper.starts_with("GRANT") {
+            "Grant succeeded".to_string()
+        } else if sql_upper.starts_with("REVOKE") {
+            "Revoke succeeded".to_string()
+        } else if sql_upper.starts_with("COMMENT") {
+            "Comment added".to_string()
+        } else {
+            "Statement executed successfully".to_string()
         }
     }
 

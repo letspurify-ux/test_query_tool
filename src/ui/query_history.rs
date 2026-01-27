@@ -247,14 +247,18 @@ impl QueryHistoryDialog {
 
 /// Truncate SQL for display in list
 fn truncate_sql(sql: &str, max_len: usize) -> String {
-    let normalized: String = sql
-        .chars()
-        .map(|c| if c.is_whitespace() { ' ' } else { c })
-        .collect();
-    let trimmed = normalized.trim();
+    let mut normalized = String::with_capacity(sql.len());
+    for byte in sql.as_bytes() {
+        if byte.is_ascii_whitespace() {
+            normalized.push(' ');
+        } else {
+            normalized.push(*byte as char);
+        }
+    }
+    let trimmed = normalized.trim_matches(|c: char| c.is_ascii_whitespace());
 
-    if trimmed.chars().count() > max_len {
-        let truncated: String = trimmed.chars().take(max_len).collect();
+    if trimmed.as_bytes().len() > max_len {
+        let truncated = String::from_utf8_lossy(&trimmed.as_bytes()[..max_len]).to_string();
         format!("{}...", truncated)
     } else {
         trimmed.to_string()

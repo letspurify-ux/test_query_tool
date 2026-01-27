@@ -6,7 +6,7 @@ description = "A Toad-like Oracle Query Tool built with Rust and FLTK"
 authors = ["Developer"]
 
 [dependencies]
-fltk = { version = "1.4", features = ["no-pango"] }
+fltk = { version = "1.5", features = ["no-pango"] }
 fltk-table = "0.3"
 oracle = "0.6"
 serde = { version = "1.0", features = ["derive"] }

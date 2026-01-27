@@ -1,5 +1,9 @@
-use oracle::{Connection, Error as OracleError, Row};
+use oracle::{Connection, Error as OracleError, Row, Statement};
+use oracle::sql_type::{OracleType, RefCursor};
+use std::collections::{HashSet};
 use std::time::{Duration, Instant};
+
+use crate::db::session::{BindDataType, BindValue, SessionState, CompiledObject};
 
 #[derive(Debug, Clone)]
 pub struct ColumnInfo {
@@ -18,6 +22,31 @@ pub struct QueryResult {
     pub execution_time: Duration,
     pub message: String,
     pub is_select: bool,
+    pub success: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum ScriptItem {
+    Statement(String),
+    ToolCommand(ToolCommand),
+}
+
+#[derive(Debug, Clone)]
+pub enum ToolCommand {
+    Var { name: String, data_type: BindDataType },
+    Print { name: Option<String> },
+    SetServerOutput { enabled: bool, size: Option<u32> },
+    ShowErrors { object_type: Option<String>, object_name: Option<String> },
+    Prompt { text: String },
+    SetErrorContinue { enabled: bool },
+    Unsupported { raw: String, message: String, is_error: bool },
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedBind {
+    pub name: String,
+    pub data_type: BindDataType,
+    pub value: Option<String>,
 }
 
 impl QueryResult {
@@ -36,6 +65,7 @@ impl QueryResult {
             execution_time,
             message: format!("{} rows fetched", row_count),
             is_select: true,
+            success: true,
         }
     }
 
@@ -53,6 +83,7 @@ impl QueryResult {
             execution_time,
             message: format!("{} rows fetched", row_count),
             is_select: true,
+            success: true,
         }
     }
 
@@ -70,6 +101,7 @@ impl QueryResult {
             execution_time,
             message: format!("{} {} row(s) affected", statement_type, affected_rows),
             is_select: false,
+            success: true,
         }
     }
 
@@ -82,7 +114,339 @@ impl QueryResult {
             execution_time: Duration::from_secs(0),
             message: format!("Error: {}", error),
             is_select: false,
+            success: false,
         }
+    }
+}
+
+#[derive(Default)]
+struct SplitState {
+    in_single_quote: bool,
+    in_double_quote: bool,
+    in_line_comment: bool,
+    in_block_comment: bool,
+    in_q_quote: bool,
+    q_quote_end: Option<char>,
+    block_depth: usize,
+    pending_end: bool,
+    token: String,
+    in_create_plsql: bool,
+    create_pending: bool,
+    create_or_seen: bool,
+}
+
+impl SplitState {
+    fn is_idle(&self) -> bool {
+        !self.in_single_quote
+            && !self.in_double_quote
+            && !self.in_block_comment
+            && !self.in_q_quote
+            && !self.in_line_comment
+    }
+
+    fn flush_token(&mut self) {
+        if self.token.is_empty() {
+            return;
+        }
+        let upper = self.token.to_uppercase();
+
+        self.track_create_plsql(&upper);
+
+        if self.pending_end {
+            if !matches!(upper.as_str(), "IF" | "LOOP" | "CASE") {
+                if self.block_depth > 0 {
+                    self.block_depth -= 1;
+                }
+            }
+            self.pending_end = false;
+        }
+
+        if upper == "BEGIN" || upper == "DECLARE" {
+            self.block_depth += 1;
+        } else if upper == "END" {
+            self.pending_end = true;
+        }
+
+        self.token.clear();
+    }
+
+    fn resolve_pending_end_on_terminator(&mut self) {
+        if self.pending_end {
+            if self.block_depth > 0 {
+                self.block_depth -= 1;
+            }
+            self.pending_end = false;
+        }
+    }
+
+    fn resolve_pending_end_on_eof(&mut self) {
+        if self.pending_end {
+            if self.block_depth > 0 {
+                self.block_depth -= 1;
+            }
+            self.pending_end = false;
+        }
+    }
+
+    fn reset_create_state(&mut self) {
+        self.in_create_plsql = false;
+        self.create_pending = false;
+        self.create_or_seen = false;
+    }
+
+    fn track_create_plsql(&mut self, upper: &str) {
+        if self.in_create_plsql {
+            return;
+        }
+
+        if self.create_pending {
+            match upper {
+                "OR" => {
+                    self.create_or_seen = true;
+                    return;
+                }
+                "REPLACE" => {
+                    return;
+                }
+                "EDITIONABLE" | "NONEDITIONABLE" => {
+                    return;
+                }
+                "PROCEDURE" | "FUNCTION" | "PACKAGE" | "TYPE" | "TRIGGER" => {
+                    self.in_create_plsql = true;
+                    self.create_pending = false;
+                    self.create_or_seen = false;
+                    return;
+                }
+                _ => {
+                    self.create_pending = false;
+                    self.create_or_seen = false;
+                }
+            }
+        }
+
+        if upper == "CREATE" {
+            self.create_pending = true;
+            self.create_or_seen = false;
+        }
+    }
+
+    fn start_q_quote(&mut self, delimiter: char) {
+        self.in_q_quote = true;
+        self.q_quote_end = Some(match delimiter {
+            '[' => ']',
+            '(' => ')',
+            '{' => '}',
+            '<' => '>',
+            other => other,
+        });
+    }
+
+    fn q_quote_end(&self) -> Option<char> {
+        self.q_quote_end
+    }
+}
+
+struct StatementBuilder {
+    state: SplitState,
+    current: String,
+    statements: Vec<String>,
+}
+
+impl StatementBuilder {
+    fn new() -> Self {
+        Self {
+            state: SplitState::default(),
+            current: String::new(),
+            statements: Vec::new(),
+        }
+    }
+
+    fn is_idle(&self) -> bool {
+        self.state.is_idle()
+    }
+
+    fn current_is_empty(&self) -> bool {
+        self.current.trim().is_empty()
+    }
+
+    fn in_create_plsql(&self) -> bool {
+        self.state.in_create_plsql
+    }
+
+    fn block_depth(&self) -> usize {
+        self.state.block_depth
+    }
+
+    fn process_text(&mut self, text: &str) {
+        let chars: Vec<char> = text.chars().collect();
+        let len = chars.len();
+        let mut i = 0usize;
+
+        while i < len {
+            let c = chars[i];
+            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+            let next2 = if i + 2 < len { Some(chars[i + 2]) } else { None };
+
+            if self.state.in_line_comment {
+                self.current.push(c);
+                if c == '\n' {
+                    self.state.in_line_comment = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if self.state.in_block_comment {
+                self.current.push(c);
+                if c == '*' && next == Some('/') {
+                    self.current.push('/');
+                    self.state.in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if self.state.in_q_quote {
+                self.current.push(c);
+                if Some(c) == self.state.q_quote_end() && next == Some('\'') {
+                    self.current.push('\'');
+                    self.state.in_q_quote = false;
+                    self.state.q_quote_end = None;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if self.state.in_single_quote {
+                self.current.push(c);
+                if c == '\'' {
+                    if next == Some('\'') {
+                        self.current.push('\'');
+                        i += 2;
+                        continue;
+                    }
+                    self.state.in_single_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if self.state.in_double_quote {
+                self.current.push(c);
+                if c == '"' {
+                    if next == Some('"') {
+                        self.current.push('"');
+                        i += 2;
+                        continue;
+                    }
+                    self.state.in_double_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if c == '-' && next == Some('-') {
+                self.state.flush_token();
+                self.state.in_line_comment = true;
+                self.current.push('-');
+                self.current.push('-');
+                i += 2;
+                continue;
+            }
+
+            if c == '/' && next == Some('*') {
+                self.state.flush_token();
+                self.state.in_block_comment = true;
+                self.current.push('/');
+                self.current.push('*');
+                i += 2;
+                continue;
+            }
+
+            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
+                let delimiter = next2.unwrap();
+                self.state.flush_token();
+                self.state.start_q_quote(delimiter);
+                self.current.push(c);
+                self.current.push('\'');
+                self.current.push(delimiter);
+                i += 3;
+                continue;
+            }
+
+            if c == '\'' {
+                self.state.flush_token();
+                self.state.in_single_quote = true;
+                self.current.push(c);
+                i += 1;
+                continue;
+            }
+
+            if c == '"' {
+                self.state.flush_token();
+                self.state.in_double_quote = true;
+                self.current.push(c);
+                i += 1;
+                continue;
+            }
+
+            if c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '#' {
+                self.state.token.push(c);
+                self.current.push(c);
+                i += 1;
+                continue;
+            }
+
+            self.state.flush_token();
+
+            if c == ';' {
+                self.state.resolve_pending_end_on_terminator();
+                if self.state.block_depth == 0 && !self.state.in_create_plsql {
+                    let trimmed = self.current.trim();
+                    if !trimmed.is_empty() {
+                        self.statements.push(trimmed.to_string());
+                    }
+                    self.current.clear();
+                } else {
+                    self.current.push(c);
+                }
+                i += 1;
+                continue;
+            }
+
+            self.current.push(c);
+            i += 1;
+        }
+    }
+
+    fn force_terminate(&mut self) {
+        self.state.flush_token();
+        self.state.resolve_pending_end_on_eof();
+        self.state.reset_create_state();
+        let trimmed = self.current.trim();
+        if !trimmed.is_empty() {
+            self.statements.push(trimmed.to_string());
+        }
+        self.current.clear();
+    }
+
+    fn finalize(&mut self) {
+        self.state.flush_token();
+        self.state.resolve_pending_end_on_eof();
+        self.state.reset_create_state();
+        let trimmed = self.current.trim();
+        if !trimmed.is_empty() {
+            self.statements.push(trimmed.to_string());
+        }
+        self.current.clear();
+    }
+
+    fn take_statements(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.statements)
     }
 }
 
@@ -125,6 +489,1033 @@ impl QueryExecutor {
 
     pub fn is_select_statement(sql: &str) -> bool {
         matches!(Self::leading_keyword(sql).as_deref(), Some("SELECT") | Some("WITH"))
+    }
+
+    pub fn split_script_items(sql: &str) -> Vec<ScriptItem> {
+        let mut items: Vec<ScriptItem> = Vec::new();
+        let mut builder = StatementBuilder::new();
+
+        for line in sql.lines() {
+            let trimmed = line.trim();
+            let trimmed_upper = trimmed.to_uppercase();
+
+            if builder.is_idle()
+                && builder.in_create_plsql()
+                && builder.block_depth() == 0
+                && !builder.current_is_empty()
+                && (trimmed_upper.starts_with("CREATE")
+                    || trimmed_upper.starts_with("ALTER")
+                    || trimmed_upper.starts_with("DROP")
+                    || trimmed_upper.starts_with("TRUNCATE")
+                    || trimmed_upper.starts_with("GRANT")
+                    || trimmed_upper.starts_with("REVOKE")
+                    || trimmed_upper.starts_with("COMMIT")
+                    || trimmed_upper.starts_with("ROLLBACK")
+                    || trimmed_upper.starts_with("SAVEPOINT")
+                    || trimmed_upper.starts_with("SELECT")
+                    || trimmed_upper.starts_with("INSERT")
+                    || trimmed_upper.starts_with("UPDATE")
+                    || trimmed_upper.starts_with("DELETE")
+                    || trimmed_upper.starts_with("MERGE")
+                    || trimmed_upper.starts_with("WITH"))
+            {
+                builder.force_terminate();
+                for stmt in builder.take_statements() {
+                    items.push(ScriptItem::Statement(stmt));
+                }
+            }
+
+            if builder.is_idle() && trimmed == "/" {
+                if !builder.current_is_empty() {
+                    builder.force_terminate();
+                    for stmt in builder.take_statements() {
+                        items.push(ScriptItem::Statement(stmt));
+                    }
+                }
+                continue;
+            }
+
+            if builder.is_idle() && !builder.current_is_empty() {
+                if let Some(command) = Self::parse_tool_command(trimmed) {
+                    builder.force_terminate();
+                    for stmt in builder.take_statements() {
+                        items.push(ScriptItem::Statement(stmt));
+                    }
+                    items.push(ScriptItem::ToolCommand(command));
+                    continue;
+                }
+            }
+
+            if builder.is_idle() && builder.current_is_empty() {
+                if let Some(command) = Self::parse_tool_command(trimmed) {
+                    items.push(ScriptItem::ToolCommand(command));
+                    continue;
+                }
+            }
+
+            let mut line_with_newline = String::from(line);
+            line_with_newline.push('\n');
+            builder.process_text(&line_with_newline);
+            for stmt in builder.take_statements() {
+                items.push(ScriptItem::Statement(stmt));
+            }
+        }
+
+        builder.finalize();
+        for stmt in builder.take_statements() {
+            items.push(ScriptItem::Statement(stmt));
+        }
+
+        items
+    }
+
+    fn parse_tool_command(line: &str) -> Option<ToolCommand> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let trimmed = trimmed.trim_end_matches(';').trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let upper = trimmed.to_uppercase();
+
+        if upper == "VAR" || upper.starts_with("VAR ") || upper.starts_with("VARIABLE ") {
+            return Some(Self::parse_var_command(trimmed));
+        }
+
+        if upper.starts_with("PRINT") {
+            let rest = trimmed[5..].trim();
+            let name = if rest.is_empty() {
+                None
+            } else {
+                Some(rest.trim_start_matches(':').to_string())
+            };
+            return Some(ToolCommand::Print { name });
+        }
+
+        if upper.starts_with("SET SERVEROUTPUT") {
+            return Some(Self::parse_serveroutput_command(trimmed));
+        }
+
+        if upper.starts_with("SHOW ERRORS") {
+            return Some(Self::parse_show_errors_command(trimmed));
+        }
+
+        if upper.starts_with("PROMPT") {
+            let text = trimmed[6..].trim().to_string();
+            return Some(ToolCommand::Prompt { text });
+        }
+
+        if upper.starts_with("SET ERRORCONTINUE") {
+            return Some(Self::parse_errorcontinue_command(trimmed));
+        }
+
+        if upper.starts_with("DEFINE") {
+            return Some(ToolCommand::Unsupported {
+                raw: trimmed.to_string(),
+                message: "DEFINE is not supported. Use VAR to declare bind variables.".to_string(),
+                is_error: true,
+            });
+        }
+
+        if upper.starts_with("ACCEPT") {
+            return Some(ToolCommand::Unsupported {
+                raw: trimmed.to_string(),
+                message: "ACCEPT is not supported. Use VAR and EXEC to assign values.".to_string(),
+                is_error: true,
+            });
+        }
+
+        if trimmed.starts_with("@@") || trimmed.starts_with('@') {
+            return Some(ToolCommand::Unsupported {
+                raw: trimmed.to_string(),
+                message: "@file.sql is not supported in this editor.".to_string(),
+                is_error: true,
+            });
+        }
+
+        if upper.starts_with("WHENEVER SQLERROR") {
+            return Some(ToolCommand::Unsupported {
+                raw: trimmed.to_string(),
+                message: "WHENEVER SQLERROR is not supported; execution stops on first error by default."
+                    .to_string(),
+                is_error: false,
+            });
+        }
+
+        None
+    }
+
+    fn parse_var_command(raw: &str) -> ToolCommand {
+        let mut parts = raw.split_whitespace();
+        let _ = parts.next(); // VAR or VARIABLE
+        let name = parts.next().unwrap_or_default();
+        let type_str = parts.collect::<Vec<&str>>().join(" ");
+
+        if name.is_empty() || type_str.trim().is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "VAR requires a variable name and type.".to_string(),
+                is_error: true,
+            };
+        }
+
+        match Self::parse_bind_type(&type_str) {
+            Ok(data_type) => ToolCommand::Var {
+                name: name.trim_start_matches(':').to_string(),
+                data_type,
+            },
+            Err(message) => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message,
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_serveroutput_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET SERVEROUTPUT requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        if mode == "OFF" {
+            return ToolCommand::SetServerOutput {
+                enabled: false,
+                size: None,
+            };
+        }
+
+        if mode != "ON" {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET SERVEROUTPUT supports only ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mut size: Option<u32> = None;
+        let mut idx = 3usize;
+        while idx + 1 < tokens.len() {
+            if tokens[idx].eq_ignore_ascii_case("SIZE") {
+                match tokens[idx + 1].parse::<u32>() {
+                    Ok(val) => size = Some(val),
+                    Err(_) => {
+                        return ToolCommand::Unsupported {
+                            raw: raw.to_string(),
+                            message: "SET SERVEROUTPUT SIZE must be a number.".to_string(),
+                            is_error: true,
+                        };
+                    }
+                }
+                break;
+            }
+            idx += 1;
+        }
+
+        ToolCommand::SetServerOutput {
+            enabled: true,
+            size,
+        }
+    }
+
+    fn parse_show_errors_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() <= 2 {
+            return ToolCommand::ShowErrors {
+                object_type: None,
+                object_name: None,
+            };
+        }
+
+        let mut idx = 2usize;
+        let mut object_type = tokens[idx].to_uppercase();
+        if object_type == "PACKAGE" && tokens.get(idx + 1).map(|t| t.eq_ignore_ascii_case("BODY")).unwrap_or(false) {
+            object_type = "PACKAGE BODY".to_string();
+            idx += 2;
+        } else if object_type == "TYPE"
+            && tokens.get(idx + 1).map(|t| t.eq_ignore_ascii_case("BODY")).unwrap_or(false)
+        {
+            object_type = "TYPE BODY".to_string();
+            idx += 2;
+        } else {
+            idx += 1;
+        }
+
+        let name = tokens.get(idx).map(|v| v.trim_start_matches(':').to_string());
+        if name.is_none() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SHOW ERRORS requires an object name when a type is specified.".to_string(),
+                is_error: true,
+            };
+        }
+
+        ToolCommand::ShowErrors {
+            object_type: Some(object_type),
+            object_name: name,
+        }
+    }
+
+    fn parse_errorcontinue_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET ERRORCONTINUE requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetErrorContinue { enabled: true },
+            "OFF" => ToolCommand::SetErrorContinue { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET ERRORCONTINUE supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_bind_type(type_str: &str) -> Result<BindDataType, String> {
+        let trimmed = type_str.trim();
+        if trimmed.is_empty() {
+            return Err("VAR requires a data type.".to_string());
+        }
+
+        let upper = trimmed.to_uppercase();
+        let compact = upper.replace(' ', "");
+
+        if compact == "REFCURSOR" || compact == "SYS_REFCURSOR" {
+            return Ok(BindDataType::RefCursor);
+        }
+
+        if upper.starts_with("NUMBER") || upper.starts_with("NUMERIC") {
+            return Ok(BindDataType::Number);
+        }
+
+        if upper.starts_with("DATE") {
+            return Ok(BindDataType::Date);
+        }
+
+        if upper.starts_with("TIMESTAMP") {
+            let precision = Self::parse_parenthesized_u8(&upper).unwrap_or(6);
+            return Ok(BindDataType::Timestamp(precision));
+        }
+
+        if upper.starts_with("CLOB") {
+            return Ok(BindDataType::Clob);
+        }
+
+        if upper.starts_with("VARCHAR2") || upper.starts_with("VARCHAR") || upper.starts_with("NVARCHAR2") {
+            let size = Self::parse_parenthesized_u32(&upper).unwrap_or(4000);
+            return Ok(BindDataType::Varchar2(size));
+        }
+
+        if upper.starts_with("CHAR") || upper.starts_with("NCHAR") {
+            let size = Self::parse_parenthesized_u32(&upper).unwrap_or(2000);
+            return Ok(BindDataType::Varchar2(size));
+        }
+
+        Err(format!("Unsupported VAR type: {}", trimmed))
+    }
+
+    fn parse_parenthesized_u32(value: &str) -> Option<u32> {
+        let start = value.find('(')?;
+        let end = value[start + 1..].find(')')? + start + 1;
+        value[start + 1..end].trim().parse::<u32>().ok()
+    }
+
+    fn parse_parenthesized_u8(value: &str) -> Option<u8> {
+        let start = value.find('(')?;
+        let end = value[start + 1..].find(')')? + start + 1;
+        value[start + 1..end].trim().parse::<u8>().ok()
+    }
+
+    fn extract_bind_names(sql: &str) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
+        let mut in_q_quote = false;
+        let mut q_quote_end: Option<char> = None;
+
+        let chars: Vec<char> = sql.chars().collect();
+        let len = chars.len();
+        let mut i = 0usize;
+
+        while i < len {
+            let c = chars[i];
+            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+            let next2 = if i + 2 < len { Some(chars[i + 2]) } else { None };
+
+            if in_line_comment {
+                if c == '\n' {
+                    in_line_comment = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_block_comment {
+                if c == '*' && next == Some('/') {
+                    in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_q_quote {
+                if Some(c) == q_quote_end && next == Some('\'') {
+                    in_q_quote = false;
+                    q_quote_end = None;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_single_quote {
+                if c == '\'' {
+                    if next == Some('\'') {
+                        i += 2;
+                        continue;
+                    }
+                    in_single_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_double_quote {
+                if c == '"' {
+                    if next == Some('"') {
+                        i += 2;
+                        continue;
+                    }
+                    in_double_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if c == '-' && next == Some('-') {
+                in_line_comment = true;
+                i += 2;
+                continue;
+            }
+
+            if c == '/' && next == Some('*') {
+                in_block_comment = true;
+                i += 2;
+                continue;
+            }
+
+            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
+                let delimiter = next2.unwrap();
+                in_q_quote = true;
+                q_quote_end = Some(match delimiter {
+                    '[' => ']',
+                    '(' => ')',
+                    '{' => '}',
+                    '<' => '>',
+                    other => other,
+                });
+                i += 3;
+                continue;
+            }
+
+            if c == '\'' {
+                in_single_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if c == '"' {
+                in_double_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if c == ':' {
+                let prev = if i > 0 { Some(chars[i - 1]) } else { None };
+                if prev == Some(':') {
+                    i += 1;
+                    continue;
+                }
+
+                if let Some(nc) = next {
+                    if nc.is_ascii_digit() {
+                        let mut j = i + 1;
+                        while j < len && chars[j].is_ascii_digit() {
+                            j += 1;
+                        }
+                        let name = chars[i + 1..j].iter().collect::<String>();
+                        let normalized = SessionState::normalize_name(&name);
+                        if seen.insert(normalized.clone()) {
+                            names.push(normalized);
+                        }
+                        i = j;
+                        continue;
+                    }
+
+                    if nc.is_ascii_alphanumeric() || nc == '_' || nc == '$' || nc == '#' {
+                        let mut j = i + 1;
+                        while j < len {
+                            let ch = chars[j];
+                            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '$' || ch == '#' {
+                                j += 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        let name = chars[i + 1..j].iter().collect::<String>();
+                        let normalized = SessionState::normalize_name(&name);
+                        if seen.insert(normalized.clone()) {
+                            names.push(normalized);
+                        }
+                        i = j;
+                        continue;
+                    }
+                }
+            }
+
+            i += 1;
+        }
+
+        names
+    }
+
+    pub fn resolve_binds(sql: &str, session: &SessionState) -> Result<Vec<ResolvedBind>, String> {
+        let names = Self::extract_bind_names(sql);
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut resolved: Vec<ResolvedBind> = Vec::new();
+        for name in names {
+            let key = SessionState::normalize_name(&name);
+            let bind = session.binds.get(&key).ok_or_else(|| {
+                format!("Bind variable :{} is not defined. Use VAR to declare it.", name)
+            })?;
+
+            let value = match &bind.value {
+                BindValue::Scalar(val) => val.clone(),
+                BindValue::Cursor(_) => None,
+            };
+
+            resolved.push(ResolvedBind {
+                name: key,
+                data_type: bind.data_type.clone(),
+                value,
+            });
+        }
+
+        Ok(resolved)
+    }
+
+    fn bind_statement(stmt: &mut Statement, binds: &[ResolvedBind]) -> Result<(), OracleError> {
+        for bind in binds {
+            match bind.data_type {
+                BindDataType::RefCursor => {
+                    stmt.bind(bind.name.as_str(), &OracleType::RefCursor)?;
+                }
+                _ => {
+                    let oratype = bind.data_type.oracle_type();
+                    match bind.value.as_ref() {
+                        Some(value) => {
+                            stmt.bind(bind.name.as_str(), &(value, &oratype))?;
+                        }
+                        None => {
+                            stmt.bind(bind.name.as_str(), &oratype)?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn execute_with_binds(
+        conn: &Connection,
+        sql: &str,
+        binds: &[ResolvedBind],
+    ) -> Result<Statement, OracleError> {
+        let mut stmt = conn.statement(sql).build()?;
+        Self::bind_statement(&mut stmt, binds)?;
+        stmt.execute(&[])?;
+        Ok(stmt)
+    }
+
+    pub(crate) fn fetch_scalar_bind_updates(
+        stmt: &Statement,
+        binds: &[ResolvedBind],
+    ) -> Result<Vec<(String, BindValue)>, OracleError> {
+        let mut updates = Vec::new();
+        for bind in binds {
+            if matches!(bind.data_type, BindDataType::RefCursor) {
+                continue;
+            }
+            let value: Option<String> = stmt.bind_value(bind.name.as_str())?;
+            updates.push((bind.name.clone(), BindValue::Scalar(value)));
+        }
+        Ok(updates)
+    }
+
+    pub(crate) fn extract_ref_cursors(
+        stmt: &Statement,
+        binds: &[ResolvedBind],
+    ) -> Result<Vec<(String, RefCursor)>, OracleError> {
+        let mut cursors = Vec::new();
+        for bind in binds {
+            if !matches!(bind.data_type, BindDataType::RefCursor) {
+                continue;
+            }
+            let cursor: Option<RefCursor> = stmt.bind_value(bind.name.as_str())?;
+            if let Some(cursor) = cursor {
+                cursors.push((bind.name.clone(), cursor));
+            }
+        }
+        Ok(cursors)
+    }
+
+    pub(crate) fn extract_implicit_results(stmt: &Statement) -> Result<Vec<RefCursor>, OracleError> {
+        let mut cursors = Vec::new();
+        loop {
+            match stmt.implicit_result()? {
+                Some(cursor) => cursors.push(cursor),
+                None => break,
+            }
+        }
+        Ok(cursors)
+    }
+
+    fn exec_call_body(sql: &str) -> Option<String> {
+        let cleaned = Self::strip_leading_comments(sql);
+        let upper = cleaned.to_uppercase();
+        let body = if upper.starts_with("EXECUTE ") {
+            cleaned[8..].to_string()
+        } else if upper.starts_with("EXEC ") {
+            cleaned[5..].to_string()
+        } else if upper.starts_with("CALL ") {
+            cleaned[5..].to_string()
+        } else {
+            return None;
+        };
+
+        let body = body.trim().trim_end_matches(';').trim();
+        if body.is_empty() {
+            None
+        } else {
+            Some(body.to_string())
+        }
+    }
+
+    pub fn normalize_exec_call(sql: &str) -> Option<String> {
+        let cleaned = Self::strip_leading_comments(sql);
+        let upper = cleaned.to_uppercase();
+        if upper.starts_with("EXECUTE IMMEDIATE") || upper.starts_with("EXEC IMMEDIATE") {
+            let body = cleaned.trim().trim_end_matches(';').trim();
+            if body.is_empty() {
+                return None;
+            }
+            return Some(format!("BEGIN {}; END;", body));
+        }
+
+        Self::exec_call_body(sql).map(|body| format!("BEGIN {}; END;", body))
+    }
+
+    pub fn check_named_positional_mix(sql: &str) -> Result<(), String> {
+        let Some(body) = Self::exec_call_body(sql) else {
+            return Ok(());
+        };
+
+        let Some(args) = Self::extract_call_args(&body) else {
+            return Ok(());
+        };
+
+        let args_list = Self::split_call_args(&args);
+        let mut has_named = false;
+        let mut has_positional = false;
+
+        for arg in args_list {
+            if arg.trim().is_empty() {
+                continue;
+            }
+            if Self::arg_has_named_arrow(&arg) {
+                has_named = true;
+            } else {
+                has_positional = true;
+            }
+        }
+
+        if has_named && has_positional {
+            return Err("Named and positional parameters cannot be mixed.".to_string());
+        }
+
+        Ok(())
+    }
+
+    fn extract_call_args(call_sql: &str) -> Option<String> {
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
+        let mut in_q_quote = false;
+        let mut q_quote_end: Option<char> = None;
+        let mut depth = 0usize;
+        let mut start: Option<usize> = None;
+
+        let chars: Vec<char> = call_sql.chars().collect();
+        let len = chars.len();
+        let mut i = 0usize;
+
+        while i < len {
+            let c = chars[i];
+            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+            let next2 = if i + 2 < len { Some(chars[i + 2]) } else { None };
+
+            if in_line_comment {
+                if c == '\n' {
+                    in_line_comment = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_block_comment {
+                if c == '*' && next == Some('/') {
+                    in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_q_quote {
+                if Some(c) == q_quote_end && next == Some('\'') {
+                    in_q_quote = false;
+                    q_quote_end = None;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_single_quote {
+                if c == '\'' {
+                    if next == Some('\'') {
+                        i += 2;
+                        continue;
+                    }
+                    in_single_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_double_quote {
+                if c == '"' {
+                    if next == Some('"') {
+                        i += 2;
+                        continue;
+                    }
+                    in_double_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if c == '-' && next == Some('-') {
+                in_line_comment = true;
+                i += 2;
+                continue;
+            }
+
+            if c == '/' && next == Some('*') {
+                in_block_comment = true;
+                i += 2;
+                continue;
+            }
+
+            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
+                let delimiter = next2.unwrap();
+                in_q_quote = true;
+                q_quote_end = Some(match delimiter {
+                    '[' => ']',
+                    '(' => ')',
+                    '{' => '}',
+                    '<' => '>',
+                    other => other,
+                });
+                i += 3;
+                continue;
+            }
+
+            if c == '\'' {
+                in_single_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if c == '"' {
+                in_double_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if c == '(' {
+                if depth == 0 {
+                    start = Some(i + 1);
+                }
+                depth += 1;
+                i += 1;
+                continue;
+            }
+
+            if c == ')' {
+                if depth > 0 {
+                    depth -= 1;
+                    if depth == 0 {
+                        let start_idx = start.unwrap_or(0);
+                        return Some(chars[start_idx..i].iter().collect::<String>());
+                    }
+                }
+                i += 1;
+                continue;
+            }
+
+            i += 1;
+        }
+
+        None
+    }
+
+    fn split_call_args(args: &str) -> Vec<String> {
+        let mut results = Vec::new();
+        let mut current = String::new();
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_q_quote = false;
+        let mut q_quote_end: Option<char> = None;
+        let mut depth = 0usize;
+
+        let chars: Vec<char> = args.chars().collect();
+        let len = chars.len();
+        let mut i = 0usize;
+
+        while i < len {
+            let c = chars[i];
+            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+            let next2 = if i + 2 < len { Some(chars[i + 2]) } else { None };
+
+            if in_q_quote {
+                current.push(c);
+                if Some(c) == q_quote_end && next == Some('\'') {
+                    current.push('\'');
+                    in_q_quote = false;
+                    q_quote_end = None;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_single_quote {
+                current.push(c);
+                if c == '\'' {
+                    if next == Some('\'') {
+                        current.push('\'');
+                        i += 2;
+                        continue;
+                    }
+                    in_single_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_double_quote {
+                current.push(c);
+                if c == '"' {
+                    if next == Some('"') {
+                        current.push('"');
+                        i += 2;
+                        continue;
+                    }
+                    in_double_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
+                let delimiter = next2.unwrap();
+                in_q_quote = true;
+                q_quote_end = Some(match delimiter {
+                    '[' => ']',
+                    '(' => ')',
+                    '{' => '}',
+                    '<' => '>',
+                    other => other,
+                });
+                current.push(c);
+                current.push('\'');
+                current.push(delimiter);
+                i += 3;
+                continue;
+            }
+
+            if c == '\'' {
+                in_single_quote = true;
+                current.push(c);
+                i += 1;
+                continue;
+            }
+
+            if c == '"' {
+                in_double_quote = true;
+                current.push(c);
+                i += 1;
+                continue;
+            }
+
+            if c == '(' {
+                depth += 1;
+                current.push(c);
+                i += 1;
+                continue;
+            }
+
+            if c == ')' {
+                if depth > 0 {
+                    depth -= 1;
+                }
+                current.push(c);
+                i += 1;
+                continue;
+            }
+
+            if c == ',' && depth == 0 {
+                results.push(current.trim().to_string());
+                current.clear();
+                i += 1;
+                continue;
+            }
+
+            current.push(c);
+            i += 1;
+        }
+
+        if !current.trim().is_empty() {
+            results.push(current.trim().to_string());
+        }
+
+        results
+    }
+
+    fn arg_has_named_arrow(arg: &str) -> bool {
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_q_quote = false;
+        let mut q_quote_end: Option<char> = None;
+
+        let chars: Vec<char> = arg.chars().collect();
+        let len = chars.len();
+        let mut i = 0usize;
+
+        while i < len {
+            let c = chars[i];
+            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+            let next2 = if i + 2 < len { Some(chars[i + 2]) } else { None };
+
+            if in_q_quote {
+                if Some(c) == q_quote_end && next == Some('\'') {
+                    in_q_quote = false;
+                    q_quote_end = None;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_single_quote {
+                if c == '\'' {
+                    if next == Some('\'') {
+                        i += 2;
+                        continue;
+                    }
+                    in_single_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_double_quote {
+                if c == '"' {
+                    if next == Some('"') {
+                        i += 2;
+                        continue;
+                    }
+                    in_double_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
+                let delimiter = next2.unwrap();
+                in_q_quote = true;
+                q_quote_end = Some(match delimiter {
+                    '[' => ']',
+                    '(' => ')',
+                    '{' => '}',
+                    '<' => '>',
+                    other => other,
+                });
+                i += 3;
+                continue;
+            }
+
+            if c == '\'' {
+                in_single_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if c == '"' {
+                in_double_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if c == '=' && next == Some('>') {
+                return true;
+            }
+
+            i += 1;
+        }
+
+        false
     }
 
     /// Execute a single SQL statement
@@ -196,6 +1587,7 @@ impl QueryExecutor {
                 execution_time: start.elapsed(),
                 message: "Commit complete".to_string(),
                 is_select: false,
+                success: true,
             })
         } else if sql_upper.starts_with("ROLLBACK") {
             match conn.rollback() {
@@ -210,6 +1602,7 @@ impl QueryExecutor {
                 execution_time: start.elapsed(),
                 message: "Rollback complete".to_string(),
                 is_select: false,
+                success: true,
             })
         }
         // Everything else - try as DDL/DML
@@ -232,6 +1625,7 @@ impl QueryExecutor {
                 execution_time: Duration::from_secs(0),
                 message: "No statements to execute".to_string(),
                 is_select: false,
+                success: true,
             });
         }
 
@@ -305,6 +1699,7 @@ impl QueryExecutor {
                 execution_time,
                 message,
                 is_select: false,
+                success: true,
             })
         }
     }
@@ -331,6 +1726,7 @@ impl QueryExecutor {
                 execution_time: Duration::from_secs(0),
                 message: "No statements to execute".to_string(),
                 is_select: false,
+                success: true,
             }, false));
         }
 
@@ -354,132 +1750,13 @@ impl QueryExecutor {
     /// Split SQL text into individual statements by semicolons.
     /// Handles quoted strings, comments, and PL/SQL blocks (BEGIN/END, DECLARE).
     pub fn split_statements_with_blocks(sql: &str) -> Vec<String> {
-        let mut statements = Vec::new();
-        let mut current = String::new();
-        let mut in_single_quote = false;
-        let mut in_double_quote = false;
-        let mut in_line_comment = false;
-        let mut in_block_comment = false;
-        let mut block_depth = 0usize;
-        let mut token = String::new();
-        let chars: Vec<char> = sql.chars().collect();
-        let len = chars.len();
-        let mut i = 0;
-
-        let flush_token = |token: &mut String, block_depth: &mut usize| {
-            if token.is_empty() {
-                return;
-            }
-            let upper = token.to_uppercase();
-            if upper == "BEGIN" || upper == "DECLARE" {
-                *block_depth += 1;
-            } else if upper == "END" && *block_depth > 0 {
-                *block_depth -= 1;
-            }
-            token.clear();
-        };
-
-        while i < len {
-            let c = chars[i];
-            let next = if i + 1 < len {
-                Some(chars[i + 1])
-            } else {
-                None
-            };
-
-            // Handle line comment
-            if !in_single_quote && !in_double_quote && !in_block_comment {
-                if c == '-' && next == Some('-') {
-                    in_line_comment = true;
-                    current.push(c);
-                    i += 1;
-                    continue;
-                }
-            }
-
-            if in_line_comment {
-                current.push(c);
-                if c == '\n' {
-                    in_line_comment = false;
-                }
-                i += 1;
-                continue;
-            }
-
-            if !in_single_quote
-                && !in_double_quote
-                && !in_block_comment
-                && (c.is_alphanumeric() || c == '_')
-            {
-                token.push(c);
-                current.push(c);
-                i += 1;
-                continue;
-            }
-
-            flush_token(&mut token, &mut block_depth);
-
-            // Handle block comment
-            if !in_single_quote && !in_double_quote && !in_line_comment {
-                if c == '/' && next == Some('*') {
-                    in_block_comment = true;
-                    current.push(c);
-                    i += 1;
-                    continue;
-                }
-            }
-
-            if in_block_comment {
-                current.push(c);
-                if c == '*' && next == Some('/') {
-                    current.push(chars[i + 1]);
-                    in_block_comment = false;
-                    i += 2;
-                    continue;
-                }
-                i += 1;
-                continue;
-            }
-
-            // Handle quotes
-            if c == '\'' && !in_double_quote {
-                in_single_quote = !in_single_quote;
-                current.push(c);
-                i += 1;
-                continue;
-            }
-
-            if c == '"' && !in_single_quote {
-                in_double_quote = !in_double_quote;
-                current.push(c);
-                i += 1;
-                continue;
-            }
-
-            // Handle semicolon (statement separator)
-            if c == ';' && !in_single_quote && !in_double_quote && block_depth == 0 {
-                let trimmed = current.trim();
-                if !trimmed.is_empty() {
-                    statements.push(trimmed.to_string());
-                }
-                current.clear();
-                i += 1;
-                continue;
-            }
-
-            current.push(c);
-            i += 1;
-        }
-
-        flush_token(&mut token, &mut block_depth);
-
-        // Don't forget the last statement
-        let trimmed = current.trim();
-        if !trimmed.is_empty() {
-            statements.push(trimmed.to_string());
-        }
-
-        statements
+        Self::split_script_items(sql)
+            .into_iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(statement) => Some(statement),
+                ScriptItem::ToolCommand(_) => None,
+            })
+            .collect()
     }
 
     /// Return the statement containing the cursor position (character index).
@@ -490,319 +1767,97 @@ impl QueryExecutor {
 
         #[derive(Clone)]
         struct StatementSpan {
-            start_idx: usize,
-            end_idx: usize,
-            start_line: usize,
-            end_line: usize,
+            start: usize,
+            end: usize,
             text: String,
         }
 
-        let chars: Vec<char> = sql.chars().collect();
-        let len = chars.len();
-        let cursor_pos = cursor_pos.min(len);
-        let cursor_line = chars
-            .iter()
-            .take(cursor_pos)
-            .filter(|c| **c == '\n')
-            .count();
+        let cursor_pos = cursor_pos.min(sql.len());
+        let line_start = sql[..cursor_pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+        let line_end = sql[cursor_pos..]
+            .find('\n')
+            .map(|idx| cursor_pos + idx)
+            .unwrap_or_else(|| sql.len());
+        let line = &sql[line_start..line_end];
+        let trimmed_line = line.trim();
 
-        let mut statements: Vec<StatementSpan> = Vec::new();
-        let mut current = String::new();
-
-        let mut in_single_quote = false;
-        let mut in_double_quote = false;
-        let mut in_line_comment = false;
-        let mut in_block_comment = false;
-        let mut block_depth = 0usize;
-        let mut token = String::new();
-
-        let mut line = 0usize;
-        let mut statement_start = 0usize;
-        let mut statement_start_line = 0usize;
-        let mut first_non_ws_idx: Option<usize> = None;
-        let mut first_non_ws_line: Option<usize> = None;
-        let mut last_non_ws_idx: Option<usize> = None;
-        let mut last_non_ws_line: Option<usize> = None;
-
-        let flush_token = |token: &mut String, block_depth: &mut usize| {
-            if token.is_empty() {
-                return;
-            }
-            let upper = token.to_uppercase();
-            if upper == "BEGIN" || upper == "DECLARE" {
-                *block_depth += 1;
-            } else if upper == "END" && *block_depth > 0 {
-                *block_depth -= 1;
-            }
-            token.clear();
-        };
-
-        let mark_non_ws = |c: char,
-                           idx: usize,
-                           line: usize,
-                           first_non_ws_idx: &mut Option<usize>,
-                           first_non_ws_line: &mut Option<usize>,
-                           last_non_ws_idx: &mut Option<usize>,
-                           last_non_ws_line: &mut Option<usize>| {
-            if !c.is_whitespace() {
-                if first_non_ws_idx.is_none() {
-                    *first_non_ws_idx = Some(idx);
-                    *first_non_ws_line = Some(line);
+        if !trimmed_line.is_empty() {
+            if trimmed_line == "/" {
+                let mut spans: Vec<StatementSpan> = Vec::new();
+                let mut search_pos = 0usize;
+                for item in Self::split_script_items(sql) {
+                    if let ScriptItem::Statement(stmt) = item {
+                        let stmt = stmt.trim();
+                        if stmt.is_empty() {
+                            continue;
+                        }
+                        if let Some(found) = sql[search_pos..].find(stmt) {
+                            let start = search_pos + found;
+                            let end = start + stmt.len();
+                            spans.push(StatementSpan {
+                                start,
+                                end,
+                                text: stmt.to_string(),
+                            });
+                            search_pos = end;
+                        }
+                    }
                 }
-                *last_non_ws_idx = Some(idx);
-                *last_non_ws_line = Some(line);
+                if let Some(prev) = spans
+                    .iter()
+                    .filter(|span| span.end <= line_start)
+                    .last()
+                {
+                    return Some(prev.text.clone());
+                }
             }
-        };
 
-        let mut i = 0;
-        while i < len {
-            let c = chars[i];
-            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+            if Self::parse_tool_command(trimmed_line).is_some() {
+                return Some(trimmed_line.to_string());
+            }
+        }
 
-            // Handle line comment
-            if !in_single_quote && !in_double_quote && !in_block_comment {
-                if c == '-' && next == Some('-') {
-                    in_line_comment = true;
-                    current.push(c);
-                    mark_non_ws(
-                        c,
-                        i,
-                        line,
-                        &mut first_non_ws_idx,
-                        &mut first_non_ws_line,
-                        &mut last_non_ws_idx,
-                        &mut last_non_ws_line,
-                    );
-                    i += 1;
+        let mut spans: Vec<StatementSpan> = Vec::new();
+        let mut search_pos = 0usize;
+        for item in Self::split_script_items(sql) {
+            if let ScriptItem::Statement(stmt) = item {
+                let stmt = stmt.trim();
+                if stmt.is_empty() {
                     continue;
                 }
-            }
-
-            if in_line_comment {
-                current.push(c);
-                mark_non_ws(
-                    c,
-                    i,
-                    line,
-                    &mut first_non_ws_idx,
-                    &mut first_non_ws_line,
-                    &mut last_non_ws_idx,
-                    &mut last_non_ws_line,
-                );
-                if c == '\n' {
-                    in_line_comment = false;
-                    line += 1;
-                }
-                i += 1;
-                continue;
-            }
-
-            if !in_single_quote
-                && !in_double_quote
-                && !in_block_comment
-                && (c.is_alphanumeric() || c == '_')
-            {
-                token.push(c);
-                current.push(c);
-                mark_non_ws(
-                    c,
-                    i,
-                    line,
-                    &mut first_non_ws_idx,
-                    &mut first_non_ws_line,
-                    &mut last_non_ws_idx,
-                    &mut last_non_ws_line,
-                );
-                i += 1;
-                continue;
-            }
-
-            flush_token(&mut token, &mut block_depth);
-
-            // Handle block comment
-            if !in_single_quote && !in_double_quote && !in_line_comment {
-                if c == '/' && next == Some('*') {
-                    in_block_comment = true;
-                    current.push(c);
-                    mark_non_ws(
-                        c,
-                        i,
-                        line,
-                        &mut first_non_ws_idx,
-                        &mut first_non_ws_line,
-                        &mut last_non_ws_idx,
-                        &mut last_non_ws_line,
-                    );
-                    i += 1;
-                    continue;
-                }
-            }
-
-            if in_block_comment {
-                current.push(c);
-                mark_non_ws(
-                    c,
-                    i,
-                    line,
-                    &mut first_non_ws_idx,
-                    &mut first_non_ws_line,
-                    &mut last_non_ws_idx,
-                    &mut last_non_ws_line,
-                );
-                if c == '\n' {
-                    line += 1;
-                }
-                if c == '*' && next == Some('/') {
-                    let next_char = chars[i + 1];
-                    current.push(next_char);
-                    mark_non_ws(
-                        next_char,
-                        i + 1,
-                        line,
-                        &mut first_non_ws_idx,
-                        &mut first_non_ws_line,
-                        &mut last_non_ws_idx,
-                        &mut last_non_ws_line,
-                    );
-                    in_block_comment = false;
-                    i += 2;
-                    continue;
-                }
-                i += 1;
-                continue;
-            }
-
-            // Handle quotes
-            if c == '\'' && !in_double_quote {
-                in_single_quote = !in_single_quote;
-                current.push(c);
-                mark_non_ws(
-                    c,
-                    i,
-                    line,
-                    &mut first_non_ws_idx,
-                    &mut first_non_ws_line,
-                    &mut last_non_ws_idx,
-                    &mut last_non_ws_line,
-                );
-                if c == '\n' {
-                    line += 1;
-                }
-                i += 1;
-                continue;
-            }
-
-            if c == '"' && !in_single_quote {
-                in_double_quote = !in_double_quote;
-                current.push(c);
-                mark_non_ws(
-                    c,
-                    i,
-                    line,
-                    &mut first_non_ws_idx,
-                    &mut first_non_ws_line,
-                    &mut last_non_ws_idx,
-                    &mut last_non_ws_line,
-                );
-                if c == '\n' {
-                    line += 1;
-                }
-                i += 1;
-                continue;
-            }
-
-            // Handle semicolon (statement separator)
-            if c == ';' && !in_single_quote && !in_double_quote && block_depth == 0 {
-                let trimmed = current.trim();
-                if !trimmed.is_empty() {
-                    let start_idx = first_non_ws_idx.unwrap_or(statement_start);
-                    let start_line = first_non_ws_line.unwrap_or(statement_start_line);
-                    statements.push(StatementSpan {
-                        start_idx,
-                        end_idx: i,
-                        start_line,
-                        end_line: line,
-                        text: trimmed.to_string(),
+                if let Some(found) = sql[search_pos..].find(stmt) {
+                    let start = search_pos + found;
+                    let end = start + stmt.len();
+                    spans.push(StatementSpan {
+                        start,
+                        end,
+                        text: stmt.to_string(),
                     });
+                    search_pos = end;
                 }
-
-                current.clear();
-                first_non_ws_idx = None;
-                first_non_ws_line = None;
-                last_non_ws_idx = None;
-                last_non_ws_line = None;
-                statement_start = i + 1;
-                statement_start_line = line;
-                i += 1;
-                continue;
             }
-
-            current.push(c);
-            mark_non_ws(
-                c,
-                i,
-                line,
-                &mut first_non_ws_idx,
-                &mut first_non_ws_line,
-                &mut last_non_ws_idx,
-                &mut last_non_ws_line,
-            );
-            if c == '\n' {
-                line += 1;
-            }
-            i += 1;
         }
 
-        flush_token(&mut token, &mut block_depth);
-
-        let trimmed = current.trim();
-        if !trimmed.is_empty() {
-            let start_idx = first_non_ws_idx.unwrap_or(statement_start);
-            let start_line = first_non_ws_line.unwrap_or(statement_start_line);
-            let end_idx = last_non_ws_idx.unwrap_or_else(|| len.saturating_sub(1));
-            let end_line = last_non_ws_line.unwrap_or(start_line);
-            statements.push(StatementSpan {
-                start_idx,
-                end_idx,
-                start_line,
-                end_line,
-                text: trimmed.to_string(),
-            });
-        }
-
-        let mut candidates: Vec<&StatementSpan> = statements
-            .iter()
-            .filter(|s| s.start_line <= cursor_line && cursor_line <= s.end_line)
-            .collect();
-        if candidates.is_empty() {
+        if spans.is_empty() {
             return None;
         }
 
-        if let Some(hit) = candidates
+        if let Some(span) = spans
             .iter()
-            .find(|s| s.start_idx <= cursor_pos && cursor_pos <= s.end_idx)
+            .find(|span| cursor_pos >= span.start && cursor_pos <= span.end)
         {
-            return Some(hit.text.clone());
+            return Some(span.text.clone());
         }
 
         let mut previous: Option<&StatementSpan> = None;
-        for candidate in &candidates {
-            if candidate.end_idx < cursor_pos {
-                if previous
-                    .map(|p| candidate.end_idx > p.end_idx)
-                    .unwrap_or(true)
-                {
-                    previous = Some(*candidate);
-                }
+        for span in spans.iter() {
+            if span.start > cursor_pos {
+                return Some(previous.unwrap_or(span).text.clone());
             }
+            previous = Some(span);
         }
 
-        if let Some(prev) = previous {
-            return Some(prev.text.clone());
-        }
-
-        candidates.sort_by_key(|s| s.start_idx);
-        candidates.first().map(|s| s.text.clone())
+        previous.map(|span| span.text.clone())
     }
 
     /// Enable DBMS_OUTPUT for the session
@@ -826,64 +1881,40 @@ impl QueryExecutor {
         Ok(())
     }
 
-    /// Get DBMS_OUTPUT lines using a simple approach
+    /// Get DBMS_OUTPUT lines using DBMS_OUTPUT.GET_LINE in a loop.
     #[allow(dead_code)]
-    pub fn get_dbms_output(_conn: &Connection) -> Result<Vec<String>, OracleError> {
-        // Use a PL/SQL block that collects all output into a temporary table or returns via cursor
-        // For simplicity, we'll use DBMS_OUTPUT.GET_LINES via anonymous block
-        let _sql = r#"
-            SELECT column_value
-            FROM TABLE(
-                CAST(
-                    (
-                        SELECT COLLECT(column_value)
-                        FROM TABLE(
-                            (
-                                SELECT CAST(MULTISET(
-                                    SELECT DBMS_OUTPUT.GET_LINE(column_value, :status)
-                                    FROM DUAL
-                                    CONNECT BY LEVEL <= 10000 AND :status = 0
-                                ) AS SYS.ODCIVARCHAR2LIST)
-                                FROM DUAL
-                            )
-                        )
-                    ) AS SYS.ODCIVARCHAR2LIST
-                )
-            )
-        "#;
+    pub fn get_dbms_output(conn: &Connection, max_lines: u32) -> Result<Vec<String>, OracleError> {
+        let mut lines = Vec::new();
+        let max_lines = max_lines.max(1);
 
-        // Simpler approach: read lines in a loop
-        let lines = Vec::new();
-        let max_lines = 10000;
+        let mut stmt = match conn
+            .statement("BEGIN DBMS_OUTPUT.GET_LINE(:line, :status); END;")
+            .build()
+        {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+
+        stmt.bind("line", &OracleType::Varchar2(32767))?;
+        stmt.bind("status", &OracleType::Number(0, 0))?;
 
         for _ in 0..max_lines {
-            // Use a query to check if there's output
-            let _check_sql = r#"
-                SELECT * FROM (
-                    SELECT 1 FROM DUAL WHERE 1=0
-                )
-            "#;
-
-            // Try getting one line at a time using DBMS_SQL or direct approach
-            let _plsql = r#"
-                DECLARE
-                    v_line VARCHAR2(32767);
-                    v_status INTEGER;
-                BEGIN
-                    DBMS_OUTPUT.GET_LINE(v_line, v_status);
-                    IF v_status = 0 THEN
-                        :line := v_line;
-                        :done := 0;
-                    ELSE
-                        :line := NULL;
-                        :done := 1;
-                    END IF;
-                END;
-            "#;
-
-            // This approach requires bind variables which can be tricky
-            // Let's use a workaround with a helper table or serveroutput
-            break;
+            match stmt.execute(&[]) {
+                Ok(()) => {}
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            }
+            let status: i32 = match stmt.bind_value("status") {
+                Ok(val) => val,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            if status != 0 {
+                break;
+            }
+            let line: Option<String> = match stmt.bind_value("line") {
+                Ok(val) => val,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            lines.push(line.unwrap_or_default());
         }
 
         Ok(lines)
@@ -905,8 +1936,7 @@ impl QueryExecutor {
             Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
         };
 
-        // For now, return empty output - full implementation needs bind variable support
-        let output: Vec<String> = Vec::new();
+        let output = Self::get_dbms_output(conn, 10000).unwrap_or_default();
 
         Ok((result, output))
     }
@@ -979,6 +2009,135 @@ impl QueryExecutor {
             Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
         };
         let result_set = match stmt.query(&[]) {
+            Ok(result_set) => result_set,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+
+        let column_info: Vec<ColumnInfo> = result_set
+            .column_info()
+            .iter()
+            .map(|col| ColumnInfo {
+                name: col.name().to_string(),
+                data_type: format!("{:?}", col.oracle_type()),
+            })
+            .collect();
+
+        on_select_start(&column_info);
+
+        let mut row_count = 0usize;
+        let mut cancelled = false;
+
+        for row_result in result_set {
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let mut row_data: Vec<String> = Vec::new();
+
+            for i in 0..column_info.len() {
+                let value: Option<String> = row.get(i).unwrap_or(None);
+                row_data.push(value.unwrap_or_else(|| "NULL".to_string()));
+            }
+
+            let should_continue = on_row(row_data);
+            row_count += 1;
+
+            if !should_continue {
+                cancelled = true;
+                break;
+            }
+        }
+
+        let execution_time = start.elapsed();
+        Ok((QueryResult::new_select_streamed(
+            sql,
+            column_info,
+            row_count,
+            execution_time,
+        ), cancelled))
+    }
+
+    pub fn execute_select_streaming_with_binds<F, G>(
+        conn: &Connection,
+        sql: &str,
+        binds: &[ResolvedBind],
+        on_select_start: &mut F,
+        on_row: &mut G,
+    ) -> Result<(QueryResult, bool), OracleError>
+    where
+        F: FnMut(&[ColumnInfo]),
+        G: FnMut(Vec<String>) -> bool,
+    {
+        let start = Instant::now();
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+        if let Err(err) = Self::bind_statement(&mut stmt, binds) {
+            eprintln!("Database operation failed: {err}");
+            return Err(err);
+        }
+        let result_set = match stmt.query(&[]) {
+            Ok(result_set) => result_set,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+
+        let column_info: Vec<ColumnInfo> = result_set
+            .column_info()
+            .iter()
+            .map(|col| ColumnInfo {
+                name: col.name().to_string(),
+                data_type: format!("{:?}", col.oracle_type()),
+            })
+            .collect();
+
+        on_select_start(&column_info);
+
+        let mut row_count = 0usize;
+        let mut cancelled = false;
+
+        for row_result in result_set {
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let mut row_data: Vec<String> = Vec::new();
+
+            for i in 0..column_info.len() {
+                let value: Option<String> = row.get(i).unwrap_or(None);
+                row_data.push(value.unwrap_or_else(|| "NULL".to_string()));
+            }
+
+            let should_continue = on_row(row_data);
+            row_count += 1;
+
+            if !should_continue {
+                cancelled = true;
+                break;
+            }
+        }
+
+        let execution_time = start.elapsed();
+        Ok((QueryResult::new_select_streamed(
+            sql,
+            column_info,
+            row_count,
+            execution_time,
+        ), cancelled))
+    }
+
+    pub fn execute_ref_cursor_streaming<F, G>(
+        cursor: &mut RefCursor,
+        sql: &str,
+        on_select_start: &mut F,
+        on_row: &mut G,
+    ) -> Result<(QueryResult, bool), OracleError>
+    where
+        F: FnMut(&[ColumnInfo]),
+        G: FnMut(Vec<String>) -> bool,
+    {
+        let start = Instant::now();
+        let result_set = match cursor.query() {
             Ok(result_set) => result_set,
             Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
         };
@@ -1111,6 +2270,7 @@ impl QueryExecutor {
             execution_time,
             message: message.to_string(),
             is_select: false,
+            success: true,
         })
     }
 
@@ -1133,6 +2293,7 @@ impl QueryExecutor {
             execution_time,
             message: "PL/SQL procedure successfully completed".to_string(),
             is_select: false,
+            success: true,
         })
     }
 
@@ -1155,6 +2316,7 @@ impl QueryExecutor {
             execution_time,
             message: "Call completed".to_string(),
             is_select: false,
+            success: true,
         })
     }
 
@@ -1189,7 +2351,141 @@ impl QueryExecutor {
             execution_time,
             message: "PL/SQL procedure successfully completed".to_string(),
             is_select: false,
+            success: true,
         })
+    }
+
+    pub fn parse_compiled_object(sql: &str) -> Option<CompiledObject> {
+        let cleaned = Self::strip_leading_comments(sql);
+        let tokens: Vec<String> = cleaned
+            .split_whitespace()
+            .map(|t| t.to_string())
+            .collect();
+        if tokens.len() < 3 {
+            return None;
+        }
+
+        if !tokens[0].eq_ignore_ascii_case("CREATE") {
+            return None;
+        }
+
+        let mut idx = 1usize;
+        if tokens.get(idx).map(|t| t.eq_ignore_ascii_case("OR")).unwrap_or(false)
+            && tokens.get(idx + 1).map(|t| t.eq_ignore_ascii_case("REPLACE")).unwrap_or(false)
+        {
+            idx += 2;
+        }
+
+        if tokens
+            .get(idx)
+            .map(|t| t.eq_ignore_ascii_case("EDITIONABLE") || t.eq_ignore_ascii_case("NONEDITIONABLE"))
+            .unwrap_or(false)
+        {
+            idx += 1;
+        }
+
+        let mut object_type = tokens.get(idx)?.to_uppercase();
+        idx += 1;
+
+        if object_type == "PACKAGE" {
+            if tokens.get(idx).map(|t| t.eq_ignore_ascii_case("BODY")).unwrap_or(false) {
+                object_type = "PACKAGE BODY".to_string();
+                idx += 1;
+            }
+        } else if object_type == "TYPE" {
+            if tokens.get(idx).map(|t| t.eq_ignore_ascii_case("BODY")).unwrap_or(false) {
+                object_type = "TYPE BODY".to_string();
+                idx += 1;
+            }
+        }
+
+        let tracked = matches!(
+            object_type.as_str(),
+            "PROCEDURE" | "FUNCTION" | "PACKAGE" | "PACKAGE BODY" | "TRIGGER" | "TYPE" | "TYPE BODY"
+        );
+        if !tracked {
+            return None;
+        }
+
+        let name_token = tokens.get(idx)?.clone();
+        let (owner, name) = if let Some(dot) = name_token.find('.') {
+            let (owner_raw, name_raw) = name_token.split_at(dot);
+            (
+                Some(Self::normalize_object_name(owner_raw)),
+                Self::normalize_object_name(name_raw.trim_start_matches('.')),
+            )
+        } else {
+            (None, Self::normalize_object_name(&name_token))
+        };
+
+        Some(CompiledObject {
+            owner,
+            object_type,
+            name,
+        })
+    }
+
+    fn normalize_object_name(value: &str) -> String {
+        let trimmed = value.trim();
+        if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2 {
+            trimmed.trim_matches('"').to_string()
+        } else {
+            trimmed.to_uppercase()
+        }
+    }
+
+    pub fn fetch_compilation_errors(
+        conn: &Connection,
+        object: &CompiledObject,
+    ) -> Result<Vec<Vec<String>>, OracleError> {
+        let query_errors = |table: &str, use_owner: bool| -> Result<Vec<Vec<String>>, OracleError> {
+            let sql = if use_owner {
+                format!(
+                    "SELECT line, position, text FROM {} WHERE owner = :owner AND name = :name AND type = :type ORDER BY sequence",
+                    table
+                )
+            } else {
+                format!(
+                    "SELECT line, position, text FROM {} WHERE name = :name AND type = :type ORDER BY sequence",
+                    table
+                )
+            };
+
+            let mut stmt = conn.statement(&sql).build()?;
+            if use_owner {
+                if let Some(owner) = &object.owner {
+                    stmt.bind("owner", owner)?;
+                }
+            }
+            stmt.bind("name", &object.name)?;
+            stmt.bind("type", &object.object_type)?;
+
+            let result_set = stmt.query(&[])?;
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            for row_result in result_set {
+                let row: Row = row_result?;
+                let line: Option<String> = row.get(0).unwrap_or(None);
+                let position: Option<String> = row.get(1).unwrap_or(None);
+                let text: Option<String> = row.get(2).unwrap_or(None);
+                rows.push(vec![
+                    line.unwrap_or_default(),
+                    position.unwrap_or_default(),
+                    text.unwrap_or_default(),
+                ]);
+            }
+            Ok(rows)
+        };
+
+        let rows = if object.owner.is_some() {
+            match query_errors("ALL_ERRORS", true) {
+                Ok(found) => found,
+                Err(_) => query_errors("USER_ERRORS", false)?,
+            }
+        } else {
+            query_errors("USER_ERRORS", false)?
+        };
+
+        Ok(rows)
     }
 
     pub fn get_explain_plan(conn: &Connection, sql: &str) -> Result<Vec<String>, OracleError> {

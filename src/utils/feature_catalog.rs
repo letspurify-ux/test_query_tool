@@ -80,7 +80,7 @@ pub fn build_catalog_text_filtered(
     let mut features = catalog.features.clone();
     let total = catalog.total_count;
     let implemented = catalog.implemented_count;
-    let filter_lower = filter.trim().to_lowercase();
+    let filter_lower = filter.trim().to_ascii_lowercase();
 
     features.retain(|feature| {
         let matches_filter = if filter_lower.is_empty() {
@@ -90,7 +90,7 @@ pub fn build_catalog_text_filtered(
                 "{} {} {}",
                 feature.category, feature.name, feature.description
             )
-            .to_lowercase();
+            .to_ascii_lowercase();
             haystack.contains(&filter_lower)
         };
 

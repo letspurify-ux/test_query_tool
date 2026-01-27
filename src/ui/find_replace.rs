@@ -267,7 +267,7 @@ impl FindReplaceDialog {
                             editor.set_insert_position(match_end as i32);
                             editor.show_insert_position();
                             *search_pos.borrow_mut() =
-                                next_char_start(&text, match_start) as i32;
+                                (match_start + 1).min(text.len()) as i32;
                         } else if start_pos > 0 {
                             *search_pos.borrow_mut() = 0;
                             fltk::dialog::message_default(
@@ -287,7 +287,7 @@ impl FindReplaceDialog {
                             let matches = if case_sensitive {
                                 selected == search_text
                             } else {
-                                selected.to_lowercase() == search_text.to_lowercase()
+                                selected.to_ascii_lowercase() == search_text.to_ascii_lowercase()
                             };
 
                             if matches {
@@ -401,40 +401,6 @@ impl FindReplaceDialog {
     }
 }
 
-fn clamp_to_char_boundary(text: &str, mut idx: usize) -> usize {
-    if idx > text.len() {
-        idx = text.len();
-    }
-    while idx < text.len() && !text.is_char_boundary(idx) {
-        idx += 1;
-    }
-    idx
-}
-
-fn next_char_start(text: &str, start: usize) -> usize {
-    if start >= text.len() {
-        return text.len();
-    }
-    let mut chars = text[start..].chars();
-    match chars.next() {
-        Some(ch) => start + ch.len_utf8(),
-        None => text.len(),
-    }
-}
-
-fn end_after_n_chars(text: &str, start: usize, n: usize) -> Option<usize> {
-    if n == 0 {
-        return Some(start);
-    }
-    let mut end = start;
-    let mut iter = text[start..].char_indices();
-    for _ in 0..n {
-        let (offset, ch) = iter.next()?;
-        end = start + offset + ch.len_utf8();
-    }
-    Some(end)
-}
-
 fn find_next_match(
     text: &str,
     search_text: &str,
@@ -445,28 +411,20 @@ fn find_next_match(
         return None;
     }
     let start_pos = if start_pos < 0 { 0 } else { start_pos as usize };
-    let start = clamp_to_char_boundary(text, start_pos);
+    let Some(haystack) = text.get(start_pos..) else {
+        return None;
+    };
     if case_sensitive {
-        let pos = text[start..]
-            .match_indices(search_text)
-            .next()
-            .map(|(pos, _)| pos)?;
-        let match_start = start + pos;
+        let pos = haystack.find(search_text)?;
+        let match_start = start_pos + pos;
         let match_end = match_start + search_text.len();
         return Some((match_start, match_end));
     }
 
-    let search_lower = search_text.to_lowercase();
-    let search_chars = search_text.chars().count();
-    for (offset, _) in text[start..].char_indices() {
-        let match_start = start + offset;
-        let Some(match_end) = end_after_n_chars(text, match_start, search_chars) else {
-            return None;
-        };
-        let candidate = &text[match_start..match_end];
-        if candidate.to_lowercase() == search_lower {
-            return Some((match_start, match_end));
-        }
-    }
-    None
+    let haystack_lower = haystack.to_ascii_lowercase();
+    let search_lower = search_text.to_ascii_lowercase();
+    let pos = haystack_lower.find(&search_lower)?;
+    let match_start = start_pos + pos;
+    let match_end = match_start + search_text.len();
+    Some((match_start, match_end))
 }

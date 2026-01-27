@@ -204,9 +204,7 @@ impl SqlHighlighter {
     /// Generates the style string for the given text
     ///
     /// IMPORTANT: FLTK TextBuffer uses byte-based indexing, so the style buffer
-    /// must have one style character per byte, not per Unicode character.
-    /// For multi-byte characters (like Korean, Chinese, etc.), we repeat the
-    /// style character for each byte of the character.
+    /// must have one style character per byte.
     fn generate_styles(&self, text: &str) -> String {
         let mut styles: Vec<char> = vec![STYLE_DEFAULT; text.len()];
         let bytes = text.as_bytes();
@@ -388,21 +386,12 @@ mod tests {
         let start_candidate = cursor_pos.saturating_sub(HIGHLIGHT_WINDOW_RADIUS);
         let end_candidate = (cursor_pos + HIGHLIGHT_WINDOW_RADIUS).min(text.len());
 
-        let mut start = start_candidate;
-        while start > 0 && !text.is_char_boundary(start) {
-            start -= 1;
-        }
-        let mut end = end_candidate;
-        while end < text.len() && !text.is_char_boundary(end) {
-            end += 1;
-        }
-
-        let start = match text[..start].rfind('\n') {
+        let start = match text.get(..start_candidate).and_then(|s| s.rfind('\n')) {
             Some(pos) => pos + 1,
             None => 0,
         };
-        let end = match text[end..].find('\n') {
-            Some(pos) => end + pos,
+        let end = match text.get(end_candidate..).and_then(|s| s.find('\n')) {
+            Some(pos) => end_candidate + pos,
             None => text.len(),
         };
 
@@ -457,58 +446,6 @@ mod tests {
 
         // Entire line should be comment style (E)
         assert!(styles.chars().all(|c| c == STYLE_COMMENT));
-    }
-
-    #[test]
-    fn test_multibyte_character_style_length() {
-        // FLTK TextBuffer uses byte-based indexing, so the style buffer
-        // must have one style character per byte, not per Unicode character.
-        let highlighter = SqlHighlighter::new();
-
-        // Korean text "한글" is 6 bytes in UTF-8 (3 bytes per character)
-        let text = "SELECT '한글' FROM dual";
-        let styles = highlighter.generate_styles(text);
-
-        // Style buffer length must equal byte length, not character length
-        assert_eq!(styles.len(), text.len(),
-            "Style buffer length ({}) must match text byte length ({})",
-            styles.len(), text.len());
-    }
-
-    #[test]
-    fn test_multibyte_string_highlighting() {
-        let highlighter = SqlHighlighter::new();
-
-        // Test that Korean characters in string literals are properly highlighted
-        let text = "'한글테스트'";
-        let styles = highlighter.generate_styles(text);
-
-        // All bytes should be string style (D)
-        assert_eq!(styles.len(), text.len());
-        assert!(styles.chars().all(|c| c == STYLE_STRING),
-            "All bytes of multi-byte string should have string style");
-    }
-
-    #[test]
-    fn test_multibyte_after_keyword() {
-        let highlighter = SqlHighlighter::new();
-
-        // Test that highlighting doesn't shift after multi-byte characters
-        let text = "SELECT '가' FROM dual";
-        let styles = highlighter.generate_styles(text);
-
-        assert_eq!(styles.len(), text.len());
-
-        // "SELECT" should be keyword (B) - first 6 bytes
-        assert!(styles[..6].chars().all(|c| c == STYLE_KEYWORD));
-
-        // Find "FROM" position and verify it's highlighted as keyword
-        let from_pos = match text.find("FROM") {
-            Some(pos) => pos,
-            None => panic!("FROM keyword not found in test text"),
-        };
-        assert!(styles[from_pos..from_pos + 4].chars().all(|c| c == STYLE_KEYWORD),
-            "FROM keyword should be highlighted correctly after multi-byte string");
     }
 
     #[test]

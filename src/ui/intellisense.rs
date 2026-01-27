@@ -560,36 +560,24 @@ impl Default for IntellisensePopup {
     }
 }
 
-// Helper function to extract the current word at cursor position
+// Helper function to extract the current word at cursor position (ASCII-based).
 pub fn get_word_at_cursor(text: &str, cursor_pos: usize) -> (String, usize, usize) {
     if text.is_empty() || cursor_pos == 0 {
         return (String::new(), 0, 0);
     }
 
+    let pos = cursor_pos.min(text.len());
     let bytes = text.as_bytes();
-    let mut pos = cursor_pos.min(bytes.len());
-    while pos > 0 && !text.is_char_boundary(pos) {
-        pos -= 1;
-    }
 
-    // Find word start
+    // Find word start by scanning backwards over identifier bytes
     let mut start = pos;
-    while start > 0 {
-        if !is_identifier_byte(bytes[start - 1]) {
-            break;
-        }
+    while start > 0 && is_identifier_byte(bytes[start - 1]) {
         start -= 1;
     }
 
-    // Find word end
+    // Find word end by scanning forwards over identifier bytes
     let mut end = pos;
-    while end < bytes.len() {
-        if !is_identifier_byte(bytes[end]) {
-            break;
-        }
-        end += 1;
-    }
-    while end < text.len() && !text.is_char_boundary(end) {
+    while end < bytes.len() && is_identifier_byte(bytes[end]) {
         end += 1;
     }
 
@@ -600,11 +588,8 @@ pub fn get_word_at_cursor(text: &str, cursor_pos: usize) -> (String, usize, usiz
 // Detect context for smarter suggestions (after FROM, after SELECT, etc.)
 #[allow(dead_code)]
 pub fn detect_sql_context(text: &str, cursor_pos: usize) -> SqlContext {
-    let mut end = cursor_pos.min(text.len());
-    while end > 0 && !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    let upper = text[..end].to_uppercase();
+    let end = cursor_pos.min(text.len());
+    let upper = text.get(..end).unwrap_or("").to_ascii_uppercase();
 
     // Simple context detection
     let words: Vec<&str> = upper.split_whitespace().collect();
@@ -626,6 +611,7 @@ pub fn detect_sql_context(text: &str, cursor_pos: usize) -> SqlContext {
     }
 }
 
+// ASCII-based identifier check.
 fn is_identifier_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
 }
