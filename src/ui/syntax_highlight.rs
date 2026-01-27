@@ -210,36 +210,43 @@ impl SqlHighlighter {
         let bytes = text.as_bytes();
         let mut idx = 0usize;
 
-        while idx < bytes.len() {
-            let byte = bytes[idx];
-
+        while let Some(&byte) = bytes.get(idx) {
             // Check for single-line comment (--)
-            if byte == b'-' && idx + 1 < bytes.len() && bytes[idx + 1] == b'-' {
+            if byte == b'-' && bytes.get(idx + 1) == Some(&b'-') {
                 let start = idx;
                 idx += 2;
-                while idx < bytes.len() && bytes[idx] != b'\n' {
+                while let Some(&b) = bytes.get(idx) {
+                    if b == b'\n' {
+                        break;
+                    }
                     idx += 1;
                 }
                 for b in start..idx {
-                    styles[b] = STYLE_COMMENT;
+                    if let Some(style) = styles.get_mut(b) {
+                        *style = STYLE_COMMENT;
+                    }
                 }
                 continue;
             }
 
             // Check for multi-line comment (/* */)
-            if byte == b'/' && idx + 1 < bytes.len() && bytes[idx + 1] == b'*' {
+            if byte == b'/' && bytes.get(idx + 1) == Some(&b'*') {
                 let start = idx;
                 idx += 2;
-                while idx + 1 < bytes.len() && !(bytes[idx] == b'*' && bytes[idx + 1] == b'/') {
-                    idx += 1;
-                }
-                if idx + 1 < bytes.len() {
-                    idx += 2;
-                } else {
-                    idx = bytes.len();
+                loop {
+                    match (bytes.get(idx), bytes.get(idx + 1)) {
+                        (Some(&b'*'), Some(&b'/')) => {
+                            idx += 2;
+                            break;
+                        }
+                        (Some(_), _) => idx += 1,
+                        (None, _) => break,
+                    }
                 }
                 for b in start..idx {
-                    styles[b] = STYLE_COMMENT;
+                    if let Some(style) = styles.get_mut(b) {
+                        *style = STYLE_COMMENT;
+                    }
                 }
                 continue;
             }
@@ -248,9 +255,9 @@ impl SqlHighlighter {
             if byte == b'\'' {
                 let start = idx;
                 idx += 1;
-                while idx < bytes.len() {
-                    if bytes[idx] == b'\'' {
-                        if idx + 1 < bytes.len() && bytes[idx + 1] == b'\'' {
+                while let Some(&b) = bytes.get(idx) {
+                    if b == b'\'' {
+                        if bytes.get(idx + 1) == Some(&b'\'') {
                             idx += 2;
                             continue;
                         }
@@ -260,7 +267,9 @@ impl SqlHighlighter {
                     idx += 1;
                 }
                 for b in start..idx {
-                    styles[b] = STYLE_STRING;
+                    if let Some(style) = styles.get_mut(b) {
+                        *style = STYLE_STRING;
+                    }
                 }
                 continue;
             }
@@ -268,14 +277,12 @@ impl SqlHighlighter {
             // Check for numbers
             if byte.is_ascii_digit()
                 || (byte == b'.'
-                    && idx + 1 < bytes.len()
-                    && bytes[idx + 1].is_ascii_digit())
+                    && bytes.get(idx + 1).map_or(false, |b| b.is_ascii_digit()))
             {
                 let start = idx;
                 let mut has_dot = byte == b'.';
                 idx += 1;
-                while idx < bytes.len() {
-                    let next_byte = bytes[idx];
+                while let Some(&next_byte) = bytes.get(idx) {
                     if next_byte.is_ascii_digit() {
                         idx += 1;
                     } else if next_byte == b'.' && !has_dot {
@@ -286,7 +293,9 @@ impl SqlHighlighter {
                     }
                 }
                 for b in start..idx {
-                    styles[b] = STYLE_NUMBER;
+                    if let Some(style) = styles.get_mut(b) {
+                        *style = STYLE_NUMBER;
+                    }
                 }
                 continue;
             }
@@ -295,20 +304,24 @@ impl SqlHighlighter {
             if is_identifier_start_byte(byte) {
                 let start = idx;
                 idx += 1;
-                while idx < bytes.len() && is_identifier_continue_byte(bytes[idx]) {
+                while bytes.get(idx).map_or(false, |&b| is_identifier_continue_byte(b)) {
                     idx += 1;
                 }
-                let word = &text[start..idx];
+                let word = text.get(start..idx).unwrap_or("");
                 let token_type = self.classify_word(word);
                 for b in start..idx {
-                    styles[b] = token_type.to_style_char();
+                    if let Some(style) = styles.get_mut(b) {
+                        *style = token_type.to_style_char();
+                    }
                 }
                 continue;
             }
 
             // Check for operators
             if is_operator_byte(byte) {
-                styles[idx] = STYLE_OPERATOR;
+                if let Some(style) = styles.get_mut(idx) {
+                    *style = STYLE_OPERATOR;
+                }
                 idx += 1;
                 continue;
             }

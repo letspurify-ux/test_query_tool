@@ -13,6 +13,18 @@ use std::rc::Rc;
 use crate::utils::config::{QueryHistory, QueryHistoryEntry};
 use crate::ui::theme;
 
+/// Find the largest valid UTF-8 boundary at or before `index`.
+fn floor_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut i = index;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 /// Query history dialog for viewing and re-executing past queries
 pub struct QueryHistoryDialog;
 
@@ -145,7 +157,9 @@ impl QueryHistoryDialog {
         browser.set_callback(move |b| {
             let selected = b.value();
             if selected > 0 {
-                let _ = sender_for_preview.send(DialogMessage::UpdatePreview((selected - 1) as usize));
+                if let Some(idx) = (selected - 1).try_into().ok() {
+                    let _ = sender_for_preview.send(DialogMessage::UpdatePreview(idx));
+                }
             }
         });
 
@@ -184,11 +198,12 @@ impl QueryHistoryDialog {
                     DialogMessage::UseSelected => {
                         let selected = browser.value();
                         if selected > 0 {
-                            let idx = (selected - 1) as usize;
-                            let queries = queries.borrow();
-                            if let Some(entry) = queries.get(idx) {
-                                *selected_sql.borrow_mut() = Some(entry.sql.clone());
-                                dialog.hide();
+                            if let Ok(idx) = usize::try_from(selected - 1) {
+                                let queries = queries.borrow();
+                                if let Some(entry) = queries.get(idx) {
+                                    *selected_sql.borrow_mut() = Some(entry.sql.clone());
+                                    dialog.hide();
+                                }
                             }
                         } else {
                             fltk::dialog::alert_default("Please select a query from the list");
@@ -257,9 +272,9 @@ fn truncate_sql(sql: &str, max_len: usize) -> String {
     }
     let trimmed = normalized.trim_matches(|c: char| c.is_ascii_whitespace());
 
-    if trimmed.as_bytes().len() > max_len {
-        let truncated = String::from_utf8_lossy(&trimmed.as_bytes()[..max_len]).to_string();
-        format!("{}...", truncated)
+    if trimmed.len() > max_len {
+        let end = floor_char_boundary(trimmed, max_len);
+        format!("{}...", &trimmed[..end])
     } else {
         trimmed.to_string()
     }

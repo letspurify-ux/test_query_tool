@@ -19,7 +19,6 @@ pub enum BindValue {
 
 #[derive(Debug, Clone)]
 pub struct BindVar {
-    pub name: String,
     pub data_type: BindDataType,
     pub value: BindValue,
 }
@@ -96,16 +95,12 @@ impl BindDataType {
 }
 
 impl BindVar {
-    pub fn new(name: &str, data_type: BindDataType) -> Self {
+    pub fn new(data_type: BindDataType) -> Self {
         let value = match data_type {
             BindDataType::RefCursor => BindValue::Cursor(None),
             _ => BindValue::Scalar(None),
         };
-        Self {
-            name: name.to_string(),
-            data_type,
-            value,
-        }
+        Self { data_type, value }
     }
 }
 

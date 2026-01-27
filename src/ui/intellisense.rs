@@ -561,27 +561,44 @@ impl Default for IntellisensePopup {
 }
 
 // Helper function to extract the current word at cursor position (ASCII-based).
+// cursor_pos is a byte offset from FLTK TextBuffer.
 pub fn get_word_at_cursor(text: &str, cursor_pos: usize) -> (String, usize, usize) {
     if text.is_empty() || cursor_pos == 0 {
         return (String::new(), 0, 0);
     }
 
-    let pos = cursor_pos.min(text.len());
     let bytes = text.as_bytes();
+    let pos = cursor_pos.min(bytes.len());
 
-    // Find word start by scanning backwards over identifier bytes
+    // Find word start by scanning backwards over ASCII identifier bytes
     let mut start = pos;
-    while start > 0 && is_identifier_byte(bytes[start - 1]) {
-        start -= 1;
+    while start > 0 {
+        if let Some(&byte) = bytes.get(start - 1) {
+            if is_identifier_byte(byte) {
+                start -= 1;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
     }
 
-    // Find word end by scanning forwards over identifier bytes
+    // Find word end by scanning forwards over ASCII identifier bytes
     let mut end = pos;
-    while end < bytes.len() && is_identifier_byte(bytes[end]) {
-        end += 1;
+    while let Some(&byte) = bytes.get(end) {
+        if is_identifier_byte(byte) {
+            end += 1;
+        } else {
+            break;
+        }
     }
 
-    let word = text.get(start..end).unwrap_or("").to_string();
+    // Since we only matched ASCII bytes, start..end is always valid UTF-8
+    let word = bytes
+        .get(start..pos)
+        .map(|slice| String::from_utf8_lossy(slice).into_owned())
+        .unwrap_or_default();
     (word, start, end)
 }
 
@@ -589,7 +606,7 @@ pub fn get_word_at_cursor(text: &str, cursor_pos: usize) -> (String, usize, usiz
 #[allow(dead_code)]
 pub fn detect_sql_context(text: &str, cursor_pos: usize) -> SqlContext {
     let end = cursor_pos.min(text.len());
-    let upper = text.get(..end).unwrap_or("").to_ascii_uppercase();
+    let upper = String::from_utf8_lossy(&text.as_bytes()[..end]).to_ascii_uppercase();
 
     // Simple context detection
     let words: Vec<&str> = upper.split_whitespace().collect();

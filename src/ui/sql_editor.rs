@@ -1219,13 +1219,21 @@ impl SqlEditorWidget {
             return None;
         }
         let bytes = text.as_bytes();
-        if bytes.get(rel_word_start - 1) != Some(&b'.') {
+        if bytes.get(rel_word_start.saturating_sub(1)) != Some(&b'.') {
             return None;
         }
         let idx = rel_word_start - 1;
         let mut begin = idx;
-        while begin > 0 && Self::is_identifier_byte(bytes[begin - 1]) {
-            begin -= 1;
+        while begin > 0 {
+            if let Some(&byte) = bytes.get(begin - 1) {
+                if Self::is_identifier_byte(byte) {
+                    begin -= 1;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
         }
         if begin == idx {
             return None;
@@ -2619,7 +2627,7 @@ impl SqlEditorWidget {
                                     };
                                     guard.binds.insert(
                                         normalized.clone(),
-                                        BindVar::new(&normalized, data_type.clone()),
+                                        BindVar::new(data_type.clone()),
                                     );
                                     let message = format!(
                                         "Variable :{} declared as {}",

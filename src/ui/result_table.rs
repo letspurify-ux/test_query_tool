@@ -13,6 +13,18 @@ use std::time::{Duration, Instant};
 use crate::db::QueryResult;
 use crate::ui::theme;
 
+/// Find the largest valid UTF-8 boundary at or before `index`.
+fn floor_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut i = index;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 /// Minimum interval between UI updates during streaming
 const UI_UPDATE_INTERVAL: Duration = Duration::from_millis(500);
 /// Maximum rows to buffer before forcing a UI update
@@ -630,8 +642,8 @@ impl ResultTableWidget {
         for (row_idx, row) in result.rows.iter().enumerate() {
             for (col_idx, cell) in row.iter().enumerate() {
                 let display_text = if cell.len() > 50 {
-                    let truncated = String::from_utf8_lossy(&cell.as_bytes()[..47]).to_string();
-                    format!("{}...", truncated)
+                    let end = floor_char_boundary(cell, 47);
+                    format!("{}...", &cell[..end])
                 } else {
                     cell.clone()
                 };
@@ -757,8 +769,8 @@ impl ResultTableWidget {
             for (col_idx, cell) in row.iter().enumerate() {
                 if (col_idx as i32) < cols {
                     let display_text = if cell.len() > 50 {
-                        let truncated = String::from_utf8_lossy(&cell.as_bytes()[..47]).to_string();
-                        format!("{}...", truncated)
+                        let end = floor_char_boundary(cell, 47);
+                        format!("{}...", &cell[..end])
                     } else {
                         cell.clone()
                     };
