@@ -2113,9 +2113,11 @@ impl SqlEditorWidget {
         let join_modifiers = ["LEFT", "RIGHT", "FULL", "INNER", "CROSS"];
         let join_keyword = "JOIN";
         let outer_keyword = "OUTER";
-        let condition_keywords = ["ON", "AND", "OR", "WHEN", "ELSE"];
+        let condition_keywords = ["ON", "AND", "OR", "WHEN"]; // ELSE handled separately for IF blocks
         // BEGIN is handled separately to support DECLARE ... BEGIN ... END blocks
-        let block_start_keywords = ["DECLARE", "LOOP", "CASE", "IF"];
+        // CASE is handled separately for SELECT vs PL/SQL context
+        // LOOP is handled separately for FOR ... LOOP on same line
+        let block_start_keywords = ["DECLARE", "IF"];
         let block_end_qualifiers = ["LOOP", "IF", "CASE"]; // END LOOP, END IF, END CASE
 
         let tokens = Self::tokenize_sql(statement);
@@ -2128,6 +2130,8 @@ impl SqlEditorWidget {
         let mut needs_space = false;
         let mut line_indent = 0usize;
         let mut join_modifier_active = false;
+        let mut after_for_while = false; // Track FOR/WHILE for LOOP on same line
+        let mut in_plsql_block = false; // Track if we're in PL/SQL block (for CASE handling)
 
         let newline_with = |out: &mut String,
                             indent_level: usize,
@@ -2245,6 +2249,31 @@ impl SqlEditorWidget {
                             &mut needs_space,
                             &mut line_indent,
                         );
+                    } else if upper == "ELSE" || upper == "ELSIF" {
+                        // ELSE/ELSIF in IF block: same level as IF
+                        let in_if_block = block_stack.iter().any(|s| s == "IF");
+                        if in_if_block {
+                            newline_with(
+                                &mut out,
+                                indent_level.saturating_sub(1),
+                                0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        } else {
+                            // ELSE in CASE or other context
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                1,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        }
+                    } else if upper == "THEN" {
+                        // THEN stays on same line, no newline
                     } else if upper == join_keyword {
                         if !join_modifier_active {
                             newline_with(
@@ -2281,6 +2310,43 @@ impl SqlEditorWidget {
                             );
                             join_modifier_active = true;
                         }
+                    } else if upper == "FOR" || upper == "WHILE" {
+                        // FOR/WHILE starts a line, LOOP will follow on same line
+                        newline_with(
+                            &mut out,
+                            indent_level,
+                            0,
+                            &mut at_line_start,
+                            &mut needs_space,
+                            &mut line_indent,
+                        );
+                        after_for_while = true;
+                    } else if upper == "LOOP" {
+                        // LOOP after FOR/WHILE stays on same line
+                        if !after_for_while {
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        }
+                        after_for_while = false;
+                    } else if upper == "CASE" {
+                        // CASE in PL/SQL block vs SELECT context
+                        if in_plsql_block {
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        }
+                        // In SELECT context, CASE stays inline
                     } else if block_start_keywords.contains(&upper.as_str()) {
                         newline_with(
                             &mut out,
@@ -2332,6 +2398,9 @@ impl SqlEditorWidget {
                     if block_start_keywords.contains(&upper.as_str()) {
                         block_stack.push(upper.clone());
                         indent_level += 1;
+                        if upper == "DECLARE" || upper == "IF" {
+                            in_plsql_block = true;
+                        }
                     } else if upper == "BEGIN" {
                         let inside_declare = block_stack.last().map_or(false, |s| s == "DECLARE");
                         if inside_declare {
@@ -2344,6 +2413,13 @@ impl SqlEditorWidget {
                             block_stack.push("BEGIN".to_string());
                             indent_level += 1;
                         }
+                        in_plsql_block = true;
+                    } else if upper == "LOOP" {
+                        block_stack.push("LOOP".to_string());
+                        indent_level += 1;
+                    } else if upper == "CASE" {
+                        block_stack.push("CASE".to_string());
+                        indent_level += 1;
                     }
                 }
                 SqlToken::String(literal) => {
