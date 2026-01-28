@@ -2114,14 +2114,16 @@ impl SqlEditorWidget {
         let join_keyword = "JOIN";
         let outer_keyword = "OUTER";
         let condition_keywords = ["ON", "AND", "OR", "WHEN", "ELSE"];
-        let block_start = ["BEGIN", "DECLARE", "LOOP", "CASE"];
-        let block_end = ["END"];
+        // BEGIN is handled separately to support DECLARE ... BEGIN ... END blocks
+        let block_start_keywords = ["DECLARE", "LOOP", "CASE", "IF"];
+        let block_end_qualifiers = ["LOOP", "IF", "CASE"]; // END LOOP, END IF, END CASE
 
         let tokens = Self::tokenize_sql(statement);
         let mut out = String::new();
         let mut indent_level = 0usize;
         let mut suppress_comma_break_depth = 0usize;
         let mut paren_stack: Vec<bool> = Vec::new();
+        let mut block_stack: Vec<String> = Vec::new(); // Track which block keywords started blocks
         let mut at_line_start = true;
         let mut needs_space = false;
         let mut line_indent = 0usize;
@@ -2169,7 +2171,28 @@ impl SqlEditorWidget {
                 SqlToken::Word(word) => {
                     let upper = word.to_uppercase();
                     let is_keyword = SQL_KEYWORDS.iter().any(|&kw| kw == upper);
-                    if block_end.contains(&upper.as_str()) {
+                    if upper == "END" {
+                        // Check if this is END LOOP, END IF, END CASE, etc.
+                        let qualifier = next_word_upper.as_deref();
+                        let is_qualified_end = matches!(qualifier, Some("LOOP" | "IF" | "CASE"));
+
+                        if is_qualified_end {
+                            // END LOOP, END IF, END CASE - pop matching block
+                            if let Some(top) = block_stack.last() {
+                                if block_end_qualifiers.contains(&top.as_str()) {
+                                    block_stack.pop();
+                                }
+                            }
+                        } else {
+                            // Plain END - closes BEGIN or DECLARE block
+                            // Pop until we find BEGIN or DECLARE
+                            while let Some(top) = block_stack.pop() {
+                                if top == "BEGIN" || top == "DECLARE" {
+                                    break;
+                                }
+                            }
+                        }
+
                         if indent_level > 0 {
                             indent_level -= 1;
                         }
@@ -2181,6 +2204,29 @@ impl SqlEditorWidget {
                             &mut needs_space,
                             &mut line_indent,
                         );
+
+                        // Output "END"
+                        ensure_indent(&mut out, &mut at_line_start, line_indent);
+                        out.push_str("END");
+
+                        // If qualified (END LOOP, END IF, etc.), output the qualifier and skip it
+                        if is_qualified_end {
+                            if let Some(q) = qualifier {
+                                out.push(' ');
+                                out.push_str(q);
+                                // Skip the next word token (LOOP, IF, CASE)
+                                idx += 1;
+                                while idx < tokens.len() {
+                                    if let SqlToken::Word(_) = &tokens[idx] {
+                                        break;
+                                    }
+                                    idx += 1;
+                                }
+                            }
+                        }
+                        needs_space = true;
+                        idx += 1;
+                        continue;
                     } else if clause_keywords.contains(&upper.as_str()) {
                         newline_with(
                             &mut out,
@@ -2235,7 +2281,7 @@ impl SqlEditorWidget {
                             );
                             join_modifier_active = true;
                         }
-                    } else if block_start.contains(&upper.as_str()) {
+                    } else if block_start_keywords.contains(&upper.as_str()) {
                         newline_with(
                             &mut out,
                             indent_level,
@@ -2244,6 +2290,31 @@ impl SqlEditorWidget {
                             &mut needs_space,
                             &mut line_indent,
                         );
+                    } else if upper == "BEGIN" {
+                        // BEGIN handling: check if we're inside a DECLARE block
+                        let inside_declare = block_stack.last().map_or(false, |s| s == "DECLARE");
+                        if inside_declare {
+                            // DECLARE ... BEGIN - BEGIN is at same level as DECLARE
+                            // Don't increase indent, just newline at current level
+                            newline_with(
+                                &mut out,
+                                indent_level.saturating_sub(1),
+                                0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        } else {
+                            // Standalone BEGIN block
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        }
                     }
 
                     ensure_indent(&mut out, &mut at_line_start, line_indent);
@@ -2257,8 +2328,22 @@ impl SqlEditorWidget {
                     }
                     needs_space = true;
 
-                    if block_start.contains(&upper.as_str()) {
+                    // Handle block start - push to stack and increase indent
+                    if block_start_keywords.contains(&upper.as_str()) {
+                        block_stack.push(upper.clone());
                         indent_level += 1;
+                    } else if upper == "BEGIN" {
+                        let inside_declare = block_stack.last().map_or(false, |s| s == "DECLARE");
+                        if inside_declare {
+                            // Replace DECLARE with BEGIN on the stack (same block continues)
+                            block_stack.pop();
+                            block_stack.push("BEGIN".to_string());
+                            // indent_level stays the same
+                        } else {
+                            // Standalone BEGIN block
+                            block_stack.push("BEGIN".to_string());
+                            indent_level += 1;
+                        }
                     }
                 }
                 SqlToken::String(literal) => {
