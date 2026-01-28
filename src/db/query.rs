@@ -1811,8 +1811,10 @@ impl QueryExecutor {
                         if stmt.is_empty() {
                             continue;
                         }
-                        if let Some(found) = sql[search_pos..].find(stmt) {
-                            let start = search_pos + found;
+                        let remaining = &sql[search_pos..];
+                        let leading_ws = remaining.len() - remaining.trim_start().len();
+                        if let Some(found) = remaining.trim_start().find(stmt) {
+                            let start = search_pos + leading_ws + found;
                             let end = start + stmt.len();
                             spans.push(StatementSpan {
                                 start,
@@ -1845,8 +1847,10 @@ impl QueryExecutor {
                 if stmt.is_empty() {
                     continue;
                 }
-                if let Some(found) = sql[search_pos..].find(stmt) {
-                    let start = search_pos + found;
+                let remaining = &sql[search_pos..];
+                let leading_ws = remaining.len() - remaining.trim_start().len();
+                if let Some(found) = remaining.trim_start().find(stmt) {
+                    let start = search_pos + leading_ws + found;
                     let end = start + stmt.len();
                     spans.push(StatementSpan {
                         start,
