@@ -459,10 +459,18 @@ impl IntellisensePopup {
         self.browser.set_callback(move |b| {
             let selected = b.value();
             if selected > 0 {
-                let suggestions = suggestions.borrow();
-                if let Some(text) = suggestions.get((selected - 1) as usize) {
-                    if let Some(ref mut cb) = *callback.borrow_mut() {
-                        cb(text.clone());
+                // First, get the text with suggestions borrow, then release it
+                let text = {
+                    let suggestions = suggestions.borrow();
+                    suggestions.get((selected - 1) as usize).cloned()
+                };
+                if let Some(text) = text {
+                    // Take the callback out, call it, then put it back
+                    // This ensures the RefCell is not borrowed during callback execution
+                    let cb_opt = callback.borrow_mut().take();
+                    if let Some(mut cb) = cb_opt {
+                        cb(text);
+                        *callback.borrow_mut() = Some(cb);
                     }
                     window.hide();
                     *visible.borrow_mut() = false;
