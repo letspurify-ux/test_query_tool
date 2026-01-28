@@ -61,6 +61,9 @@ enum ConnectionResult {
 impl MainWindow {
     pub fn new() -> Self {
         let connection = create_shared_connection();
+
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
+        
         let mut window = Window::default()
             .with_size(1200, 800)
             .with_label("Oracle Query Tool - Rust Edition")

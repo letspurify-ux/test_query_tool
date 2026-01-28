@@ -39,6 +39,8 @@ impl QueryHistoryDialog {
 
         let history = QueryHistory::load();
 
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
+        
         let mut dialog = Window::default()
             .with_size(800, 500)
             .with_label("Query History")

@@ -32,6 +32,8 @@ impl ConnectionDialog {
         let result: Rc<RefCell<Option<ConnectionInfo>>> = Rc::new(RefCell::new(None));
         let config = Rc::new(RefCell::new(AppConfig::load()));
 
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
+        
         let mut dialog = Window::default()
             .with_size(500, 460)
             .with_label("Connect to Oracle Database")

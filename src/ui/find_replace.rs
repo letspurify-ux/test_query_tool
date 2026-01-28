@@ -50,6 +50,8 @@ impl FindReplaceDialog {
         };
         let height = if show_replace { 180 } else { 130 };
 
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
+        
         let mut dialog = Window::default()
             .with_size(450, height)
             .with_label(title)

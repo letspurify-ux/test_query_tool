@@ -24,6 +24,8 @@ impl FeatureCatalogDialog {
             Close,
         }
 
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
+        
         let mut dialog = Window::default()
             .with_size(900, 700)
             .with_label("Feature Catalog")

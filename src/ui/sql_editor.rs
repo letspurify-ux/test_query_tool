@@ -1478,6 +1478,7 @@ impl SqlEditorWidget {
 
                 // Show in a dialog
                 let current_group = fltk::group::Group::try_current();
+                
                 fltk::group::Group::set_current(None::<&fltk::group::Group>);
                 
                 let mut dialog = Window::default()
@@ -1605,6 +1606,7 @@ impl SqlEditorWidget {
         use fltk::{prelude::*, text::TextDisplay, window::Window};
 
         let current_group = fltk::group::Group::try_current();
+        
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut dialog = Window::default()
@@ -2702,6 +2704,9 @@ impl SqlEditorWidget {
     }
 
     fn execute_sql(&self, sql: &str) {
+        
+        
+        
         if sql.trim().is_empty() {
             return;
         }

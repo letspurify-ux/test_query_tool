@@ -542,6 +542,8 @@ impl ObjectBrowserWidget {
     fn show_info_dialog(title: &str, content: &str) {
         use fltk::{prelude::*, text::TextDisplay, window::Window};
 
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
+        
         let mut dialog = Window::default()
             .with_size(700, 500)
             .with_label(title)

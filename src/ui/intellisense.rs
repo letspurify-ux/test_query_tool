@@ -410,6 +410,7 @@ impl IntellisensePopup {
         // Temporarily suspend current group to prevent popup window from being
         // added to the parent container (which causes layout issues)
         let current_group = fltk::group::Group::try_current();
+        
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut window = Window::default()

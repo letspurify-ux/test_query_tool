@@ -18,6 +18,7 @@ fn forward_menu_callback(menu: &mut MenuBar) {
 
 fn show_info_dialog(title: &str, content: &str, width: i32, height: i32) {
     let current_group = fltk::group::Group::try_current();
+    
     fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
     let mut dialog = Window::default()
