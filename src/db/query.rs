@@ -35,7 +35,7 @@ pub enum ScriptItem {
 pub enum ToolCommand {
     Var { name: String, data_type: BindDataType },
     Print { name: Option<String> },
-    SetServerOutput { enabled: bool, size: Option<u32> },
+    SetServerOutput { enabled: bool, size: Option<u32>, unlimited: bool },
     ShowErrors { object_type: Option<String>, object_name: Option<String> },
     Prompt { text: String },
     SetErrorContinue { enabled: bool },
@@ -701,6 +701,7 @@ impl QueryExecutor {
             return ToolCommand::SetServerOutput {
                 enabled: false,
                 size: None,
+                unlimited: false,
             };
         }
 
@@ -713,17 +714,24 @@ impl QueryExecutor {
         }
 
         let mut size: Option<u32> = None;
+        let mut unlimited = false;
         let mut idx = 3usize;
         while idx + 1 < tokens.len() {
             if tokens[idx].eq_ignore_ascii_case("SIZE") {
-                match tokens[idx + 1].parse::<u32>() {
-                    Ok(val) => size = Some(val),
-                    Err(_) => {
-                        return ToolCommand::Unsupported {
-                            raw: raw.to_string(),
-                            message: "SET SERVEROUTPUT SIZE must be a number.".to_string(),
-                            is_error: true,
-                        };
+                let size_val = tokens[idx + 1];
+                if size_val.eq_ignore_ascii_case("UNLIMITED") {
+                    unlimited = true;
+                } else {
+                    match size_val.parse::<u32>() {
+                        Ok(val) => size = Some(val),
+                        Err(_) => {
+                            return ToolCommand::Unsupported {
+                                raw: raw.to_string(),
+                                message: "SET SERVEROUTPUT SIZE must be a number or UNLIMITED."
+                                    .to_string(),
+                                is_error: true,
+                            };
+                        }
                     }
                 }
                 break;
@@ -734,6 +742,7 @@ impl QueryExecutor {
         ToolCommand::SetServerOutput {
             enabled: true,
             size,
+            unlimited,
         }
     }
 
@@ -1872,12 +1881,22 @@ impl QueryExecutor {
     }
 
     /// Enable DBMS_OUTPUT for the session
+    /// If buffer_size is None, enables unlimited buffer (DBMS_OUTPUT.ENABLE(NULL))
     #[allow(dead_code)]
-    pub fn enable_dbms_output(conn: &Connection, buffer_size: u32) -> Result<(), OracleError> {
-        let sql = format!("BEGIN DBMS_OUTPUT.ENABLE({}); END;", buffer_size);
+    pub fn enable_dbms_output(
+        conn: &Connection,
+        buffer_size: Option<u32>,
+    ) -> Result<(), OracleError> {
+        let sql = match buffer_size {
+            Some(size) => format!("BEGIN DBMS_OUTPUT.ENABLE({}); END;", size),
+            None => "BEGIN DBMS_OUTPUT.ENABLE(NULL); END;".to_string(),
+        };
         match conn.execute(&sql, &[]) {
             Ok(_stmt) => {}
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         }
         Ok(())
     }
@@ -1939,7 +1958,7 @@ impl QueryExecutor {
         sql: &str,
     ) -> Result<(QueryResult, Vec<String>), OracleError> {
         // Enable DBMS_OUTPUT before execution
-        let _ = Self::enable_dbms_output(conn, 1000000);
+        let _ = Self::enable_dbms_output(conn, Some(1000000));
 
         // Execute the query
         let result = match Self::execute_batch(conn, sql) {
