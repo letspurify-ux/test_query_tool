@@ -2939,7 +2939,7 @@ impl SqlEditorWidget {
                                         }
                                     }
                                 }
-                                ToolCommand::SetServerOutput { enabled, size } => {
+                                ToolCommand::SetServerOutput { enabled, size, unlimited } => {
                                     let default_size = 1_000_000u32;
                                     let current_size = match session.lock() {
                                         Ok(guard) => guard.server_output.size,
@@ -2952,52 +2952,78 @@ impl SqlEditorWidget {
                                     let mut success = true;
 
                                     if enabled {
-                                        let desired_size = size.unwrap_or(current_size);
-                                        let mut applied_size = desired_size;
-                                        let mut enable_result =
-                                            QueryExecutor::enable_dbms_output(conn.as_ref(), desired_size);
+                                        if unlimited {
+                                            // SIZE UNLIMITED: pass None to enable unlimited buffer
+                                            let enable_result =
+                                                QueryExecutor::enable_dbms_output(conn.as_ref(), None);
 
-                                        if enable_result.is_err()
-                                            && size.is_some()
-                                            && desired_size != default_size
-                                        {
-                                            if QueryExecutor::enable_dbms_output(
-                                                conn.as_ref(),
-                                                default_size,
-                                            )
-                                            .is_ok()
-                                            {
-                                                applied_size = default_size;
-                                                message = format!(
-                                                    "SERVEROUTPUT enabled with size {} (requested {} not supported)",
-                                                    applied_size, desired_size
-                                                );
-                                                enable_result = Ok(());
-                                            }
-                                        }
-
-                                        match enable_result {
-                                            Ok(()) => {
-                                                let mut guard = match session.lock() {
-                                                    Ok(guard) => guard,
-                                                    Err(poisoned) => {
-                                                        eprintln!("Warning: session state lock was poisoned; recovering.");
-                                                        poisoned.into_inner()
-                                                    }
-                                                };
-                                                guard.server_output.enabled = true;
-                                                guard.server_output.size = applied_size;
-                                                if message.is_empty() {
-                                                    message = format!(
-                                                        "SERVEROUTPUT enabled (size {})",
-                                                        applied_size
-                                                    );
+                                            match enable_result {
+                                                Ok(()) => {
+                                                    let mut guard = match session.lock() {
+                                                        Ok(guard) => guard,
+                                                        Err(poisoned) => {
+                                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                                            poisoned.into_inner()
+                                                        }
+                                                    };
+                                                    guard.server_output.enabled = true;
+                                                    guard.server_output.size = 0; // 0 indicates unlimited
+                                                    message = "SERVEROUTPUT enabled (size UNLIMITED)".to_string();
+                                                }
+                                                Err(err) => {
+                                                    success = false;
+                                                    message =
+                                                        format!("SERVEROUTPUT enable failed: {}", err);
                                                 }
                                             }
-                                            Err(err) => {
-                                                success = false;
-                                                message =
-                                                    format!("SERVEROUTPUT enable failed: {}", err);
+                                        } else {
+                                            let desired_size = size.unwrap_or(current_size);
+                                            let mut applied_size = desired_size;
+                                            let mut enable_result =
+                                                QueryExecutor::enable_dbms_output(conn.as_ref(), Some(desired_size));
+
+                                            if enable_result.is_err()
+                                                && size.is_some()
+                                                && desired_size != default_size
+                                            {
+                                                if QueryExecutor::enable_dbms_output(
+                                                    conn.as_ref(),
+                                                    Some(default_size),
+                                                )
+                                                .is_ok()
+                                                {
+                                                    applied_size = default_size;
+                                                    message = format!(
+                                                        "SERVEROUTPUT enabled with size {} (requested {} not supported)",
+                                                        applied_size, desired_size
+                                                    );
+                                                    enable_result = Ok(());
+                                                }
+                                            }
+
+                                            match enable_result {
+                                                Ok(()) => {
+                                                    let mut guard = match session.lock() {
+                                                        Ok(guard) => guard,
+                                                        Err(poisoned) => {
+                                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                                            poisoned.into_inner()
+                                                        }
+                                                    };
+                                                    guard.server_output.enabled = true;
+                                                    guard.server_output.size = applied_size;
+                                                    if message.is_empty() {
+                                                        message = format!(
+                                                            "SERVEROUTPUT enabled (size {})",
+                                                            applied_size
+                                                        );
+                                                    }
+                                                }
+                                                Err(err) => {
+                                                    success = false;
+                                                    message =
+                                                        format!("SERVEROUTPUT enable failed: {}", err);
+                                                }
                                             }
                                         }
                                     } else {
