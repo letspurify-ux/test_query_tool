@@ -228,8 +228,12 @@ impl ObjectBrowserWidget {
                     if mouse_button == fltk::app::MouseButton::Left && fltk::app::event_clicks() {
                         if let Some(item) = t.first_selected_item() {
                             if let Some(insert_text) = Self::get_insert_text(&item) {
-                                if let Some(ref mut cb) = *sql_callback.borrow_mut() {
+                                // Take the callback out, call it, then put it back
+                                // This ensures the RefCell is not borrowed during callback execution
+                                let cb_opt = sql_callback.borrow_mut().take();
+                                if let Some(mut cb) = cb_opt {
                                     cb(SqlAction::Insert(insert_text));
+                                    *sql_callback.borrow_mut() = Some(cb);
                                 }
                                 return true;
                             }
@@ -252,8 +256,11 @@ impl ObjectBrowserWidget {
                                         "SELECT * FROM {} WHERE ROWNUM <= 100",
                                         object_name
                                     );
-                                    if let Some(ref mut cb) = *sql_callback.borrow_mut() {
+                                    // Take the callback out, call it, then put it back
+                                    let cb_opt = sql_callback.borrow_mut().take();
+                                    if let Some(mut cb) = cb_opt {
                                         cb(SqlAction::Set(sql));
+                                        *sql_callback.borrow_mut() = Some(cb);
                                     }
                                 }
                             }
@@ -371,8 +378,11 @@ impl ObjectBrowserWidget {
                         ("Select Data (Top 100)", ObjectItem::Simple { object_name, .. }) => {
                             let sql = format!("SELECT * FROM {} WHERE ROWNUM <= 100", object_name);
                             drop(conn_guard);
-                            if let Some(ref mut cb) = *sql_callback.borrow_mut() {
+                            // Take the callback out, call it, then put it back
+                            let cb_opt = sql_callback.borrow_mut().take();
+                            if let Some(mut cb) = cb_opt {
                                 cb(SqlAction::Execute(sql));
+                                *sql_callback.borrow_mut() = Some(cb);
                             }
                         }
                         ("View Structure", ObjectItem::Simple { object_name, .. }) => {
@@ -516,9 +526,11 @@ impl ObjectBrowserWidget {
 
         match result {
             Ok(ddl) => {
-                // Put DDL in editor
-                if let Some(ref mut cb) = *sql_callback.borrow_mut() {
+                // Take the callback out, call it, then put it back
+                let cb_opt = sql_callback.borrow_mut().take();
+                if let Some(mut cb) = cb_opt {
                     cb(SqlAction::Set(ddl));
+                    *sql_callback.borrow_mut() = Some(cb);
                 }
             }
             Err(e) => {
