@@ -133,6 +133,7 @@ struct SplitState {
     in_create_plsql: bool,
     create_pending: bool,
     create_or_seen: bool,
+    after_declare: bool, // Track if we're inside DECLARE block waiting for BEGIN
 }
 
 impl SplitState {
@@ -161,10 +162,20 @@ impl SplitState {
             self.pending_end = false;
         }
 
-        if upper == "BEGIN" || upper == "DECLARE" {
+        if upper == "DECLARE" {
             self.block_depth += 1;
+            self.after_declare = true;
+        } else if upper == "BEGIN" {
+            if self.after_declare {
+                // DECLARE ... BEGIN - same block, don't increase depth
+                self.after_declare = false;
+            } else {
+                // Standalone BEGIN block
+                self.block_depth += 1;
+            }
         } else if upper == "END" {
             self.pending_end = true;
+            self.after_declare = false;
         }
 
         self.token.clear();
