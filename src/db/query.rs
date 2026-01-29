@@ -165,7 +165,8 @@ impl SplitState {
 
         // For CREATE PL/SQL (PACKAGE, PROCEDURE, FUNCTION, TYPE, TRIGGER),
         // AS or IS starts the body/specification block
-        if self.in_create_plsql && self.block_depth == 0 && matches!(upper.as_str(), "AS" | "IS") {
+        // For nested procedures/functions inside packages, IS also increments block_depth
+        if self.in_create_plsql && matches!(upper.as_str(), "AS" | "IS") {
             self.block_depth += 1;
             self.after_as_is = true;
         } else if upper == "DECLARE" {
@@ -435,9 +436,7 @@ impl StatementBuilder {
 
             if c == ';' {
                 self.state.resolve_pending_end_on_terminator();
-                if self.state.block_depth == 0 {
-                    // For CREATE PL/SQL, reset the create state when terminating
-                    self.state.reset_create_state();
+                if self.state.block_depth == 0 && !self.state.in_create_plsql {
                     let trimmed = self.current.trim();
                     if !trimmed.is_empty() {
                         self.statements.push(trimmed.to_string());
@@ -3549,5 +3548,131 @@ SELECT 1 FROM DUAL;"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 2, "Should have 2 statements, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_complete_package_with_spec_and_body() {
+        let sql = r#"CREATE OR REPLACE PACKAGE oqt_pkg AS
+  PROCEDURE log_msg(p_tag IN VARCHAR2, p_msg IN VARCHAR2, p_n1 IN NUMBER DEFAULT NULL);
+
+  PROCEDURE p_basic(
+    p_in_num   IN  NUMBER,
+    p_in_txt   IN  VARCHAR2 DEFAULT 'DEF',
+    p_out_txt  OUT VARCHAR2,
+    p_inout_n  IN OUT NUMBER
+  );
+
+  PROCEDURE p_over(p_txt IN VARCHAR2);
+  PROCEDURE p_over(p_num IN NUMBER, p_txt IN VARCHAR2);
+
+  PROCEDURE p_refcur(p_tag IN VARCHAR2, p_rc OUT SYS_REFCURSOR);
+
+  PROCEDURE p_raise(p_mode IN VARCHAR2);
+
+  FUNCTION f_sum(p_a IN NUMBER, p_b IN NUMBER) RETURN NUMBER;
+  FUNCTION f_echo(p_txt IN VARCHAR2) RETURN VARCHAR2;
+  FUNCTION f_dateadd(p_d IN DATE, p_days IN NUMBER DEFAULT 1) RETURN DATE;
+END oqt_pkg;
+/
+SHOW ERRORS PACKAGE oqt_pkg;
+
+CREATE OR REPLACE PACKAGE BODY oqt_pkg AS
+  PROCEDURE log_msg(p_tag IN VARCHAR2, p_msg IN VARCHAR2, p_n1 IN NUMBER DEFAULT NULL) IS
+  BEGIN
+    INSERT INTO oqt_call_log(id, tag, msg, n1, created_at)
+    VALUES (oqt_call_log_seq.NEXTVAL, p_tag, p_msg, p_n1, SYSDATE);
+  END;
+
+  PROCEDURE p_basic(
+    p_in_num   IN  NUMBER,
+    p_in_txt   IN  VARCHAR2 DEFAULT 'DEF',
+    p_out_txt  OUT VARCHAR2,
+    p_inout_n  IN OUT NUMBER
+  ) IS
+  BEGIN
+    p_out_txt := 'IN_NUM='||p_in_num||', IN_TXT='||p_in_txt||', INOUT='||p_inout_n;
+    p_inout_n := NVL(p_inout_n,0) + p_in_num;
+
+    log_msg('P_BASIC', p_out_txt, p_in_num);
+    DBMS_OUTPUT.PUT_LINE('[p_basic] out='||p_out_txt||' / inout='||p_inout_n);
+  END;
+
+  PROCEDURE p_over(p_txt IN VARCHAR2) IS
+  BEGIN
+    log_msg('P_OVER1', p_txt);
+    DBMS_OUTPUT.PUT_LINE('[p_over(txt)] '||NVL(p_txt,'<NULL>'));
+  END;
+
+  PROCEDURE p_over(p_num IN NUMBER, p_txt IN VARCHAR2) IS
+  BEGIN
+    log_msg('P_OVER2', p_txt, p_num);
+    DBMS_OUTPUT.PUT_LINE('[p_over(num,txt)] '||p_num||' / '||NVL(p_txt,'<NULL>'));
+  END;
+
+  PROCEDURE p_refcur(p_tag IN VARCHAR2, p_rc OUT SYS_REFCURSOR) IS
+  BEGIN
+    OPEN p_rc FOR
+      SELECT id, tag, msg, n1, created_at
+      FROM oqt_call_log
+      WHERE tag LIKE p_tag||'%'
+      ORDER BY id DESC;
+  END;
+
+  PROCEDURE p_raise(p_mode IN VARCHAR2) IS
+  BEGIN
+    IF p_mode = 'NO_DATA_FOUND' THEN
+      DECLARE v NUMBER;
+      BEGIN
+        SELECT n1 INTO v FROM oqt_call_log WHERE id = -9999;
+      END;
+    ELSIF p_mode = 'APP' THEN
+      RAISE_APPLICATION_ERROR(-20001, 'oqt_pkg.p_raise app error');
+    ELSE
+      DBMS_OUTPUT.PUT_LINE('[p_raise] ok');
+    END IF;
+  END;
+
+  FUNCTION f_sum(p_a IN NUMBER, p_b IN NUMBER) RETURN NUMBER IS
+  BEGIN
+    RETURN NVL(p_a,0) + NVL(p_b,0);
+  END;
+
+  FUNCTION f_echo(p_txt IN VARCHAR2) RETURN VARCHAR2 IS
+  BEGIN
+    RETURN 'ECHO:'||p_txt;
+  END;
+
+  FUNCTION f_dateadd(p_d IN DATE, p_days IN NUMBER DEFAULT 1) RETURN DATE IS
+  BEGIN
+    RETURN p_d + p_days;
+  END;
+END oqt_pkg;
+/
+SHOW ERRORS PACKAGE BODY oqt_pkg;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+
+        // Count tool commands (SHOW ERRORS)
+        let tool_cmds: Vec<_> = items.iter().filter(|item| matches!(item, ScriptItem::ToolCommand(_))).collect();
+
+        if stmts.len() != 2 {
+            println!("\n=== FAILED: Expected 2 statements, got {} ===", stmts.len());
+            for (i, s) in stmts.iter().enumerate() {
+                let preview = if s.len() > 100 { &s[..100] } else { s };
+                println!("\n--- Statement {} ---\n{}...\n---", i, preview);
+            }
+        }
+
+        assert_eq!(stmts.len(), 2, "Should have 2 statements (package spec + body), got {}", stmts.len());
+        assert_eq!(tool_cmds.len(), 2, "Should have 2 tool commands (SHOW ERRORS), got {}", tool_cmds.len());
+
+        // Verify package spec
+        assert!(stmts[0].contains("CREATE OR REPLACE PACKAGE oqt_pkg AS"), "First statement should be package spec");
+        assert!(stmts[0].contains("END oqt_pkg"), "Package spec should end with END oqt_pkg");
+        assert!(!stmts[0].contains("PACKAGE BODY"), "Package spec should not contain BODY");
+
+        // Verify package body
+        assert!(stmts[1].contains("CREATE OR REPLACE PACKAGE BODY oqt_pkg AS"), "Second statement should be package body");
+        assert!(stmts[1].contains("END oqt_pkg"), "Package body should end with END oqt_pkg");
     }
 }
