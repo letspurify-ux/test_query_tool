@@ -3197,3 +3197,357 @@ pub struct ConstraintInfo {
     pub columns: String,
     pub ref_table: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to extract statements from ScriptItems
+    fn get_statements(items: &[ScriptItem]) -> Vec<&str> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_simple_select() {
+        let sql = "SELECT 1 FROM DUAL;";
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1);
+        assert!(stmts[0].contains("SELECT 1 FROM DUAL"));
+    }
+
+    #[test]
+    fn test_multiple_selects() {
+        let sql = "SELECT 1 FROM DUAL;\nSELECT 2 FROM DUAL;";
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 2);
+    }
+
+    #[test]
+    fn test_double_semicolon() {
+        let sql = "SELECT 1 FROM DUAL;;";
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+        assert!(!stmts[0].ends_with(";;"), "Should not end with ;;: {}", stmts[0]);
+    }
+
+    #[test]
+    fn test_anonymous_block() {
+        let sql = "DECLARE x NUMBER; BEGIN x := 1; END;";
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_create_procedure_simple() {
+        let sql = "CREATE PROCEDURE test_proc AS BEGIN NULL; END;";
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+        assert!(stmts[0].contains("CREATE PROCEDURE"));
+        assert!(stmts[0].contains("END"));
+    }
+
+    #[test]
+    fn test_create_procedure_with_declare() {
+        let sql = r#"CREATE PROCEDURE test_proc AS
+DECLARE
+  v_num NUMBER;
+BEGIN
+  v_num := 1;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_create_or_replace_procedure() {
+        let sql = r#"CREATE OR REPLACE PROCEDURE test_proc IS
+BEGIN
+  DBMS_OUTPUT.PUT_LINE('Hello');
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_create_function() {
+        let sql = r#"CREATE FUNCTION add_nums(a NUMBER, b NUMBER) RETURN NUMBER IS
+BEGIN
+  RETURN a + b;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_create_package_spec() {
+        let sql = r#"CREATE PACKAGE test_pkg AS
+  PROCEDURE proc1;
+  FUNCTION func1 RETURN NUMBER;
+END test_pkg;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+        assert!(stmts[0].contains("CREATE PACKAGE"));
+        assert!(stmts[0].contains("END test_pkg"));
+    }
+
+    #[test]
+    fn test_create_package_body_simple() {
+        let sql = r#"CREATE PACKAGE BODY test_pkg AS
+  PROCEDURE proc1 IS
+  BEGIN
+    NULL;
+  END;
+END test_pkg;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_create_package_body_complex() {
+        let sql = r#"CREATE OR REPLACE PACKAGE BODY oqt_pkg AS
+  PROCEDURE log_msg(p_tag IN VARCHAR2, p_msg IN VARCHAR2, p_n1 IN NUMBER DEFAULT NULL) IS
+  BEGIN
+    INSERT INTO oqt_call_log(id, tag, msg, n1, created_at)
+    VALUES (oqt_call_log_seq.NEXTVAL, p_tag, p_msg, p_n1, SYSDATE);
+  END;
+
+  PROCEDURE p_basic(
+    p_in_num   IN  NUMBER,
+    p_in_txt   IN  VARCHAR2 DEFAULT 'DEF',
+    p_out_txt  OUT VARCHAR2,
+    p_inout_n  IN OUT NUMBER
+  ) IS
+  BEGIN
+    p_out_txt := 'IN_NUM='||p_in_num||', IN_TXT='||p_in_txt||', INOUT='||p_inout_n;
+    p_inout_n := NVL(p_inout_n,0) + p_in_num;
+
+    log_msg('P_BASIC', p_out_txt, p_in_num);
+    DBMS_OUTPUT.PUT_LINE('[p_basic] out='||p_out_txt||' / inout='||p_inout_n);
+  END;
+
+  PROCEDURE p_over(p_txt IN VARCHAR2) IS
+  BEGIN
+    log_msg('P_OVER1', p_txt);
+    DBMS_OUTPUT.PUT_LINE('[p_over(txt)] '||NVL(p_txt,'<NULL>'));
+  END;
+
+  PROCEDURE p_over(p_num IN NUMBER, p_txt IN VARCHAR2) IS
+  BEGIN
+    log_msg('P_OVER2', p_txt, p_num);
+    DBMS_OUTPUT.PUT_LINE('[p_over(num,txt)] '||p_num||' / '||NVL(p_txt,'<NULL>'));
+  END;
+
+  PROCEDURE p_refcur(p_tag IN VARCHAR2, p_rc OUT SYS_REFCURSOR) IS
+  BEGIN
+    OPEN p_rc FOR
+      SELECT id, tag, msg, n1, created_at
+      FROM oqt_call_log
+      WHERE tag LIKE p_tag||'%'
+      ORDER BY id DESC;
+  END;
+
+  PROCEDURE p_raise(p_mode IN VARCHAR2) IS
+  BEGIN
+    IF p_mode = 'NO_DATA_FOUND' THEN
+      DECLARE v NUMBER;
+      BEGIN
+        SELECT n1 INTO v FROM oqt_call_log WHERE id = -9999;
+      END;
+    ELSIF p_mode = 'APP' THEN
+      RAISE_APPLICATION_ERROR(-20001, 'oqt_pkg.p_raise app error');
+    ELSE
+      DBMS_OUTPUT.PUT_LINE('[p_raise] ok');
+    END IF;
+  END;
+
+  FUNCTION f_sum(p_a IN NUMBER, p_b IN NUMBER) RETURN NUMBER IS
+  BEGIN
+    RETURN NVL(p_a,0) + NVL(p_b,0);
+  END;
+
+  FUNCTION f_echo(p_txt IN VARCHAR2) RETURN VARCHAR2 IS
+  BEGIN
+    RETURN 'ECHO:'||p_txt;
+  END;
+
+  FUNCTION f_dateadd(p_d IN DATE, p_days IN NUMBER DEFAULT 1) RETURN DATE IS
+  BEGIN
+    RETURN p_d + p_days;
+  END;
+END oqt_pkg;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got {} statements", stmts.len());
+        if stmts.len() > 1 {
+            for (i, s) in stmts.iter().enumerate() {
+                println!("Statement {}: {}", i, &s[..s.len().min(100)]);
+            }
+        }
+        assert!(stmts[0].contains("CREATE OR REPLACE PACKAGE BODY"));
+        assert!(stmts[0].contains("END oqt_pkg"));
+    }
+
+    #[test]
+    fn test_nested_begin_end_in_package() {
+        let sql = r#"CREATE PACKAGE BODY test_pkg AS
+  PROCEDURE proc1 IS
+  BEGIN
+    IF TRUE THEN
+      BEGIN
+        NULL;
+      END;
+    END IF;
+  END;
+END test_pkg;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_package_with_nested_declare() {
+        let sql = r#"CREATE PACKAGE BODY test_pkg AS
+  PROCEDURE proc1 IS
+  BEGIN
+    DECLARE
+      v_temp NUMBER;
+    BEGIN
+      v_temp := 1;
+    END;
+  END;
+END test_pkg;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_package_followed_by_select() {
+        let sql = r#"CREATE PACKAGE test_pkg AS
+  PROCEDURE proc1;
+END test_pkg;
+
+SELECT 1 FROM DUAL;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 2, "Should have 2 statements, got: {:?}", stmts);
+        assert!(stmts[0].contains("CREATE PACKAGE"));
+        assert!(stmts[1].contains("SELECT"));
+    }
+
+    #[test]
+    fn test_multiple_packages() {
+        let sql = r#"CREATE PACKAGE pkg1 AS
+  PROCEDURE proc1;
+END pkg1;
+
+CREATE PACKAGE pkg2 AS
+  PROCEDURE proc2;
+END pkg2;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 2, "Should have 2 statements, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_create_trigger() {
+        let sql = r#"CREATE TRIGGER test_trg
+BEFORE INSERT ON test_table
+FOR EACH ROW
+BEGIN
+  :NEW.created_at := SYSDATE;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_create_type() {
+        let sql = r#"CREATE TYPE test_type AS OBJECT (
+  id NUMBER,
+  name VARCHAR2(100)
+);"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_comments_stripped() {
+        let sql = r#"-- This is a comment
+SELECT 1 FROM DUAL;
+-- Another comment"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+        assert!(!stmts[0].starts_with("--"), "Leading comment should be stripped");
+    }
+
+    #[test]
+    fn test_block_comment_stripped() {
+        let sql = r#"/* Block comment */
+SELECT 1 FROM DUAL;
+/* Trailing comment */"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_procedure_with_loop() {
+        let sql = r#"CREATE PROCEDURE test_proc AS
+BEGIN
+  FOR i IN 1..10 LOOP
+    DBMS_OUTPUT.PUT_LINE(i);
+  END LOOP;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_procedure_with_case() {
+        let sql = r#"CREATE PROCEDURE test_proc(p_val NUMBER) AS
+BEGIN
+  CASE p_val
+    WHEN 1 THEN DBMS_OUTPUT.PUT_LINE('one');
+    WHEN 2 THEN DBMS_OUTPUT.PUT_LINE('two');
+    ELSE DBMS_OUTPUT.PUT_LINE('other');
+  END CASE;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_slash_terminator() {
+        let sql = r#"CREATE PROCEDURE test_proc AS
+BEGIN
+  NULL;
+END;
+/
+SELECT 1 FROM DUAL;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 2, "Should have 2 statements, got: {:?}", stmts);
+    }
+}
