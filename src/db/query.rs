@@ -134,6 +134,7 @@ struct SplitState {
     create_pending: bool,
     create_or_seen: bool,
     after_declare: bool, // Track if we're inside DECLARE block waiting for BEGIN
+    after_as_is: bool,   // Track if we've seen AS/IS in CREATE PL/SQL (for BEGIN handling)
 }
 
 impl SplitState {
@@ -162,13 +163,29 @@ impl SplitState {
             self.pending_end = false;
         }
 
-        if upper == "DECLARE" {
+        // For CREATE PL/SQL (PACKAGE, PROCEDURE, FUNCTION, TYPE, TRIGGER),
+        // AS or IS starts the body/specification block
+        if self.in_create_plsql && self.block_depth == 0 && matches!(upper.as_str(), "AS" | "IS") {
             self.block_depth += 1;
-            self.after_declare = true;
+            self.after_as_is = true;
+        } else if upper == "DECLARE" {
+            if self.in_create_plsql && self.block_depth > 0 {
+                // Inside CREATE PL/SQL, DECLARE doesn't create a new level
+                // (AS/IS already created the block)
+                self.after_declare = true;
+            } else {
+                // Standalone DECLARE block
+                self.block_depth += 1;
+                self.after_declare = true;
+            }
+            self.after_as_is = false;
         } else if upper == "BEGIN" {
             if self.after_declare {
                 // DECLARE ... BEGIN - same block, don't increase depth
                 self.after_declare = false;
+            } else if self.after_as_is {
+                // AS/IS ... BEGIN - same block for CREATE PL/SQL, don't increase depth
+                self.after_as_is = false;
             } else {
                 // Standalone BEGIN block
                 self.block_depth += 1;
@@ -176,6 +193,7 @@ impl SplitState {
         } else if upper == "END" {
             self.pending_end = true;
             self.after_declare = false;
+            self.after_as_is = false;
         }
 
         self.token.clear();
@@ -203,6 +221,7 @@ impl SplitState {
         self.in_create_plsql = false;
         self.create_pending = false;
         self.create_or_seen = false;
+        self.after_as_is = false;
     }
 
     fn track_create_plsql(&mut self, upper: &str) {
