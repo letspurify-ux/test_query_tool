@@ -432,14 +432,20 @@ impl SqlEditorWidget {
         let mut buffer = self.buffer.clone();
         let editor = self.editor.clone();
         buffer.add_modify_callback2(move |buf, pos, ins, del, _restyled, _deleted_text| {
-            if del > 0 {
-                style_buffer.remove(pos, pos + del);
+            let style_len = style_buffer.length();
+            if del > 0 && pos >= 0 && pos < style_len {
+                let del_end = (pos + del).min(style_len);
+                if pos < del_end {
+                    style_buffer.remove(pos, del_end);
+                }
             }
-            if ins > 0 {
+            if ins > 0 && pos >= 0 {
+                let style_len_after = style_buffer.length();
+                let insert_pos = pos.min(style_len_after);
                 let insert_styles = std::iter::repeat(STYLE_DEFAULT)
                     .take(ins as usize)
                     .collect::<String>();
-                style_buffer.insert(pos, &insert_styles);
+                style_buffer.insert(insert_pos, &insert_styles);
             }
             let cursor_pos = editor.insert_position().max(0) as usize;
             highlighter
