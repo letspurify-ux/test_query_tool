@@ -165,7 +165,8 @@ impl SplitState {
 
         // For CREATE PL/SQL (PACKAGE, PROCEDURE, FUNCTION, TYPE, TRIGGER),
         // AS or IS starts the body/specification block
-        if self.in_create_plsql && self.block_depth == 0 && matches!(upper.as_str(), "AS" | "IS") {
+        // For nested procedures/functions inside packages, IS also increments block_depth
+        if self.in_create_plsql && matches!(upper.as_str(), "AS" | "IS") {
             self.block_depth += 1;
             self.after_as_is = true;
         } else if upper == "DECLARE" {
@@ -435,9 +436,7 @@ impl StatementBuilder {
 
             if c == ';' {
                 self.state.resolve_pending_end_on_terminator();
-                if self.state.block_depth == 0 {
-                    // For CREATE PL/SQL, reset the create state when terminating
-                    self.state.reset_create_state();
+                if self.state.block_depth == 0 && !self.state.in_create_plsql {
                     let trimmed = self.current.trim();
                     if !trimmed.is_empty() {
                         self.statements.push(trimmed.to_string());
