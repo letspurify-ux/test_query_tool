@@ -2099,7 +2099,7 @@ impl SqlEditorWidget {
             if idx + 1 < statement_count || trailing_semicolon {
                 formatted.push(';');
                 if idx + 1 < statement_count {
-                    formatted.push('\n');
+                    formatted.push_str("\n\n"); // Add extra newline between execution units
                 }
             }
         }
@@ -2536,7 +2536,11 @@ impl SqlEditorWidget {
                                 out.push(' ');
                             }
                             out.push_str(&sym);
-                            needs_space = true;
+                            // For bind variables (:name) and assignment (:=), don't add space after colon
+                            // Check if this is ":" and next token is a Word (bind variable)
+                            let is_bind_var_colon = sym == ":"
+                                && tokens.get(idx + 1).map_or(false, |t| matches!(t, SqlToken::Word(_)));
+                            needs_space = !is_bind_var_colon;
                         }
                     }
                 }
@@ -3196,6 +3200,23 @@ impl SqlEditorWidget {
                                         "SET ERRORCONTINUE",
                                         format!(
                                             "ERRORCONTINUE {}",
+                                            if enabled { "ON" } else { "OFF" }
+                                        ),
+                                        true,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                }
+                                ToolCommand::SetDefine { enabled } => {
+                                    // SET DEFINE controls & substitution variables (SQL*Plus feature)
+                                    // Currently not implemented - just acknowledge the command
+                                    SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        "SET DEFINE",
+                                        format!(
+                                            "DEFINE {}",
                                             if enabled { "ON" } else { "OFF" }
                                         ),
                                         true,

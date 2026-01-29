@@ -39,6 +39,7 @@ pub enum ToolCommand {
     ShowErrors { object_type: Option<String>, object_name: Option<String> },
     Prompt { text: String },
     SetErrorContinue { enabled: bool },
+    SetDefine { enabled: bool },
     Unsupported { raw: String, message: String, is_error: bool },
 }
 
@@ -776,6 +777,10 @@ impl QueryExecutor {
             return Some(Self::parse_errorcontinue_command(trimmed));
         }
 
+        if upper.starts_with("SET DEFINE") {
+            return Some(Self::parse_define_command(trimmed));
+        }
+
         if upper.starts_with("DEFINE") {
             return Some(ToolCommand::Unsupported {
                 raw: trimmed.to_string(),
@@ -954,6 +959,28 @@ impl QueryExecutor {
             _ => ToolCommand::Unsupported {
                 raw: raw.to_string(),
                 message: "SET ERRORCONTINUE supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_define_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET DEFINE requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetDefine { enabled: true },
+            "OFF" => ToolCommand::SetDefine { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET DEFINE supports only ON or OFF.".to_string(),
                 is_error: true,
             },
         }
