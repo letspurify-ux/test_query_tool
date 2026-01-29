@@ -416,7 +416,9 @@ impl StatementBuilder {
 
             if c == ';' {
                 self.state.resolve_pending_end_on_terminator();
-                if self.state.block_depth == 0 && !self.state.in_create_plsql {
+                if self.state.block_depth == 0 {
+                    // For CREATE PL/SQL, reset the create state when terminating
+                    self.state.reset_create_state();
                     let trimmed = self.current.trim();
                     if !trimmed.is_empty() {
                         self.statements.push(trimmed.to_string());
@@ -490,6 +492,75 @@ impl QueryExecutor {
         }
     }
 
+    fn strip_trailing_comments(sql: &str) -> String {
+        let mut result = sql.to_string();
+
+        loop {
+            let trimmed = result.trim_end();
+            if trimmed.is_empty() {
+                return String::new();
+            }
+
+            // Check for trailing line comment (-- ... at end of line)
+            // Find the last line and check if it's only a comment
+            if let Some(last_newline) = trimmed.rfind('\n') {
+                let last_line = trimmed[last_newline + 1..].trim();
+                if last_line.starts_with("--") {
+                    result = trimmed[..last_newline].to_string();
+                    continue;
+                }
+            } else {
+                // Single line - check if entire thing is a line comment
+                let trimmed_start = trimmed.trim_start();
+                if trimmed_start.starts_with("--") {
+                    return String::new();
+                }
+            }
+
+            // Check for trailing block comment
+            if trimmed.ends_with("*/") {
+                // Find matching /*
+                // Need to scan backwards to find the opening /*
+                let bytes = trimmed.as_bytes();
+                let mut depth = 0;
+                let mut i = bytes.len();
+                let mut found_start = None;
+
+                while i > 0 {
+                    i -= 1;
+                    if i > 0 && bytes[i - 1] == b'/' && bytes[i] == b'*' {
+                        depth -= 1;
+                        if depth < 0 {
+                            found_start = Some(i - 1);
+                            break;
+                        }
+                        i -= 1;
+                    } else if i > 0 && bytes[i - 1] == b'*' && bytes[i] == b'/' {
+                        depth += 1;
+                        i -= 1;
+                    }
+                }
+
+                if let Some(start) = found_start {
+                    // Check if this block comment is at the end (only whitespace before it)
+                    let before = trimmed[..start].trim_end();
+                    if before.is_empty() {
+                        return String::new();
+                    }
+                    result = before.to_string();
+                    continue;
+                }
+            }
+
+            return trimmed.to_string();
+        }
+    }
+
+    fn strip_comments(sql: &str) -> String {
+        let without_leading = Self::strip_leading_comments(sql);
+        Self::strip_trailing_comments(&without_leading)
+    }
+
     fn leading_keyword(sql: &str) -> Option<String> {
         let cleaned = Self::strip_leading_comments(sql);
         cleaned
@@ -505,6 +576,14 @@ impl QueryExecutor {
     pub fn split_script_items(sql: &str) -> Vec<ScriptItem> {
         let mut items: Vec<ScriptItem> = Vec::new();
         let mut builder = StatementBuilder::new();
+
+        // Helper to add statement with comment stripping
+        let add_statement = |stmt: String, items: &mut Vec<ScriptItem>| {
+            let stripped = Self::strip_comments(&stmt);
+            if !stripped.is_empty() {
+                items.push(ScriptItem::Statement(stripped));
+            }
+        };
 
         for line in sql.lines() {
             let trimmed = line.trim();
@@ -532,7 +611,7 @@ impl QueryExecutor {
             {
                 builder.force_terminate();
                 for stmt in builder.take_statements() {
-                    items.push(ScriptItem::Statement(stmt));
+                    add_statement(stmt, &mut items);
                 }
             }
 
@@ -540,7 +619,7 @@ impl QueryExecutor {
                 if !builder.current_is_empty() {
                     builder.force_terminate();
                     for stmt in builder.take_statements() {
-                        items.push(ScriptItem::Statement(stmt));
+                        add_statement(stmt, &mut items);
                     }
                 }
                 continue;
@@ -550,7 +629,7 @@ impl QueryExecutor {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
                     builder.force_terminate();
                     for stmt in builder.take_statements() {
-                        items.push(ScriptItem::Statement(stmt));
+                        add_statement(stmt, &mut items);
                     }
                     items.push(ScriptItem::ToolCommand(command));
                     continue;
@@ -568,13 +647,13 @@ impl QueryExecutor {
             line_with_newline.push('\n');
             builder.process_text(&line_with_newline);
             for stmt in builder.take_statements() {
-                items.push(ScriptItem::Statement(stmt));
+                add_statement(stmt, &mut items);
             }
         }
 
         builder.finalize();
         for stmt in builder.take_statements() {
-            items.push(ScriptItem::Statement(stmt));
+            add_statement(stmt, &mut items);
         }
 
         items
