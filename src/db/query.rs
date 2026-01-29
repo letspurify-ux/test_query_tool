@@ -490,6 +490,115 @@ impl QueryExecutor {
         }
     }
 
+    fn strip_trailing_comments(sql: &str) -> String {
+        let mut result = sql.to_string();
+
+        loop {
+            let trimmed = result.trim_end();
+            if trimmed.is_empty() {
+                return String::new();
+            }
+
+            // Check for trailing line comment (-- ... at end of line)
+            // Find the last line and check if it's only a comment
+            if let Some(last_newline) = trimmed.rfind('\n') {
+                let last_line = trimmed[last_newline + 1..].trim();
+                if last_line.starts_with("--") {
+                    result = trimmed[..last_newline].to_string();
+                    continue;
+                }
+            } else {
+                // Single line - check if entire thing is a line comment
+                let trimmed_start = trimmed.trim_start();
+                if trimmed_start.starts_with("--") {
+                    return String::new();
+                }
+            }
+
+            // Check for trailing block comment
+            if trimmed.ends_with("*/") {
+                // Find matching /*
+                // Need to scan backwards to find the opening /*
+                let bytes = trimmed.as_bytes();
+                let mut depth = 0;
+                let mut i = bytes.len();
+                let mut found_start = None;
+
+                while i > 0 {
+                    i -= 1;
+                    if i > 0 && bytes[i - 1] == b'/' && bytes[i] == b'*' {
+                        depth -= 1;
+                        if depth < 0 {
+                            found_start = Some(i - 1);
+                            break;
+                        }
+                        i -= 1;
+                    } else if i > 0 && bytes[i - 1] == b'*' && bytes[i] == b'/' {
+                        depth += 1;
+                        i -= 1;
+                    }
+                }
+
+                if let Some(start) = found_start {
+                    // Check if this block comment is at the end (only whitespace before it)
+                    let before = trimmed[..start].trim_end();
+                    if before.is_empty() {
+                        return String::new();
+                    }
+                    result = before.to_string();
+                    continue;
+                }
+            }
+
+            return trimmed.to_string();
+        }
+    }
+
+    fn strip_comments(sql: &str) -> String {
+        let without_leading = Self::strip_leading_comments(sql);
+        Self::strip_trailing_comments(&without_leading)
+    }
+
+    /// Strip extra trailing semicolons from a statement.
+    /// "END;;" -> "END;", "SELECT 1;;" -> "SELECT 1"
+    /// Preserves single trailing semicolon for PL/SQL statements.
+    fn strip_extra_trailing_semicolons(sql: &str) -> String {
+        let trimmed = sql.trim_end();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+
+        // Count trailing semicolons
+        let mut semicolon_count = 0;
+        for c in trimmed.chars().rev() {
+            if c == ';' {
+                semicolon_count += 1;
+            } else if c.is_whitespace() {
+                continue;
+            } else {
+                break;
+            }
+        }
+
+        if semicolon_count <= 1 {
+            return trimmed.to_string();
+        }
+
+        // Remove all trailing semicolons and whitespace, then check if we need to add one back
+        let without_semis = trimmed.trim_end_matches(|c: char| c == ';' || c.is_whitespace());
+        if without_semis.is_empty() {
+            return String::new();
+        }
+
+        // Check if this is a PL/SQL statement that needs trailing semicolon
+        let upper = without_semis.to_uppercase();
+        if upper.ends_with("END") || upper.contains("END ") {
+            format!("{};", without_semis)
+        } else {
+            without_semis.to_string()
+        }
+    }
+
     fn leading_keyword(sql: &str) -> Option<String> {
         let cleaned = Self::strip_leading_comments(sql);
         cleaned
@@ -505,6 +614,15 @@ impl QueryExecutor {
     pub fn split_script_items(sql: &str) -> Vec<ScriptItem> {
         let mut items: Vec<ScriptItem> = Vec::new();
         let mut builder = StatementBuilder::new();
+
+        // Helper to add statement with comment stripping and extra semicolon removal
+        let add_statement = |stmt: String, items: &mut Vec<ScriptItem>| {
+            let stripped = Self::strip_comments(&stmt);
+            let cleaned = Self::strip_extra_trailing_semicolons(&stripped);
+            if !cleaned.is_empty() {
+                items.push(ScriptItem::Statement(cleaned));
+            }
+        };
 
         for line in sql.lines() {
             let trimmed = line.trim();
@@ -532,7 +650,7 @@ impl QueryExecutor {
             {
                 builder.force_terminate();
                 for stmt in builder.take_statements() {
-                    items.push(ScriptItem::Statement(stmt));
+                    add_statement(stmt, &mut items);
                 }
             }
 
@@ -540,8 +658,23 @@ impl QueryExecutor {
                 if !builder.current_is_empty() {
                     builder.force_terminate();
                     for stmt in builder.take_statements() {
-                        items.push(ScriptItem::Statement(stmt));
+                        add_statement(stmt, &mut items);
                     }
+                }
+                continue;
+            }
+
+            // Handle lone semicolon line after CREATE PL/SQL statement
+            // This prevents ";;" issue when extra ";" is on its own line
+            if builder.is_idle()
+                && trimmed == ";"
+                && builder.in_create_plsql()
+                && builder.block_depth() == 0
+                && !builder.current_is_empty()
+            {
+                builder.force_terminate();
+                for stmt in builder.take_statements() {
+                    add_statement(stmt, &mut items);
                 }
                 continue;
             }
@@ -550,7 +683,7 @@ impl QueryExecutor {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
                     builder.force_terminate();
                     for stmt in builder.take_statements() {
-                        items.push(ScriptItem::Statement(stmt));
+                        add_statement(stmt, &mut items);
                     }
                     items.push(ScriptItem::ToolCommand(command));
                     continue;
@@ -568,13 +701,13 @@ impl QueryExecutor {
             line_with_newline.push('\n');
             builder.process_text(&line_with_newline);
             for stmt in builder.take_statements() {
-                items.push(ScriptItem::Statement(stmt));
+                add_statement(stmt, &mut items);
             }
         }
 
         builder.finalize();
         for stmt in builder.take_statements() {
-            items.push(ScriptItem::Statement(stmt));
+            add_statement(stmt, &mut items);
         }
 
         items
