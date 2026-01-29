@@ -3207,6 +3207,23 @@ impl SqlEditorWidget {
                                     );
                                     result_index += 1;
                                 }
+                                ToolCommand::SetDefine { enabled } => {
+                                    // SET DEFINE controls & substitution variables (SQL*Plus feature)
+                                    // Currently not implemented - just acknowledge the command
+                                    SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        "SET DEFINE",
+                                        format!(
+                                            "DEFINE {}",
+                                            if enabled { "ON" } else { "OFF" }
+                                        ),
+                                        true,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                }
                                 ToolCommand::Unsupported {
                                     raw,
                                     message,
