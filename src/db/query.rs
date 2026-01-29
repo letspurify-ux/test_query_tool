@@ -416,7 +416,9 @@ impl StatementBuilder {
 
             if c == ';' {
                 self.state.resolve_pending_end_on_terminator();
-                if self.state.block_depth == 0 && !self.state.in_create_plsql {
+                if self.state.block_depth == 0 {
+                    // For CREATE PL/SQL, reset the create state when terminating
+                    self.state.reset_create_state();
                     let trimmed = self.current.trim();
                     if !trimmed.is_empty() {
                         self.statements.push(trimmed.to_string());
