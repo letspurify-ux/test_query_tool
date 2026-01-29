@@ -57,6 +57,7 @@ impl FindReplaceDialog {
             .with_label(title)
             .center_screen();
         dialog.set_color(theme::panel_raised());
+        dialog.make_modal(true);
 
         let mut main_flex = Flex::default()
             .with_pos(10, 10)

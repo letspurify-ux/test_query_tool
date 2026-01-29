@@ -417,6 +417,7 @@ impl IntellisensePopup {
             .with_size(320, 200);
         window.set_border(false);
         window.set_color(theme::panel_raised());
+        window.make_modal(true);
 
         let mut browser = HoldBrowser::default()
             .with_size(320, 200)
