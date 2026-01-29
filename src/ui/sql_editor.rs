@@ -432,15 +432,54 @@ impl SqlEditorWidget {
         let mut buffer = self.buffer.clone();
         let editor = self.editor.clone();
         buffer.add_modify_callback2(move |buf, pos, ins, del, _restyled, _deleted_text| {
-            if del > 0 {
-                style_buffer.remove(pos, pos + del);
+            // Synchronize style_buffer length with text buffer
+            // highlight_buffer_window will reset if lengths differ, but we do incremental
+            // updates here to maintain consistency for small edits
+            let text_len = buf.length();
+            let style_len = style_buffer.length();
+
+            if del > 0 && ins == 0 {
+                // Pure deletion
+                if pos >= 0 && pos < style_len {
+                    let del_end = (pos + del).min(style_len);
+                    if pos < del_end {
+                        style_buffer.remove(pos, del_end);
+                    }
+                }
+            } else if ins > 0 && del == 0 {
+                // Pure insertion
+                if pos >= 0 {
+                    let insert_pos = pos.min(style_buffer.length());
+                    let insert_styles: String = std::iter::repeat(STYLE_DEFAULT)
+                        .take(ins as usize)
+                        .collect();
+                    style_buffer.insert(insert_pos, &insert_styles);
+                }
+            } else if ins > 0 && del > 0 {
+                // Replacement: remove then insert
+                if pos >= 0 && pos < style_len {
+                    let del_end = (pos + del).min(style_len);
+                    if pos < del_end {
+                        style_buffer.remove(pos, del_end);
+                    }
+                }
+                if pos >= 0 {
+                    let insert_pos = pos.min(style_buffer.length());
+                    let insert_styles: String = std::iter::repeat(STYLE_DEFAULT)
+                        .take(ins as usize)
+                        .collect();
+                    style_buffer.insert(insert_pos, &insert_styles);
+                }
             }
-            if ins > 0 {
-                let insert_styles = std::iter::repeat(STYLE_DEFAULT)
-                    .take(ins as usize)
-                    .collect::<String>();
-                style_buffer.insert(pos, &insert_styles);
+
+            // Final length check - if still mismatched, let highlight_buffer_window handle it
+            // This provides a safety net for edge cases
+            let final_style_len = style_buffer.length();
+            if final_style_len != text_len {
+                // Length mismatch detected - highlight_buffer_window will reset
+                // This can happen with complex multi-byte character operations
             }
+
             let cursor_pos = editor.insert_position().max(0) as usize;
             highlighter
                 .borrow()

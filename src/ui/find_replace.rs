@@ -268,8 +268,8 @@ impl FindReplaceDialog {
                             );
                             editor.set_insert_position(match_end as i32);
                             editor.show_insert_position();
-                            *search_pos.borrow_mut() =
-                                (match_start + 1).min(text.len()) as i32;
+                            // Use match_end instead of match_start + 1 to avoid UTF-8 boundary issues
+                            *search_pos.borrow_mut() = match_end.min(text.len()) as i32;
                         } else if start_pos > 0 {
                             *search_pos.borrow_mut() = 0;
                             fltk::dialog::message_default(
