@@ -561,6 +561,46 @@ impl QueryExecutor {
         Self::strip_trailing_comments(&without_leading)
     }
 
+    /// Strip extra trailing semicolons from a statement.
+    /// "END;;" -> "END;", "SELECT 1;;" -> "SELECT 1"
+    /// Preserves single trailing semicolon for PL/SQL statements.
+    fn strip_extra_trailing_semicolons(sql: &str) -> String {
+        let trimmed = sql.trim_end();
+        if trimmed.is_empty() {
+            return String::new();
+        }
+
+        // Count trailing semicolons
+        let mut semicolon_count = 0;
+        for c in trimmed.chars().rev() {
+            if c == ';' {
+                semicolon_count += 1;
+            } else if c.is_whitespace() {
+                continue;
+            } else {
+                break;
+            }
+        }
+
+        if semicolon_count <= 1 {
+            return trimmed.to_string();
+        }
+
+        // Remove all trailing semicolons and whitespace, then check if we need to add one back
+        let without_semis = trimmed.trim_end_matches(|c: char| c == ';' || c.is_whitespace());
+        if without_semis.is_empty() {
+            return String::new();
+        }
+
+        // Check if this is a PL/SQL statement that needs trailing semicolon
+        let upper = without_semis.to_uppercase();
+        if upper.ends_with("END") || upper.contains("END ") {
+            format!("{};", without_semis)
+        } else {
+            without_semis.to_string()
+        }
+    }
+
     fn leading_keyword(sql: &str) -> Option<String> {
         let cleaned = Self::strip_leading_comments(sql);
         cleaned
@@ -577,11 +617,12 @@ impl QueryExecutor {
         let mut items: Vec<ScriptItem> = Vec::new();
         let mut builder = StatementBuilder::new();
 
-        // Helper to add statement with comment stripping
+        // Helper to add statement with comment stripping and extra semicolon removal
         let add_statement = |stmt: String, items: &mut Vec<ScriptItem>| {
             let stripped = Self::strip_comments(&stmt);
-            if !stripped.is_empty() {
-                items.push(ScriptItem::Statement(stripped));
+            let cleaned = Self::strip_extra_trailing_semicolons(&stripped);
+            if !cleaned.is_empty() {
+                items.push(ScriptItem::Statement(cleaned));
             }
         };
 
@@ -621,6 +662,21 @@ impl QueryExecutor {
                     for stmt in builder.take_statements() {
                         add_statement(stmt, &mut items);
                     }
+                }
+                continue;
+            }
+
+            // Handle lone semicolon line after CREATE PL/SQL statement
+            // This prevents ";;" issue when extra ";" is on its own line
+            if builder.is_idle()
+                && trimmed == ";"
+                && builder.in_create_plsql()
+                && builder.block_depth() == 0
+                && !builder.current_is_empty()
+            {
+                builder.force_terminate();
+                for stmt in builder.take_statements() {
+                    add_statement(stmt, &mut items);
                 }
                 continue;
             }
