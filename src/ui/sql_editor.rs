@@ -2154,12 +2154,15 @@ impl SqlEditorWidget {
         let join_modifiers = ["LEFT", "RIGHT", "FULL", "INNER", "CROSS"];
         let join_keyword = "JOIN";
         let outer_keyword = "OUTER";
-        let condition_keywords = ["ON", "AND", "OR", "WHEN"]; // ELSE handled separately for IF blocks
+        // OR is handled specially to avoid breaking CREATE OR REPLACE
+        let condition_keywords = ["ON", "AND", "WHEN"]; // ELSE handled separately for IF blocks
         // BEGIN is handled separately to support DECLARE ... BEGIN ... END blocks
         // CASE is handled separately for SELECT vs PL/SQL context
         // LOOP is handled separately for FOR ... LOOP on same line
         let block_start_keywords = ["DECLARE", "IF"];
         let block_end_qualifiers = ["LOOP", "IF", "CASE"]; // END LOOP, END IF, END CASE
+        // Keywords that start a new member in PACKAGE BODY
+        let plsql_member_keywords = ["PROCEDURE", "FUNCTION"];
 
         let tokens = Self::tokenize_sql(statement);
         let mut out = String::new();
@@ -2173,6 +2176,9 @@ impl SqlEditorWidget {
         let mut join_modifier_active = false;
         let mut after_for_while = false; // Track FOR/WHILE for LOOP on same line
         let mut in_plsql_block = false; // Track if we're in PL/SQL block (for CASE handling)
+        let mut after_create = false; // Track CREATE for OR REPLACE handling
+        let mut after_as_is = false; // Track if we're after AS/IS in PL/SQL declaration
+        let mut in_package_body = false; // Track if we're inside PACKAGE BODY
 
         let newline_with = |out: &mut String,
                             indent_level: usize,
@@ -2273,14 +2279,18 @@ impl SqlEditorWidget {
                         idx += 1;
                         continue;
                     } else if clause_keywords.contains(&upper.as_str()) {
-                        newline_with(
-                            &mut out,
-                            indent_level,
-                            0,
-                            &mut at_line_start,
-                            &mut needs_space,
-                            &mut line_indent,
-                        );
+                        // Don't break line for INTO right after INSERT
+                        let is_insert_into = upper == "INTO" && out.trim_end().to_uppercase().ends_with("INSERT");
+                        if !is_insert_into {
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        }
                     } else if condition_keywords.contains(&upper.as_str()) {
                         newline_with(
                             &mut out,
@@ -2290,6 +2300,63 @@ impl SqlEditorWidget {
                             &mut needs_space,
                             &mut line_indent,
                         );
+                    } else if upper == "OR" {
+                        // OR after CREATE stays on same line (CREATE OR REPLACE)
+                        // Otherwise, treat as condition keyword with newline
+                        if !after_create {
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                1,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        }
+                    } else if plsql_member_keywords.contains(&upper.as_str()) {
+                        // PROCEDURE/FUNCTION inside PACKAGE BODY starts on new line
+                        if in_package_body && !after_create {
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        }
+                    } else if upper == "IS" || upper == "AS" {
+                        // AS/IS in PL/SQL declaration - mark for BEGIN handling
+                        // Check if we're after PROCEDURE/FUNCTION declaration
+                        let is_plsql_decl = block_stack.iter().any(|s| {
+                            s == "PROCEDURE" || s == "FUNCTION" || s == "PACKAGE"
+                        }) || in_package_body;
+                        if is_plsql_decl {
+                            after_as_is = true;
+                            // Check if next word is not BEGIN (i.e., there's a declaration section)
+                            let has_decl_section = !matches!(next_word_upper.as_deref(), Some("BEGIN"));
+                            if has_decl_section && block_stack.last().map_or(false, |s| {
+                                s == "PROCEDURE" || s == "FUNCTION"
+                            }) {
+                                // Output IS/AS and force newline for variable declarations
+                                ensure_indent(&mut out, &mut at_line_start, line_indent);
+                                if needs_space {
+                                    out.push(' ');
+                                }
+                                out.push_str(&upper);
+                                needs_space = true;
+                                newline_with(
+                                    &mut out,
+                                    indent_level,
+                                    0,
+                                    &mut at_line_start,
+                                    &mut needs_space,
+                                    &mut line_indent,
+                                );
+                                idx += 1;
+                                continue;
+                            }
+                        }
                     } else if upper == "ELSE" || upper == "ELSIF" {
                         // ELSE/ELSIF in IF block: same level as IF
                         let in_if_block = block_stack.iter().any(|s| s == "IF");
@@ -2398,14 +2465,27 @@ impl SqlEditorWidget {
                             &mut line_indent,
                         );
                     } else if upper == "BEGIN" {
-                        // BEGIN handling: check if we're inside a DECLARE block
+                        // BEGIN handling: check if we're inside a DECLARE block or after AS/IS
                         let inside_declare = block_stack.last().map_or(false, |s| s == "DECLARE");
-                        if inside_declare {
-                            // DECLARE ... BEGIN - BEGIN is at same level as DECLARE
-                            // Don't increase indent, just newline at current level
+                        let inside_proc_func = block_stack.last().map_or(false, |s| {
+                            s == "PROCEDURE" || s == "FUNCTION"
+                        });
+                        if inside_declare || (after_as_is && inside_proc_func) {
+                            // DECLARE ... BEGIN or PROCEDURE ... IS ... BEGIN
+                            // BEGIN is at same level as the opening keyword
                             newline_with(
                                 &mut out,
                                 indent_level.saturating_sub(1),
+                                0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        } else if after_as_is {
+                            // AS/IS ... BEGIN in package context
+                            newline_with(
+                                &mut out,
+                                indent_level,
                                 0,
                                 &mut at_line_start,
                                 &mut needs_space,
@@ -2422,6 +2502,36 @@ impl SqlEditorWidget {
                                 &mut line_indent,
                             );
                         }
+
+                        // Output BEGIN and force newline after it
+                        ensure_indent(&mut out, &mut at_line_start, line_indent);
+                        out.push_str("BEGIN");
+
+                        // Handle block management
+                        if inside_declare {
+                            block_stack.pop();
+                            block_stack.push("BEGIN".to_string());
+                        } else if after_as_is && inside_proc_func {
+                            block_stack.pop();
+                            block_stack.push("BEGIN".to_string());
+                        } else {
+                            block_stack.push("BEGIN".to_string());
+                            indent_level += 1;
+                        }
+                        in_plsql_block = true;
+                        after_as_is = false;
+
+                        // Force newline after BEGIN so body starts on next line
+                        newline_with(
+                            &mut out,
+                            indent_level,
+                            0,
+                            &mut at_line_start,
+                            &mut needs_space,
+                            &mut line_indent,
+                        );
+                        idx += 1;
+                        continue;
                     }
 
                     ensure_indent(&mut out, &mut at_line_start, line_indent);
@@ -2435,6 +2545,23 @@ impl SqlEditorWidget {
                     }
                     needs_space = true;
 
+                    // Track CREATE keyword for OR REPLACE handling
+                    if upper == "CREATE" {
+                        after_create = true;
+                    } else if upper == "BODY" {
+                        // Check if this is PACKAGE BODY
+                        if block_stack.last().map_or(false, |s| s == "PACKAGE") {
+                            in_package_body = true;
+                        }
+                    } else if upper != "OR" && upper != "REPLACE" && upper != "EDITIONABLE" && upper != "NONEDITIONABLE" {
+                        // Reset after_create when we see a non-CREATE-clause keyword
+                        if after_create && !matches!(upper.as_str(), "PACKAGE" | "PROCEDURE" | "FUNCTION" | "TRIGGER" | "TYPE") {
+                            after_create = false;
+                        } else if matches!(upper.as_str(), "PACKAGE" | "PROCEDURE" | "FUNCTION" | "TRIGGER" | "TYPE") {
+                            after_create = false;
+                        }
+                    }
+
                     // Handle block start - push to stack and increase indent
                     if block_start_keywords.contains(&upper.as_str()) {
                         block_stack.push(upper.clone());
@@ -2442,25 +2569,26 @@ impl SqlEditorWidget {
                         if upper == "DECLARE" || upper == "IF" {
                             in_plsql_block = true;
                         }
-                    } else if upper == "BEGIN" {
-                        let inside_declare = block_stack.last().map_or(false, |s| s == "DECLARE");
-                        if inside_declare {
-                            // Replace DECLARE with BEGIN on the stack (same block continues)
-                            block_stack.pop();
-                            block_stack.push("BEGIN".to_string());
-                            // indent_level stays the same
-                        } else {
-                            // Standalone BEGIN block
-                            block_stack.push("BEGIN".to_string());
-                            indent_level += 1;
-                        }
-                        in_plsql_block = true;
+                    // Note: BEGIN is handled above with continue, so this branch is never reached
                     } else if upper == "LOOP" {
                         block_stack.push("LOOP".to_string());
                         indent_level += 1;
                     } else if upper == "CASE" {
                         block_stack.push("CASE".to_string());
                         indent_level += 1;
+                    } else if upper == "PACKAGE" {
+                        block_stack.push("PACKAGE".to_string());
+                        // Don't increase indent yet - wait for AS
+                    } else if plsql_member_keywords.contains(&upper.as_str()) {
+                        // PROCEDURE/FUNCTION - track for AS/IS handling
+                        block_stack.push(upper.clone());
+                        indent_level += 1;
+                        in_plsql_block = true;
+                    } else if (upper == "AS" || upper == "IS") && after_as_is {
+                        // AS/IS after PACKAGE - increase indent for body
+                        if block_stack.last().map_or(false, |s| s == "PACKAGE") {
+                            indent_level += 1;
+                        }
                     }
                 }
                 SqlToken::String(literal) => {
@@ -4406,5 +4534,71 @@ impl SqlEditorWidget {
         F: FnMut(QueryProgress) + 'static,
     {
         *self.progress_callback.borrow_mut() = Some(Box::new(callback));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_create_or_replace() {
+        let sql = "CREATE OR REPLACE PROCEDURE test_proc IS BEGIN NULL; END;";
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+        // CREATE OR REPLACE should stay on the same line
+        assert!(
+            formatted.starts_with("CREATE OR REPLACE"),
+            "CREATE OR REPLACE should not be split"
+        );
+    }
+
+    #[test]
+    fn test_format_insert_into() {
+        let sql = "INSERT INTO test_table (col1, col2) VALUES (1, 2);";
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+        // INSERT INTO should stay on the same line
+        assert!(
+            formatted.contains("INSERT INTO"),
+            "INSERT INTO should not be split"
+        );
+    }
+
+    #[test]
+    fn test_format_procedure_with_variables() {
+        let sql = "CREATE OR REPLACE PROCEDURE test_proc IS v_test NUMBER; BEGIN NULL; END;";
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+        // IS should be followed by a newline when there are variable declarations
+        let lines: Vec<&str> = formatted.lines().collect();
+        let is_line = lines.iter().find(|l| l.contains(" IS"));
+        assert!(is_line.is_some(), "Should have IS line");
+        // Variable declaration should be on its own line
+        let var_line = lines.iter().find(|l| l.trim().starts_with("v_test"));
+        assert!(var_line.is_some(), "Variable should be on its own line");
+    }
+
+    #[test]
+    fn test_format_begin_newline() {
+        let sql = "BEGIN DBMS_OUTPUT.PUT_LINE('test'); END;";
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+        // BEGIN should be followed by a newline
+        let lines: Vec<&str> = formatted.lines().collect();
+        assert!(lines.len() >= 2, "BEGIN should cause a newline");
+        assert!(lines[0].trim() == "BEGIN", "First line should be BEGIN only");
+    }
+
+    #[test]
+    fn test_format_package_body_procedures() {
+        let sql = r#"CREATE OR REPLACE PACKAGE BODY pkg AS
+PROCEDURE p1 IS BEGIN NULL; END;
+PROCEDURE p2 IS BEGIN NULL; END;
+END pkg;"#;
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+        // Each procedure should be on its own line
+        let lines: Vec<&str> = formatted.lines().collect();
+        let proc_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| l.trim().starts_with("PROCEDURE"))
+            .collect();
+        assert!(proc_lines.len() >= 2, "Should have multiple PROCEDURE lines");
     }
 }
