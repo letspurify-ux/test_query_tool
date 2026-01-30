@@ -4259,7 +4259,11 @@ impl SqlEditorWidget {
             return Ok(());
         }
 
-        let max_lines = (size / 80).max(1).min(10_000);
+        let max_lines = if size == 0 {
+            10_000
+        } else {
+            (size / 80).max(1).min(10_000)
+        };
         let lines = QueryExecutor::get_dbms_output(conn, max_lines)?;
         if lines.is_empty() {
             return Ok(());
