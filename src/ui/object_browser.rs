@@ -335,6 +335,10 @@ impl ObjectBrowserWidget {
         }
     }
 
+    fn build_procedure_script(procedure_name: &str) -> String {
+        format!("BEGIN\n  {};\nEND;\n/\n", procedure_name)
+    }
+
     fn show_context_menu(
         connection: &SharedConnection,
         item: &TreeItem,
@@ -353,7 +357,14 @@ impl ObjectBrowserWidget {
                         || object_type == "Functions"
                         || object_type == "Sequences" =>
                 {
-                    "Generate DDL"
+                    if object_type == "Procedures" {
+                        "Execute Procedure|Generate DDL"
+                    } else {
+                        "Generate DDL"
+                    }
+                }
+                ObjectItem::PackageProcedure { .. } => {
+                    "Execute Procedure"
                 }
                 _ => return,
             };
@@ -382,6 +393,34 @@ impl ObjectBrowserWidget {
                             let cb_opt = sql_callback.borrow_mut().take();
                             if let Some(mut cb) = cb_opt {
                                 cb(SqlAction::Execute(sql));
+                                *sql_callback.borrow_mut() = Some(cb);
+                            }
+                        }
+                        (
+                            "Execute Procedure",
+                            ObjectItem::Simple { object_name, .. },
+                        ) => {
+                            let sql = Self::build_procedure_script(object_name);
+                            drop(conn_guard);
+                            let cb_opt = sql_callback.borrow_mut().take();
+                            if let Some(mut cb) = cb_opt {
+                                cb(SqlAction::Insert(sql));
+                                *sql_callback.borrow_mut() = Some(cb);
+                            }
+                        }
+                        (
+                            "Execute Procedure",
+                            ObjectItem::PackageProcedure {
+                                package_name,
+                                procedure_name,
+                            },
+                        ) => {
+                            let qualified_name = format!("{}.{}", package_name, procedure_name);
+                            let sql = Self::build_procedure_script(&qualified_name);
+                            drop(conn_guard);
+                            let cb_opt = sql_callback.borrow_mut().take();
+                            if let Some(mut cb) = cb_opt {
+                                cb(SqlAction::Insert(sql));
                                 *sql_callback.borrow_mut() = Some(cb);
                             }
                         }
