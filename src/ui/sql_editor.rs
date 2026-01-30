@@ -18,7 +18,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::db::{
-    lock_connection, BindValue, BindVar, ColumnInfo, CursorResult, QueryExecutor,
+    lock_connection, BindValue, BindVar, ColumnInfo, CursorResult, FormatItem, QueryExecutor,
     QueryResult, ScriptItem, SessionState, SharedConnection, ToolCommand,
 };
 use crate::ui::intellisense::{
@@ -2125,25 +2125,105 @@ impl SqlEditorWidget {
 
     fn format_sql_basic(sql: &str) -> String {
         let mut formatted = String::new();
-        let statements = QueryExecutor::split_statements_with_blocks(sql);
-        if statements.is_empty() {
+        let items = QueryExecutor::split_format_items(sql);
+        if items.is_empty() {
             return String::new();
         }
 
-        let trailing_semicolon = sql.trim_end().ends_with(';');
-        let statement_count = statements.len();
-        for (idx, statement) in statements.iter().enumerate() {
-            let formatted_statement = Self::format_statement(statement);
-            formatted.push_str(&formatted_statement);
-            if idx + 1 < statement_count || trailing_semicolon {
-                formatted.push(';');
-                if idx + 1 < statement_count {
-                    formatted.push_str("\n\n"); // Add extra newline between execution units
+        for (idx, item) in items.iter().enumerate() {
+            match item {
+                FormatItem::Statement(statement) => {
+                    let formatted_statement = Self::format_statement(statement);
+                    let has_code = Self::statement_has_code(statement);
+                    formatted.push_str(&formatted_statement);
+                    if has_code {
+                        formatted.push(';');
+                    }
+                }
+                FormatItem::ToolCommand(command) => {
+                    formatted.push_str(&Self::format_tool_command(command));
+                }
+                FormatItem::Slash => {
+                    formatted.push('/');
+                }
+            }
+
+            if idx + 1 < items.len() {
+                if matches!(items[idx + 1], FormatItem::Slash) {
+                    formatted.push('\n');
+                } else if matches!(item, FormatItem::Slash) {
+                    formatted.push_str("\n\n");
+                } else {
+                    formatted.push_str("\n\n");
                 }
             }
         }
 
         formatted
+    }
+
+    fn statement_has_code(statement: &str) -> bool {
+        let tokens = Self::tokenize_sql(statement);
+        tokens.iter().any(|token| !matches!(token, SqlToken::Comment(_)))
+    }
+
+    fn format_tool_command(command: &ToolCommand) -> String {
+        match command {
+            ToolCommand::Var { name, data_type } => {
+                format!("VAR {} {}", name, data_type.display())
+            }
+            ToolCommand::Print { name } => match name {
+                Some(name) => format!("PRINT {}", name),
+                None => "PRINT".to_string(),
+            },
+            ToolCommand::SetServerOutput {
+                enabled,
+                size,
+                unlimited,
+            } => {
+                if !*enabled {
+                    "SET SERVEROUTPUT OFF".to_string()
+                } else if *unlimited {
+                    "SET SERVEROUTPUT ON SIZE UNLIMITED".to_string()
+                } else if let Some(size) = size {
+                    format!("SET SERVEROUTPUT ON SIZE {}", size)
+                } else {
+                    "SET SERVEROUTPUT ON".to_string()
+                }
+            }
+            ToolCommand::ShowErrors {
+                object_type,
+                object_name,
+            } => {
+                if let (Some(obj_type), Some(obj_name)) = (object_type, object_name) {
+                    format!("SHOW ERRORS {} {}", obj_type, obj_name)
+                } else {
+                    "SHOW ERRORS".to_string()
+                }
+            }
+            ToolCommand::Prompt { text } => {
+                if text.trim().is_empty() {
+                    "PROMPT".to_string()
+                } else {
+                    format!("PROMPT {}", text)
+                }
+            }
+            ToolCommand::SetErrorContinue { enabled } => {
+                if *enabled {
+                    "SET ERRORCONTINUE ON".to_string()
+                } else {
+                    "SET ERRORCONTINUE OFF".to_string()
+                }
+            }
+            ToolCommand::SetDefine { enabled } => {
+                if *enabled {
+                    "SET DEFINE ON".to_string()
+                } else {
+                    "SET DEFINE OFF".to_string()
+                }
+            }
+            ToolCommand::Unsupported { raw, .. } => raw.clone(),
+        }
     }
 
     fn format_statement(statement: &str) -> String {
@@ -2173,6 +2253,10 @@ impl SqlEditorWidget {
         let mut join_modifier_active = false;
         let mut after_for_while = false; // Track FOR/WHILE for LOOP on same line
         let mut in_plsql_block = false; // Track if we're in PL/SQL block (for CASE handling)
+        let mut prev_word_upper: Option<String> = None;
+        let mut create_pending = false;
+        let mut create_object: Option<String> = None;
+        let mut routine_decl_pending = false;
 
         let newline_with = |out: &mut String,
                             indent_level: usize,
@@ -2216,6 +2300,10 @@ impl SqlEditorWidget {
                 SqlToken::Word(word) => {
                     let upper = word.to_uppercase();
                     let is_keyword = SQL_KEYWORDS.iter().any(|&kw| kw == upper);
+                    let is_or_in_create =
+                        upper == "OR"
+                            && matches!(prev_word_upper.as_deref(), Some("CREATE"))
+                            && matches!(next_word_upper.as_deref(), Some("REPLACE"));
                     if upper == "END" {
                         // Check if this is END LOOP, END IF, END CASE, etc.
                         let qualifier = next_word_upper.as_deref();
@@ -2229,10 +2317,10 @@ impl SqlEditorWidget {
                                 }
                             }
                         } else {
-                            // Plain END - closes BEGIN or DECLARE block
-                            // Pop until we find BEGIN or DECLARE
+                            // Plain END - closes BEGIN or DECLARE/PACKAGE_BODY block
+                            // Pop until we find BEGIN or DECLARE/PACKAGE_BODY
                             while let Some(top) = block_stack.pop() {
-                                if top == "BEGIN" || top == "DECLARE" {
+                                if top == "BEGIN" || top == "DECLARE" || top == "PACKAGE_BODY" {
                                     break;
                                 }
                             }
@@ -2281,7 +2369,7 @@ impl SqlEditorWidget {
                             &mut needs_space,
                             &mut line_indent,
                         );
-                    } else if condition_keywords.contains(&upper.as_str()) {
+                    } else if condition_keywords.contains(&upper.as_str()) && !is_or_in_create {
                         newline_with(
                             &mut out,
                             indent_level,
@@ -2290,6 +2378,27 @@ impl SqlEditorWidget {
                             &mut needs_space,
                             &mut line_indent,
                         );
+                    } else if upper == "CREATE" {
+                        create_pending = true;
+                        create_object = None;
+                    } else if create_pending && (upper == "OR" || upper == "REPLACE") {
+                        // part of CREATE OR REPLACE
+                    } else if create_pending && upper == "PACKAGE" {
+                        if matches!(next_word_upper.as_deref(), Some("BODY")) {
+                            create_object = Some("PACKAGE_BODY".to_string());
+                        } else {
+                            create_object = Some("PACKAGE".to_string());
+                        }
+                        create_pending = false;
+                    } else if create_pending
+                        && matches!(upper.as_str(), "PROCEDURE" | "FUNCTION" | "TYPE" | "TRIGGER")
+                    {
+                        create_object = Some(upper.clone());
+                        create_pending = false;
+                    } else if matches!(upper.as_str(), "PROCEDURE" | "FUNCTION")
+                        && block_stack.iter().any(|s| s == "PACKAGE_BODY")
+                    {
+                        routine_decl_pending = true;
                     } else if upper == "ELSE" || upper == "ELSIF" {
                         // ELSE/ELSIF in IF block: same level as IF
                         let in_if_block = block_stack.iter().any(|s| s == "IF");
@@ -2399,7 +2508,9 @@ impl SqlEditorWidget {
                         );
                     } else if upper == "BEGIN" {
                         // BEGIN handling: check if we're inside a DECLARE block
-                        let inside_declare = block_stack.last().map_or(false, |s| s == "DECLARE");
+                        let inside_declare = block_stack
+                            .last()
+                            .map_or(false, |s| s == "DECLARE" || s == "PACKAGE_BODY");
                         if inside_declare {
                             // DECLARE ... BEGIN - BEGIN is at same level as DECLARE
                             // Don't increase indent, just newline at current level
@@ -2435,6 +2546,9 @@ impl SqlEditorWidget {
                     }
                     needs_space = true;
 
+                    let starts_create_block = matches!(upper.as_str(), "AS" | "IS")
+                        && (create_object.is_some() || routine_decl_pending);
+
                     // Handle block start - push to stack and increase indent
                     if block_start_keywords.contains(&upper.as_str()) {
                         block_stack.push(upper.clone());
@@ -2461,7 +2575,40 @@ impl SqlEditorWidget {
                     } else if upper == "CASE" {
                         block_stack.push("CASE".to_string());
                         indent_level += 1;
+                    } else if starts_create_block {
+                        // Treat AS/IS in CREATE PACKAGE/PROC/FUNC/TYPE/TRIGGER and package-body routines as declaration section start
+                        let is_package_body = matches!(create_object.as_deref(), Some("PACKAGE_BODY"));
+                        if is_package_body {
+                            block_stack.push("PACKAGE_BODY".to_string());
+                        } else {
+                            block_stack.push("DECLARE".to_string());
+                        }
+                        indent_level += 1;
+                        in_plsql_block = true;
+                        create_object = None;
+                        routine_decl_pending = false;
+                        newline_with(
+                            &mut out,
+                            indent_level,
+                            0,
+                            &mut at_line_start,
+                            &mut needs_space,
+                            &mut line_indent,
+                        );
                     }
+
+                    if upper == "DECLARE" || upper == "BEGIN" {
+                        newline_with(
+                            &mut out,
+                            indent_level,
+                            0,
+                            &mut at_line_start,
+                            &mut needs_space,
+                            &mut line_indent,
+                        );
+                    }
+
+                    prev_word_upper = Some(upper);
                 }
                 SqlToken::String(literal) => {
                     ensure_indent(&mut out, &mut at_line_start, line_indent);
@@ -2508,6 +2655,7 @@ impl SqlEditorWidget {
                         ";" => {
                             trim_trailing_space(&mut out);
                             out.push(';');
+                            routine_decl_pending = false;
                             newline_with(
                                 &mut out,
                                 indent_level,
@@ -2742,7 +2890,17 @@ impl SqlEditorWidget {
             i += 1;
         }
 
-        flush_word(&mut current, &mut tokens);
+        if in_line_comment || in_block_comment {
+            if !current.is_empty() {
+                tokens.push(SqlToken::Comment(std::mem::take(&mut current)));
+            }
+        } else if in_single_quote || in_double_quote {
+            if !current.is_empty() {
+                tokens.push(SqlToken::String(std::mem::take(&mut current)));
+            }
+        } else {
+            flush_word(&mut current, &mut tokens);
+        }
         tokens
     }
 
@@ -4443,5 +4601,98 @@ impl SqlEditorWidget {
         F: FnMut(QueryProgress) + 'static,
     {
         *self.progress_callback.borrow_mut() = Some(Box::new(callback));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+
+    fn load_test_file(name: &str) -> String {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("test");
+        path.push(name);
+        fs::read_to_string(path).unwrap_or_default()
+    }
+
+    fn count_slash_lines(text: &str) -> usize {
+        text.lines().filter(|line| line.trim() == "/").count()
+    }
+
+    fn assert_contains_all(haystack: &str, needles: &[&str]) {
+        for needle in needles {
+            assert!(
+                haystack.contains(needle),
+                "Expected output to contain: {}",
+                needle
+            );
+        }
+    }
+
+    #[test]
+    fn format_sql_preserves_script_commands_and_slashes() {
+        let cases = [
+            (
+                "test1.txt",
+                vec![
+                    "PROMPT 프로시저 테스트1",
+                    "SET SERVEROUTPUT ON",
+                    "SHOW ERRORS",
+                ],
+                vec![
+                    "OQT(Oracle Query Tool) - Procedure/Function Test Script",
+                    "-- 1) TEST DATA / TABLES",
+                ],
+            ),
+            (
+                "test2.txt",
+                vec![
+                    "PROMPT 프로시저 테스트 2",
+                    "SET SERVEROUTPUT ON SIZE UNLIMITED",
+                    "SHOW ERRORS PACKAGE oqt_pkg",
+                    "SHOW ERRORS PACKAGE BODY oqt_pkg",
+                ],
+                vec![
+                    "PROMPT === [5] CALL VARIANTS: EXEC/BEGIN/DEFAULT/NAMED/POSITIONAL/NULL/UNICODE ===",
+                ],
+            ),
+            (
+                "test3.txt",
+                vec![
+                    "PROMPT 프로시저 테스트3",
+                    "SET DEFINE OFF",
+                    "PROMPT === [B] Cleanup ===",
+                    "SHOW ERRORS",
+                ],
+                vec![
+                    "OQT (Oracle Query Tool) Compatibility Test Script (TOAD-like)",
+                ],
+            ),
+        ];
+
+        for (file, expected_lines, comment_snippets) in cases {
+            let input = load_test_file(file);
+            let formatted = SqlEditorWidget::format_sql_basic(&input);
+
+            assert_contains_all(&formatted, &expected_lines);
+            assert_contains_all(&formatted, &comment_snippets);
+
+            let input_slashes = count_slash_lines(&input);
+            let output_slashes = count_slash_lines(&formatted);
+            assert_eq!(
+                input_slashes, output_slashes,
+                "Slash terminator count differs for {}",
+                file
+            );
+
+            let formatted_again = SqlEditorWidget::format_sql_basic(&formatted);
+            assert_eq!(
+                formatted, formatted_again,
+                "Formatting should be idempotent for {}",
+                file
+            );
+        }
     }
 }

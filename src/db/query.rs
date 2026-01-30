@@ -50,6 +50,13 @@ pub enum ScriptItem {
 }
 
 #[derive(Debug, Clone)]
+pub enum FormatItem {
+    Statement(String),
+    ToolCommand(ToolCommand),
+    Slash,
+}
+
+#[derive(Debug, Clone)]
 pub enum ToolCommand {
     Var { name: String, data_type: BindDataType },
     Print { name: Option<String> },
@@ -729,6 +736,128 @@ impl QueryExecutor {
             if builder.is_idle() && builder.current_is_empty() {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
                     items.push(ScriptItem::ToolCommand(command));
+                    continue;
+                }
+            }
+
+            let mut line_with_newline = String::from(line);
+            line_with_newline.push('\n');
+            builder.process_text(&line_with_newline);
+            for stmt in builder.take_statements() {
+                add_statement(stmt, &mut items);
+            }
+        }
+
+        builder.finalize();
+        for stmt in builder.take_statements() {
+            add_statement(stmt, &mut items);
+        }
+
+        items
+    }
+
+    pub fn split_format_items(sql: &str) -> Vec<FormatItem> {
+        let mut items: Vec<FormatItem> = Vec::new();
+        let mut builder = StatementBuilder::new();
+
+        let add_statement = |stmt: String, items: &mut Vec<FormatItem>| {
+            let cleaned = stmt.trim();
+            if !cleaned.is_empty() {
+                items.push(FormatItem::Statement(cleaned.to_string()));
+            }
+        };
+
+        let mut lines = sql.lines().peekable();
+        while let Some(line) = lines.next() {
+            let trimmed = line.trim();
+            let trimmed_upper = trimmed.to_uppercase();
+
+            if builder.is_idle() && builder.current_is_empty() {
+                if trimmed.starts_with("--") {
+                    items.push(FormatItem::Statement(line.to_string()));
+                    continue;
+                }
+                if trimmed.starts_with("/*") {
+                    let mut comment = String::new();
+                    comment.push_str(line);
+                    if !trimmed.contains("*/") {
+                        while let Some(next_line) = lines.next() {
+                            comment.push('\n');
+                            comment.push_str(next_line);
+                            if next_line.contains("*/") {
+                                break;
+                            }
+                        }
+                    }
+                    items.push(FormatItem::Statement(comment));
+                    continue;
+                }
+            }
+
+            if builder.is_idle()
+                && builder.in_create_plsql()
+                && builder.block_depth() == 0
+                && !builder.current_is_empty()
+                && (trimmed_upper.starts_with("CREATE")
+                    || trimmed_upper.starts_with("ALTER")
+                    || trimmed_upper.starts_with("DROP")
+                    || trimmed_upper.starts_with("TRUNCATE")
+                    || trimmed_upper.starts_with("GRANT")
+                    || trimmed_upper.starts_with("REVOKE")
+                    || trimmed_upper.starts_with("COMMIT")
+                    || trimmed_upper.starts_with("ROLLBACK")
+                    || trimmed_upper.starts_with("SAVEPOINT")
+                    || trimmed_upper.starts_with("SELECT")
+                    || trimmed_upper.starts_with("INSERT")
+                    || trimmed_upper.starts_with("UPDATE")
+                    || trimmed_upper.starts_with("DELETE")
+                    || trimmed_upper.starts_with("MERGE")
+                    || trimmed_upper.starts_with("WITH"))
+            {
+                builder.force_terminate();
+                for stmt in builder.take_statements() {
+                    add_statement(stmt, &mut items);
+                }
+            }
+
+            if builder.is_idle() && trimmed == "/" {
+                if !builder.current_is_empty() {
+                    builder.force_terminate();
+                    for stmt in builder.take_statements() {
+                        add_statement(stmt, &mut items);
+                    }
+                }
+                items.push(FormatItem::Slash);
+                continue;
+            }
+
+            if builder.is_idle()
+                && trimmed == ";"
+                && builder.in_create_plsql()
+                && builder.block_depth() == 0
+                && !builder.current_is_empty()
+            {
+                builder.force_terminate();
+                for stmt in builder.take_statements() {
+                    add_statement(stmt, &mut items);
+                }
+                continue;
+            }
+
+            if builder.is_idle() && !builder.current_is_empty() {
+                if let Some(command) = Self::parse_tool_command(trimmed) {
+                    builder.force_terminate();
+                    for stmt in builder.take_statements() {
+                        add_statement(stmt, &mut items);
+                    }
+                    items.push(FormatItem::ToolCommand(command));
+                    continue;
+                }
+            }
+
+            if builder.is_idle() && builder.current_is_empty() {
+                if let Some(command) = Self::parse_tool_command(trimmed) {
+                    items.push(FormatItem::ToolCommand(command));
                     continue;
                 }
             }
