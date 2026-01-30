@@ -3464,8 +3464,11 @@ impl SqlEditorWidget {
                                 ) {
                                     Ok(stmt) => stmt,
                                     Err(err) => {
+                                        let cancelled = SqlEditorWidget::is_cancel_error(&err);
                                         timed_out = SqlEditorWidget::is_timeout_error(&err);
-                                        let message = if timed_out {
+                                        let message = if cancelled {
+                                            SqlEditorWidget::cancel_message()
+                                        } else if timed_out {
                                             SqlEditorWidget::timeout_message(query_timeout)
                                         } else {
                                             err.to_string()
@@ -3482,7 +3485,7 @@ impl SqlEditorWidget {
                                         });
                                         app::awake();
                                         result_index += 1;
-                                        if timed_out || !continue_on_error {
+                                        if timed_out || cancelled || !continue_on_error {
                                             stop_execution = true;
                                         }
                                         continue;
@@ -3619,11 +3622,14 @@ impl SqlEditorWidget {
                                                 app::awake();
                                             }
 
-                                            if was_cancelled || cursor_timed_out {
+                                            if cursor_timed_out {
                                                 query_result.message =
                                                     SqlEditorWidget::timeout_message(query_timeout);
                                                 query_result.success = false;
                                                 cursor_timed_out = true;
+                                            } else if was_cancelled {
+                                                query_result.message = SqlEditorWidget::cancel_message();
+                                                query_result.success = false;
                                             }
 
                                             let column_names: Vec<String> = query_result
@@ -3665,8 +3671,11 @@ impl SqlEditorWidget {
                                             }
                                         }
                                         Err(err) => {
+                                            let cancelled = SqlEditorWidget::is_cancel_error(&err);
                                             cursor_timed_out = SqlEditorWidget::is_timeout_error(&err);
-                                            let message = if cursor_timed_out {
+                                            let message = if cancelled {
+                                                SqlEditorWidget::cancel_message()
+                                            } else if cursor_timed_out {
                                                 SqlEditorWidget::timeout_message(query_timeout)
                                             } else {
                                                 err.to_string()
@@ -3680,7 +3689,7 @@ impl SqlEditorWidget {
                                             app::awake();
                                             result_index += 1;
 
-                                            if cursor_timed_out || !continue_on_error {
+                                            if cursor_timed_out || cancelled || !continue_on_error {
                                                 stop_execution = true;
                                                 break;
                                             }
@@ -3744,11 +3753,14 @@ impl SqlEditorWidget {
                                                 app::awake();
                                             }
 
-                                            if was_cancelled || cursor_timed_out {
+                                            if cursor_timed_out {
                                                 query_result.message =
                                                     SqlEditorWidget::timeout_message(query_timeout);
                                                 query_result.success = false;
                                                 cursor_timed_out = true;
+                                            } else if was_cancelled {
+                                                query_result.message = SqlEditorWidget::cancel_message();
+                                                query_result.success = false;
                                             }
 
                                             let _ = sender.send(QueryProgress::StatementFinished {
@@ -3770,8 +3782,11 @@ impl SqlEditorWidget {
                                             }
                                         }
                                         Err(err) => {
+                                            let cancelled = SqlEditorWidget::is_cancel_error(&err);
                                             cursor_timed_out = SqlEditorWidget::is_timeout_error(&err);
-                                            let message = if cursor_timed_out {
+                                            let message = if cancelled {
+                                                SqlEditorWidget::cancel_message()
+                                            } else if cursor_timed_out {
                                                 SqlEditorWidget::timeout_message(query_timeout)
                                             } else {
                                                 err.to_string()
@@ -3785,7 +3800,7 @@ impl SqlEditorWidget {
                                             app::awake();
                                             result_index += 1;
 
-                                            if cursor_timed_out || !continue_on_error {
+                                            if cursor_timed_out || cancelled || !continue_on_error {
                                                 stop_execution = true;
                                                 break;
                                             }
@@ -3880,17 +3895,23 @@ impl SqlEditorWidget {
                                     },
                                 ) {
                                     Ok((mut query_result, was_cancelled)) => {
-                                        if was_cancelled || timed_out {
+                                        if timed_out {
                                             query_result.message =
                                                 SqlEditorWidget::timeout_message(query_timeout);
                                             query_result.success = false;
                                             timed_out = true;
+                                        } else if was_cancelled {
+                                            query_result.message = SqlEditorWidget::cancel_message();
+                                            query_result.success = false;
                                         }
                                         query_result
                                     }
                                     Err(err) => {
+                                        let cancelled = SqlEditorWidget::is_cancel_error(&err);
                                         timed_out = SqlEditorWidget::is_timeout_error(&err);
-                                        let message = if timed_out {
+                                        let message = if cancelled {
+                                            SqlEditorWidget::cancel_message()
+                                        } else if timed_out {
                                             SqlEditorWidget::timeout_message(query_timeout)
                                         } else {
                                             err.to_string()
@@ -3970,8 +3991,11 @@ impl SqlEditorWidget {
                                 ) {
                                     Ok(stmt) => stmt,
                                     Err(err) => {
+                                        let cancelled = SqlEditorWidget::is_cancel_error(&err);
                                         timed_out = SqlEditorWidget::is_timeout_error(&err);
-                                        let message = if timed_out {
+                                        let message = if cancelled {
+                                            SqlEditorWidget::cancel_message()
+                                        } else if timed_out {
                                             SqlEditorWidget::timeout_message(query_timeout)
                                         } else {
                                             err.to_string()
@@ -3988,7 +4012,7 @@ impl SqlEditorWidget {
                                         });
                                         app::awake();
                                         result_index += 1;
-                                        if timed_out || !continue_on_error {
+                                        if timed_out || cancelled || !continue_on_error {
                                             stop_execution = true;
                                         }
                                         continue;
@@ -4375,7 +4399,12 @@ impl SqlEditorWidget {
 
     fn is_timeout_error(err: &OracleError) -> bool {
         let message = err.to_string();
-        message.contains("DPI-1067") || message.contains("ORA-01013")
+        message.contains("DPI-1067")
+    }
+
+    fn is_cancel_error(err: &OracleError) -> bool {
+        let message = err.to_string();
+        message.contains("ORA-01013")
     }
 
     fn timeout_message(timeout: Option<Duration>) -> String {
@@ -4383,6 +4412,10 @@ impl SqlEditorWidget {
             Some(duration) => format!("Query timed out after {} seconds", duration.as_secs()),
             None => "Query timed out".to_string(),
         }
+    }
+
+    fn cancel_message() -> String {
+        "Query cancelled".to_string()
     }
 
     fn parse_timeout(value: &str) -> Option<Duration> {
