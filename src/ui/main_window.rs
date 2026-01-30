@@ -681,6 +681,8 @@ impl MainWindow {
             app::quit();
         });
         s.window.show();
+        MainWindow::adjust_query_layout(&mut s);
+        s.window.redraw();
         s.sql_editor.focus();
     }
 
