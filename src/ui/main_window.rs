@@ -11,6 +11,7 @@ use fltk::{
     window::Window,
 };
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -41,6 +42,7 @@ pub struct AppState {
     pub result_tab_offset: usize,
     pub object_browser: ObjectBrowserWidget,
     pub status_bar: Frame,
+    pub fetch_row_counts: HashMap<usize, usize>,
     pub current_file: Rc<RefCell<Option<PathBuf>>>,
     pub last_result: Rc<RefCell<Option<QueryResult>>>,
     pub popups: Rc<RefCell<Vec<Window>>>,
@@ -147,6 +149,7 @@ impl MainWindow {
             result_tab_offset: 0,
             object_browser,
             status_bar,
+            fetch_row_counts: HashMap::new(),
             current_file: Rc::new(RefCell::new(None)),
             last_result: Rc::new(RefCell::new(None)),
             popups: Rc::new(RefCell::new(Vec::new())),
@@ -273,19 +276,27 @@ impl MainWindow {
             match progress {
                 QueryProgress::BatchStart => {
                     s.result_tab_offset = s.result_tabs.tab_count();
+                    s.fetch_row_counts.clear();
                 }
                 QueryProgress::StatementStart { index } => {
                     let tab_index = s.result_tab_offset + index;
                     s.result_tabs
                         .start_statement(tab_index, &format!("Result {}", tab_index + 1));
+                    s.fetch_row_counts.remove(&index);
                 }
                 QueryProgress::SelectStart { index, columns } => {
                     let tab_index = s.result_tab_offset + index;
                     s.result_tabs.start_streaming(tab_index, &columns);
+                    s.fetch_row_counts.insert(index, 0);
+                    s.status_bar.set_label("Fetching rows: 0");
                 }
                 QueryProgress::Rows { index, rows } => {
                     let tab_index = s.result_tab_offset + index;
                     s.result_tabs.append_rows(tab_index, rows);
+                    let count = s.fetch_row_counts.entry(index).or_insert(0);
+                    *count += rows.len();
+                    s.status_bar
+                        .set_label(&format!("Fetching rows: {}", count));
                 }
                 QueryProgress::StatementFinished { index, result, .. } => {
                     let tab_index = s.result_tab_offset + index;
@@ -294,8 +305,12 @@ impl MainWindow {
                     } else {
                         s.result_tabs.display_result(tab_index, &result);
                     }
+                    s.fetch_row_counts.remove(&index);
                 }
-                QueryProgress::BatchFinished => { s.result_tabs.finish_all_streaming(); }
+                QueryProgress::BatchFinished => {
+                    s.result_tabs.finish_all_streaming();
+                    s.fetch_row_counts.clear();
+                }
             }
         });
 
