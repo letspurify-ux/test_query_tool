@@ -13,6 +13,24 @@ pub struct ColumnInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProcedureArgument {
+    pub name: Option<String>,
+    pub position: i32,
+    #[allow(dead_code)]
+    pub sequence: i32,
+    pub data_type: Option<String>,
+    pub in_out: Option<String>,
+    pub data_length: Option<i32>,
+    pub data_precision: Option<i32>,
+    pub data_scale: Option<i32>,
+    pub type_owner: Option<String>,
+    pub type_name: Option<String>,
+    pub pls_type: Option<String>,
+    pub overload: Option<i32>,
+    pub default_value: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct QueryResult {
     #[allow(dead_code)]
     pub sql: String,
@@ -163,6 +181,11 @@ impl SplitState {
             }
             self.pending_end = false;
         }
+        
+        if self.after_as_is==true && matches!(upper.as_str(), "OBJECT" | "VARRAY" | "TABLE") {
+            self.block_depth -= 1;
+            self.after_as_is=false;
+        }
 
         // For CREATE PL/SQL (PACKAGE, PROCEDURE, FUNCTION, TYPE, TRIGGER),
         // AS or IS starts the body/specification block
@@ -171,16 +194,9 @@ impl SplitState {
             self.block_depth += 1;
             self.after_as_is = true;
         } else if upper == "DECLARE" {
-            if self.in_create_plsql && self.block_depth > 0 {
-                // Inside CREATE PL/SQL, DECLARE doesn't create a new level
-                // (AS/IS already created the block)
-                self.after_declare = true;
-            } else {
                 // Standalone DECLARE block
                 self.block_depth += 1;
                 self.after_declare = true;
-            }
-            self.after_as_is = false;
         } else if upper == "BEGIN" {
             if self.after_declare {
                 // DECLARE ... BEGIN - same block, don't increase depth
@@ -194,8 +210,7 @@ impl SplitState {
             }
         } else if upper == "END" {
             self.pending_end = true;
-            self.after_declare = false;
-            self.after_as_is = false;
+            self.reset_create_state();
         }
 
         self.token.clear();
@@ -437,7 +452,7 @@ impl StatementBuilder {
 
             if c == ';' {
                 self.state.resolve_pending_end_on_terminator();
-                if self.state.block_depth == 0 && !self.state.in_create_plsql {
+                if self.state.block_depth == 0 {
                     let trimmed = self.current.trim();
                     if !trimmed.is_empty() {
                         self.statements.push(trimmed.to_string());
@@ -2807,6 +2822,170 @@ impl ObjectBrowser {
         }
 
         Ok(procedures)
+    }
+
+    pub fn get_procedure_arguments(
+        conn: &Connection,
+        procedure_name: &str,
+    ) -> Result<Vec<ProcedureArgument>, OracleError> {
+        Self::get_procedure_arguments_inner(conn, None, procedure_name)
+    }
+
+    pub fn get_package_procedure_arguments(
+        conn: &Connection,
+        package_name: &str,
+        procedure_name: &str,
+    ) -> Result<Vec<ProcedureArgument>, OracleError> {
+        Self::get_procedure_arguments_inner(conn, Some(package_name), procedure_name)
+    }
+
+    fn get_procedure_arguments_inner(
+        conn: &Connection,
+        package_name: Option<&str>,
+        procedure_name: &str,
+    ) -> Result<Vec<ProcedureArgument>, OracleError> {
+        let sql = if package_name.is_some() {
+            r#"
+            SELECT
+                argument_name,
+                position,
+                sequence,
+                data_type,
+                in_out,
+                data_length,
+                data_precision,
+                data_scale,
+                type_owner,
+                type_name,
+                pls_type,
+                overload,
+                default_value
+            FROM user_arguments
+            WHERE package_name = :1
+              AND object_name = :2
+            ORDER BY NVL(overload, 0), position, sequence
+            "#
+        } else {
+            r#"
+            SELECT
+                argument_name,
+                position,
+                sequence,
+                data_type,
+                in_out,
+                data_length,
+                data_precision,
+                data_scale,
+                type_owner,
+                type_name,
+                pls_type,
+                overload,
+                default_value
+            FROM user_arguments
+            WHERE package_name IS NULL
+              AND object_name = :1
+            ORDER BY NVL(overload, 0), position, sequence
+            "#
+        };
+
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+        };
+
+        let rows = if let Some(pkg_name) = package_name {
+            match stmt.query(&[&pkg_name.to_uppercase(), &procedure_name.to_uppercase()]) {
+                Ok(rows) => rows,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            }
+        } else {
+            match stmt.query(&[&procedure_name.to_uppercase()]) {
+                Ok(rows) => rows,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            }
+        };
+
+        let mut arguments: Vec<ProcedureArgument> = Vec::new();
+        for row_result in rows {
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+
+            let name: Option<String> = match row.get(0) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let position: i32 = match row.get(1) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let sequence: i32 = match row.get(2) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let data_type: Option<String> = match row.get(3) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let in_out: Option<String> = match row.get(4) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let data_length: Option<i32> = match row.get(5) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let data_precision: Option<i32> = match row.get(6) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let data_scale: Option<i32> = match row.get(7) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let type_owner: Option<String> = match row.get(8) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let type_name: Option<String> = match row.get(9) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let pls_type: Option<String> = match row.get(10) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let overload: Option<i32> = match row.get(11) {
+                Ok(value) => value,
+                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            };
+            let default_value: Option<String> = match row.get(12) {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("Failed to read default_value (ignored): {err}");
+                    None
+                }
+            };
+
+            arguments.push(ProcedureArgument {
+                name,
+                position,
+                sequence,
+                data_type,
+                in_out,
+                data_length,
+                data_precision,
+                data_scale,
+                type_owner,
+                type_name,
+                pls_type,
+                overload,
+                default_value,
+            });
+        }
+
+        Ok(arguments)
     }
 
     #[allow(dead_code)]

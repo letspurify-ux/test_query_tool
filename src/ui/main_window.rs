@@ -292,11 +292,15 @@ impl MainWindow {
                 }
                 QueryProgress::Rows { index, rows } => {
                     let tab_index = s.result_tab_offset + index;
+                    let rows_len = rows.len();
                     s.result_tabs.append_rows(tab_index, rows);
-                    let count = s.fetch_row_counts.entry(index).or_insert(0);
-                    *count += rows.len();
+                    let new_count = {
+                        let count = s.fetch_row_counts.entry(index).or_insert(0);
+                        *count += rows_len;
+                        *count
+                    };
                     s.status_bar
-                        .set_label(&format!("Fetching rows: {}", count));
+                        .set_label(&format!("Fetching rows: {}", new_count));
                 }
                 QueryProgress::StatementFinished { index, result, .. } => {
                     let tab_index = s.result_tab_offset + index;

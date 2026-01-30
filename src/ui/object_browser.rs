@@ -8,11 +8,11 @@ use fltk::{
     widget::Widget,
 };
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::thread;
 
-use crate::db::{lock_connection, ObjectBrowser, SharedConnection};
+use crate::db::{lock_connection, ObjectBrowser, ProcedureArgument, SharedConnection};
 use crate::ui::theme;
 
 #[derive(Clone)]
@@ -219,7 +219,16 @@ impl ObjectBrowserWidget {
                 Event::Push => {
                     let mouse_button = fltk::app::event_mouse_button();
                     if mouse_button == fltk::app::MouseButton::Right {
-                        if let Some(item) = t.first_selected_item() {
+                        let clicked_item = t
+                            .find_clicked(false)
+                            .or_else(|| t.find_clicked(true))
+                            .or_else(|| Self::item_at_mouse(t));
+
+                        if let Some(mut item) = clicked_item {
+                            item.select(1);
+                            t.set_item_focus(&item);
+                            Self::show_context_menu(&connection, &item, &sql_callback);
+                        } else if let Some(item) = t.first_selected_item() {
                             Self::show_context_menu(&connection, &item, &sql_callback);
                         }
                         return true;
@@ -251,7 +260,7 @@ impl ObjectBrowserWidget {
                                 object_name,
                             }) = Self::get_item_info(&item)
                             {
-                                if object_type == "Tables" || object_type == "Views" {
+                                if object_type == "TABLES" || object_type == "VIEWS" {
                                     let sql = format!(
                                         "SELECT * FROM {} WHERE ROWNUM <= 100",
                                         object_name
@@ -275,48 +284,57 @@ impl ObjectBrowserWidget {
         });
     }
 
+    fn item_at_mouse(tree: &Tree) -> Option<TreeItem> {
+        let mouse_y = fltk::app::event_y();
+        let mut current = tree.first_visible_item();
+        while let Some(item) = current {
+            let item_y = item.y();
+            let item_h = item.h();
+            if mouse_y >= item_y && mouse_y < item_y + item_h {
+                return Some(item);
+            }
+            current = tree.next_visible_item(&item, Key::Down);
+        }
+        None
+    }
+
     fn get_item_info(item: &TreeItem) -> Option<ObjectItem> {
         let object_name = match item.label() {
-            Some(label) => label,
+            Some(label) => label.trim().to_string(),
             None => return None,
         };
         let parent = match item.parent() {
             Some(parent) => parent,
             None => return None,
         };
-        let parent_type = match parent.label() {
-            Some(label) => label,
+        let parent_label = match parent.label() {
+            Some(label) => label.trim().to_string(),
             None => return None,
         };
+        let parent_type_upper = parent_label.to_uppercase();
 
         // Make sure this is not a category item
-        if parent_type == "Procedures" {
+        if parent_type_upper == "PROCEDURES" {
             if let Some(grandparent) = parent.parent() {
-                let package_name = match grandparent.label() {
-                    Some(label) => label,
-                    None => return None,
-                };
-                let root = match grandparent.parent() {
-                    Some(root) => root,
-                    None => return None,
-                };
-                let root_label = match root.label() {
-                    Some(label) => label,
-                    None => return None,
-                };
-                if root_label == "Packages" {
-                    return Some(ObjectItem::PackageProcedure {
-                        package_name,
-                        procedure_name: object_name,
-                    });
+                if let Some(package_label) = grandparent.label() {
+                    if let Some(root) = grandparent.parent() {
+                        if let Some(root_label) = root.label() {
+                            if root_label.trim().eq_ignore_ascii_case("Packages") {
+                                return Some(ObjectItem::PackageProcedure {
+                                    package_name: package_label.trim().to_string(),
+                                    procedure_name: object_name,
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
 
-        match parent_type.as_str() {
-            "Tables" | "Views" | "Procedures" | "Functions" | "Sequences" | "Packages" => {
+        match parent_type_upper.as_str() {
+            "TABLES" | "VIEWS" | "PROCEDURES" | "FUNCTIONS" | "SEQUENCES" | "PACKAGES" => {
                 Some(ObjectItem::Simple {
-                    object_type: parent_type,
+                    object_type: parent_type_upper,
                     object_name,
                 })
             }
@@ -335,8 +353,280 @@ impl ObjectBrowserWidget {
         }
     }
 
-    fn build_procedure_script(procedure_name: &str) -> String {
-        format!("BEGIN\n  {};\nEND;\n/\n", procedure_name)
+    fn build_simple_procedure_script(qualified_name: &str) -> String {
+        format!("BEGIN\n  {};\nEND;\n/\n", qualified_name)
+    }
+
+    fn build_procedure_script(qualified_name: &str, arguments: &[ProcedureArgument]) -> String {
+        if arguments.is_empty() {
+            return Self::build_simple_procedure_script(qualified_name);
+        }
+
+        let selected_args = Self::select_overload_arguments(arguments);
+        if selected_args.is_empty() {
+            return Self::build_simple_procedure_script(qualified_name);
+        }
+
+        let mut used_names: HashSet<String> = HashSet::new();
+        let mut local_decls: Vec<String> = Vec::new();
+        let mut call_args: Vec<String> = Vec::new();
+        let mut cursor_binds: Vec<String> = Vec::new();
+
+        for arg in &selected_args {
+            let arg_label = arg.name.clone();
+            let var_base = arg_label
+                .as_deref()
+                .unwrap_or("ARG");
+            let var_name = Self::unique_var_name(var_base, arg.position, &mut used_names);
+            let direction = arg
+                .in_out
+                .clone()
+                .unwrap_or_else(|| "IN".to_string())
+                .replace('/', " ")
+                .to_uppercase();
+            let is_out = direction.contains("OUT");
+            let is_in = direction.contains("IN");
+
+            if is_out && Self::is_ref_cursor(arg) {
+                cursor_binds.push(var_name.clone());
+                let target = format!(":{}", var_name);
+                let call_expr = match &arg_label {
+                    Some(label) => format!("{} => {}", label, target),
+                    None => target,
+                };
+                call_args.push(call_expr);
+            } else {
+                let type_str = Self::format_argument_type(arg);
+                if is_in {
+                    let default_expr = Self::default_value_for_argument(arg, &type_str);
+                    local_decls.push(format!("  {} {} := {};", var_name, type_str, default_expr));
+                } else {
+                    local_decls.push(format!("  {} {};", var_name, type_str));
+                }
+                let call_expr = match &arg_label {
+                    Some(label) => format!("{} => {}", label, var_name),
+                    None => var_name,
+                };
+                call_args.push(call_expr);
+            }
+        }
+
+        let mut script = String::new();
+        for cursor in &cursor_binds {
+            script.push_str(&format!("VAR {} REFCURSOR\n", cursor));
+        }
+
+        if !local_decls.is_empty() {
+            script.push_str("DECLARE\n");
+            for decl in &local_decls {
+                script.push_str(decl);
+                script.push('\n');
+            }
+        }
+
+        script.push_str("BEGIN\n");
+        if call_args.is_empty() {
+            script.push_str(&format!("  {};\n", qualified_name));
+        } else {
+            script.push_str(&format!("  {}(\n", qualified_name));
+            for (idx, arg) in call_args.iter().enumerate() {
+                let suffix = if idx + 1 == call_args.len() { "" } else { "," };
+                script.push_str(&format!("    {}{}\n", arg, suffix));
+            }
+            script.push_str("  );\n");
+        }
+        script.push_str("END;\n/\n");
+
+        for cursor in cursor_binds {
+            script.push_str(&format!("PRINT {}\n", cursor));
+        }
+
+        script
+    }
+
+    fn select_overload_arguments(arguments: &[ProcedureArgument]) -> Vec<ProcedureArgument> {
+        let mut selected: Vec<ProcedureArgument> = Vec::new();
+        let mut selected_overload: Option<i32> = None;
+        for arg in arguments {
+            if selected_overload.is_none() {
+                selected_overload = arg.overload;
+            }
+            if arg.overload == selected_overload {
+                selected.push(arg.clone());
+            } else {
+                break;
+            }
+        }
+        selected
+    }
+
+    fn is_ref_cursor(arg: &ProcedureArgument) -> bool {
+        let data_type = arg.data_type.as_deref().unwrap_or("").to_uppercase();
+        if data_type.contains("REF CURSOR") || data_type.contains("REFCURSOR") {
+            return true;
+        }
+        if data_type == "SYS_REFCURSOR" {
+            return true;
+        }
+        if let Some(pls_type) = arg.pls_type.as_deref() {
+            let upper = pls_type.to_uppercase();
+            if upper.contains("REF CURSOR") || upper.contains("REFCURSOR") {
+                return true;
+            }
+        }
+        if let Some(type_name) = arg.type_name.as_deref() {
+            if type_name.eq_ignore_ascii_case("REFCURSOR") {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn format_argument_type(arg: &ProcedureArgument) -> String {
+        if let Some(pls_type) = arg.pls_type.as_deref() {
+            let trimmed = pls_type.trim();
+            if !trimmed.is_empty() {
+                if trimmed.contains('%') {
+                    return trimmed.to_string();
+                }
+                let upper = trimmed.to_uppercase();
+                if Self::is_string_type_without_length(&upper) {
+                    let len = Self::clamp_string_length(arg.data_length);
+                    return format!("{}({})", upper, len);
+                }
+                return trimmed.to_string();
+            }
+        }
+        if let Some(data_type) = arg.data_type.as_deref() {
+            let upper = data_type.to_uppercase();
+            if upper.contains("REF CURSOR") || upper.contains("REFCURSOR") {
+                return "SYS_REFCURSOR".to_string();
+            }
+            if upper.starts_with("NUMBER") {
+                if let Some(precision) = arg.data_precision {
+                    if let Some(scale) = arg.data_scale {
+                        return format!("NUMBER({}, {})", precision, scale);
+                    }
+                    return format!("NUMBER({})", precision);
+                }
+                return "NUMBER".to_string();
+            }
+            if upper.starts_with("VARCHAR2")
+                || upper.starts_with("NVARCHAR2")
+                || upper.starts_with("CHAR")
+                || upper.starts_with("NCHAR")
+                || upper.starts_with("RAW")
+            {
+                let len = Self::clamp_string_length(arg.data_length);
+                return format!("{}({})", upper, len);
+            }
+            return upper;
+        }
+
+        if let Some(type_name) = arg.type_name.as_deref() {
+            if let Some(owner) = arg.type_owner.as_deref() {
+                return format!("{}.{}", owner, type_name);
+            }
+            return type_name.to_string();
+        }
+
+        "VARCHAR2(4000)".to_string()
+    }
+
+    fn is_string_type_without_length(upper: &str) -> bool {
+        if upper.contains('(') {
+            return false;
+        }
+        matches!(
+            upper,
+            "VARCHAR2" | "NVARCHAR2" | "VARCHAR" | "CHAR" | "NCHAR" | "RAW"
+        )
+    }
+
+    fn clamp_string_length(length: Option<i32>) -> i32 {
+        let fallback = 32767;
+        let len = length.unwrap_or(fallback);
+        let len = if len <= 0 { fallback } else { len };
+        len.clamp(1, 32767)
+    }
+
+    fn default_value_for_argument(arg: &ProcedureArgument, type_str: &str) -> String {
+        if let Some(default_value) = arg.default_value.as_deref() {
+            let trimmed = default_value.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        if Self::is_ref_cursor(arg) {
+            return "NULL".to_string();
+        }
+
+        let base = Self::normalize_type_base(type_str);
+        if base.contains('.') {
+            return "NULL".to_string();
+        }
+
+        match base.as_str() {
+            "NUMBER" | "NUMERIC" | "DECIMAL" | "INTEGER" | "INT" | "PLS_INTEGER"
+            | "BINARY_INTEGER" | "NATURAL" | "NATURALN" | "POSITIVE" | "POSITIVEN"
+            | "SIMPLE_INTEGER" => "0".to_string(),
+            "FLOAT" | "BINARY_FLOAT" | "BINARY_DOUBLE" => "0".to_string(),
+            "VARCHAR2" | "NVARCHAR2" | "VARCHAR" | "CHAR" | "NCHAR" => "''".to_string(),
+            "CLOB" | "NCLOB" => "EMPTY_CLOB()".to_string(),
+            "BLOB" => "EMPTY_BLOB()".to_string(),
+            "RAW" => "HEXTORAW('')".to_string(),
+            "DATE" => "SYSDATE".to_string(),
+            "TIMESTAMP" => "SYSTIMESTAMP".to_string(),
+            "BOOLEAN" => "FALSE".to_string(),
+            _ => "NULL".to_string(),
+        }
+    }
+
+    fn normalize_type_base(type_str: &str) -> String {
+        let mut upper = type_str.trim().to_uppercase();
+        if let Some(idx) = upper.find('(') {
+            upper.truncate(idx);
+        }
+        if let Some(idx) = upper.find(' ') {
+            upper.truncate(idx);
+        }
+        upper
+    }
+
+    fn unique_var_name(
+        base_name: &str,
+        position: i32,
+        used: &mut HashSet<String>,
+    ) -> String {
+        let mut cleaned = base_name
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() {
+                    ch.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+        if cleaned.is_empty() {
+            cleaned = format!("arg{}", position.max(1));
+        }
+        if cleaned.chars().next().map(|ch| ch.is_ascii_digit()).unwrap_or(false) {
+            cleaned.insert(0, '_');
+        }
+        let candidate = format!("v_{}", cleaned);
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+
+        let mut suffix = 2;
+        loop {
+            let next = format!("{}_{}", candidate, suffix);
+            if used.insert(next.clone()) {
+                return next;
+            }
+            suffix += 1;
+        }
     }
 
     fn show_context_menu(
@@ -346,18 +636,18 @@ impl ObjectBrowserWidget {
     ) {
         if let Some(item_info) = Self::get_item_info(item) {
             let menu_choices = match &item_info {
-                ObjectItem::Simple { object_type, .. } if object_type == "Tables" => {
+                ObjectItem::Simple { object_type, .. } if object_type == "TABLES" => {
                     "Select Data (Top 100)|View Structure|View Indexes|View Constraints|Generate DDL"
                 }
-                ObjectItem::Simple { object_type, .. } if object_type == "Views" => {
+                ObjectItem::Simple { object_type, .. } if object_type == "VIEWS" => {
                     "Select Data (Top 100)|Generate DDL"
                 }
                 ObjectItem::Simple { object_type, .. }
-                    if object_type == "Procedures"
-                        || object_type == "Functions"
-                        || object_type == "Sequences" =>
+                    if object_type == "PROCEDURES"
+                        || object_type == "FUNCTIONS"
+                        || object_type == "SEQUENCES" =>
                 {
-                    if object_type == "Procedures" {
+                    if object_type == "PROCEDURES" {
                         "Execute Procedure|Generate DDL"
                     } else {
                         "Generate DDL"
@@ -400,7 +690,19 @@ impl ObjectBrowserWidget {
                             "Execute Procedure",
                             ObjectItem::Simple { object_name, .. },
                         ) => {
-                            let sql = Self::build_procedure_script(object_name);
+                            let sql = match ObjectBrowser::get_procedure_arguments(
+                                db_conn.as_ref(),
+                                object_name,
+                            ) {
+                                Ok(arguments) => Self::build_procedure_script(object_name, &arguments),
+                                Err(err) => {
+                                    fltk::dialog::alert_default(&format!(
+                                        "Failed to load procedure arguments: {}",
+                                        err
+                                    ));
+                                    Self::build_simple_procedure_script(object_name)
+                                }
+                            };
                             drop(conn_guard);
                             let cb_opt = sql_callback.borrow_mut().take();
                             if let Some(mut cb) = cb_opt {
@@ -416,7 +718,22 @@ impl ObjectBrowserWidget {
                             },
                         ) => {
                             let qualified_name = format!("{}.{}", package_name, procedure_name);
-                            let sql = Self::build_procedure_script(&qualified_name);
+                            let sql = match ObjectBrowser::get_package_procedure_arguments(
+                                db_conn.as_ref(),
+                                package_name,
+                                procedure_name,
+                            ) {
+                                Ok(arguments) => {
+                                    Self::build_procedure_script(&qualified_name, &arguments)
+                                }
+                                Err(err) => {
+                                    fltk::dialog::alert_default(&format!(
+                                        "Failed to load procedure arguments: {}",
+                                        err
+                                    ));
+                                    Self::build_simple_procedure_script(&qualified_name)
+                                }
+                            };
                             drop(conn_guard);
                             let cb_opt = sql_callback.borrow_mut().take();
                             if let Some(mut cb) = cb_opt {
@@ -441,11 +758,11 @@ impl ObjectBrowserWidget {
                             },
                         ) => {
                             let obj_type = match object_type.as_str() {
-                                "Tables" => Some("TABLE"),
-                                "Views" => Some("VIEW"),
-                                "Procedures" => Some("PROCEDURE"),
-                                "Functions" => Some("FUNCTION"),
-                                "Sequences" => Some("SEQUENCE"),
+                                "TABLES" => Some("TABLE"),
+                                "VIEWS" => Some("VIEW"),
+                                "PROCEDURES" => Some("PROCEDURE"),
+                                "FUNCTIONS" => Some("FUNCTION"),
+                                "SEQUENCES" => Some("SEQUENCE"),
                                 _ => None,
                             };
                             if let Some(obj_type) = obj_type {
