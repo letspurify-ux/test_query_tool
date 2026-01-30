@@ -187,12 +187,6 @@ impl MenuBarBuilder {
             forward_menu_callback,
         );
         menu.add(
-            "&Edit/Find &Next\t",
-            Shortcut::from_key(fltk::enums::Key::F3),
-            MenuFlag::Normal,
-            forward_menu_callback,
-        );
-        menu.add(
             "&Edit/&Replace...\t",
             Shortcut::Ctrl | Shortcut::Command | 'h',
             MenuFlag::Normal,
@@ -378,7 +372,6 @@ impl MenuBarBuilder {
                     Ctrl+V - Paste\n\
                     Ctrl+A - Select All\n\
                     Ctrl+F - Find\n\
-                    F3 - Find Next\n\
                     Ctrl+H - Replace\n\
                     Ctrl+Shift+F - Format SQL\n\
                     Ctrl+/ - Toggle Comment\n\

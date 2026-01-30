@@ -1,6 +1,6 @@
 use fltk::{
     button::{Button, CheckButton},
-    enums::FrameType,
+    enums::{CallbackTrigger, FrameType},
     group::Flex,
     input::Input,
     prelude::*,
@@ -74,6 +74,7 @@ impl FindReplaceDialog {
         let mut find_input = Input::default();
         find_input.set_color(theme::input_bg());
         find_input.set_text_color(theme::text_primary());
+        find_input.set_trigger(CallbackTrigger::EnterKeyAlways);
         find_flex.end();
         main_flex.fixed(&find_flex, 30);
 
@@ -178,6 +179,21 @@ impl FindReplaceDialog {
             let _ = sender_for_find.send(DialogMessage::FindNext {
                 search_text,
                 case_sensitive: case_check_clone.value(),
+            });
+        });
+
+        // Enter key in find input triggers Find Next
+        let sender_for_find_enter = sender.clone();
+        let find_input_enter = find_input.clone();
+        let case_check_enter = case_check.clone();
+        find_input.set_callback(move |_| {
+            let search_text = find_input_enter.value();
+            if search_text.is_empty() {
+                return;
+            }
+            let _ = sender_for_find_enter.send(DialogMessage::FindNext {
+                search_text,
+                case_sensitive: case_check_enter.value(),
             });
         });
 
