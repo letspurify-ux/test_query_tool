@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::thread;
 
 use crate::db::{lock_connection, ObjectBrowser, ProcedureArgument, SharedConnection};
-use crate::ui::theme;
+use crate::ui::{sql_editor::SqlEditorWidget, theme};
 
 #[derive(Clone)]
 pub enum SqlAction {
@@ -882,6 +882,12 @@ impl ObjectBrowserWidget {
 
         match result {
             Ok(ddl) => {
+                let formatted = SqlEditorWidget::format_sql_basic(&ddl);
+                let ddl = if formatted.trim().is_empty() {
+                    ddl
+                } else {
+                    formatted
+                };
                 // Take the callback out, call it, then put it back
                 let cb_opt = sql_callback.borrow_mut().take();
                 if let Some(mut cb) = cb_opt {

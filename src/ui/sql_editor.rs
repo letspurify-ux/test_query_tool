@@ -2123,7 +2123,7 @@ impl SqlEditorWidget {
         self.refresh_highlighting();
     }
 
-    fn format_sql_basic(sql: &str) -> String {
+    pub(crate) fn format_sql_basic(sql: &str) -> String {
         let mut formatted = String::new();
         let items = QueryExecutor::split_format_items(sql);
         if items.is_empty() {
@@ -2227,6 +2227,10 @@ impl SqlEditorWidget {
     }
 
     fn format_statement(statement: &str) -> String {
+        if let Some(formatted) = Self::format_create_table(statement) {
+            return formatted;
+        }
+
         let clause_keywords = [
             "SELECT", "FROM", "WHERE", "GROUP", "HAVING", "ORDER", "UNION", "INTERSECT", "MINUS",
             "INSERT", "UPDATE", "DELETE", "MERGE", "VALUES", "SET", "INTO", "WITH",
@@ -2257,6 +2261,8 @@ impl SqlEditorWidget {
         let mut create_pending = false;
         let mut create_object: Option<String> = None;
         let mut routine_decl_pending = false;
+        let mut create_table_paren_expected = false;
+        let mut column_list_stack: Vec<bool> = Vec::new();
 
         let newline_with = |out: &mut String,
                             indent_level: usize,
@@ -2389,6 +2395,9 @@ impl SqlEditorWidget {
                         } else {
                             create_object = Some("PACKAGE".to_string());
                         }
+                        create_pending = false;
+                    } else if create_pending && upper == "TABLE" {
+                        create_table_paren_expected = true;
                         create_pending = false;
                     } else if create_pending
                         && matches!(upper.as_str(), "PROCEDURE" | "FUNCTION" | "TYPE" | "TRIGGER")
@@ -2546,6 +2555,13 @@ impl SqlEditorWidget {
                     }
                     needs_space = true;
 
+                    if create_table_paren_expected
+                        && upper == "AS"
+                        && matches!(next_word_upper.as_deref(), Some("SELECT" | "WITH"))
+                    {
+                        create_table_paren_expected = false;
+                    }
+
                     let starts_create_block = matches!(upper.as_str(), "AS" | "IS")
                         && (create_object.is_some() || routine_decl_pending);
 
@@ -2638,7 +2654,16 @@ impl SqlEditorWidget {
                         "," => {
                             trim_trailing_space(&mut out);
                             out.push(',');
-                            if suppress_comma_break_depth == 0 {
+                            if column_list_stack.last().copied().unwrap_or(false) {
+                                newline_with(
+                                    &mut out,
+                                    indent_level,
+                                    1,
+                                    &mut at_line_start,
+                                    &mut needs_space,
+                                    &mut line_indent,
+                                );
+                            } else if suppress_comma_break_depth == 0 {
                                 newline_with(
                                     &mut out,
                                     indent_level,
@@ -2655,6 +2680,12 @@ impl SqlEditorWidget {
                         ";" => {
                             trim_trailing_space(&mut out);
                             out.push(';');
+                            if prev_word_upper.as_deref() == Some("END")
+                                && block_stack.iter().any(|s| s == "PACKAGE_BODY")
+                                && matches!(next_word_upper.as_deref(), Some("PROCEDURE" | "FUNCTION"))
+                            {
+                                out.push('\n');
+                            }
                             routine_decl_pending = false;
                             newline_with(
                                 &mut out,
@@ -2664,6 +2695,11 @@ impl SqlEditorWidget {
                                 &mut needs_space,
                                 &mut line_indent,
                             );
+                            if indent_level == 0 {
+                                out.push('\n');
+                                at_line_start = true;
+                                needs_space = false;
+                            }
                         }
                         "(" => {
                             let is_subquery = matches!(
@@ -2674,8 +2710,11 @@ impl SqlEditorWidget {
                                 out.push(' ');
                             }
                             out.push('(');
+                            let is_column_list = create_table_paren_expected;
+                            create_table_paren_expected = false;
                             paren_stack.push(is_subquery);
-                            if is_subquery {
+                            column_list_stack.push(is_column_list);
+                            if is_subquery || is_column_list {
                                 indent_level += 1;
                                 newline_with(
                                     &mut out,
@@ -2693,7 +2732,8 @@ impl SqlEditorWidget {
                         ")" => {
                             trim_trailing_space(&mut out);
                             let was_subquery = paren_stack.pop().unwrap_or(false);
-                            if was_subquery {
+                            let was_column_list = column_list_stack.pop().unwrap_or(false);
+                            if was_subquery || was_column_list {
                                 if indent_level > 0 {
                                     indent_level -= 1;
                                 }
@@ -2737,6 +2777,407 @@ impl SqlEditorWidget {
         }
 
         out.trim_end().to_string()
+    }
+
+    fn format_create_table(statement: &str) -> Option<String> {
+        let trimmed = statement.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let tokens = Self::tokenize_sql(trimmed);
+        if tokens.is_empty() {
+            return None;
+        }
+
+        let mut seen_create = false;
+        let mut seen_table = false;
+        let mut ctas = false;
+        let mut depth = 0i32;
+        let mut open_idx: Option<usize> = None;
+        let mut close_idx: Option<usize> = None;
+        let mut idx = 0usize;
+
+        while idx < tokens.len() {
+            let token = &tokens[idx];
+            match token {
+                SqlToken::Word(word) => {
+                    let upper = word.to_uppercase();
+                    if upper == "CREATE" {
+                        seen_create = true;
+                    } else if seen_create && upper == "TABLE" {
+                        seen_table = true;
+                    } else if seen_table && upper == "AS" {
+                        if tokens[idx + 1..]
+                            .iter()
+                            .find_map(|t| match t {
+                                SqlToken::Word(w) => Some(w.to_uppercase()),
+                                _ => None,
+                            })
+                            .is_some_and(|w| w == "SELECT" || w == "WITH")
+                        {
+                            ctas = true;
+                        }
+                    }
+                }
+                SqlToken::Symbol(sym) if sym == "(" => {
+                    if depth == 0 && seen_create && seen_table && !ctas && open_idx.is_none() {
+                        open_idx = Some(idx);
+                    }
+                    depth += 1;
+                }
+                SqlToken::Symbol(sym) if sym == ")" => {
+                    depth -= 1;
+                    if depth == 0 && open_idx.is_some() && close_idx.is_none() {
+                        close_idx = Some(idx);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            idx += 1;
+        }
+
+        let (open_idx, close_idx) = match (open_idx, close_idx) {
+            (Some(open_idx), Some(close_idx)) => (open_idx, close_idx),
+            _ => return None,
+        };
+
+        let prefix_tokens = &tokens[..open_idx];
+        let column_tokens = &tokens[open_idx + 1..close_idx];
+        let suffix_tokens = &tokens[close_idx + 1..];
+
+        let mut columns: Vec<Vec<SqlToken>> = Vec::new();
+        let mut current: Vec<SqlToken> = Vec::new();
+        let mut col_depth = 0i32;
+
+        for token in column_tokens {
+            match token {
+                SqlToken::Symbol(sym) if sym == "(" => {
+                    col_depth += 1;
+                    current.push(token.clone());
+                }
+                SqlToken::Symbol(sym) if sym == ")" => {
+                    col_depth = col_depth.saturating_sub(1);
+                    current.push(token.clone());
+                }
+                SqlToken::Symbol(sym) if sym == "," && col_depth == 0 => {
+                    if !current.is_empty() {
+                        columns.push(current);
+                        current = Vec::new();
+                    }
+                }
+                _ => current.push(token.clone()),
+            }
+        }
+        if !current.is_empty() {
+            columns.push(current);
+        }
+
+        if columns.is_empty() {
+            return None;
+        }
+
+        let mut formatted_cols: Vec<(bool, String, String, String)> = Vec::new();
+        let mut max_name = 0usize;
+        let mut max_type = 0usize;
+
+        for column in &columns {
+            let mut iter = column.iter().filter(|t| !matches!(t, SqlToken::Comment(_)));
+            let first = iter.next();
+            let is_constraint = match first {
+                Some(SqlToken::Word(word)) => {
+                    matches!(
+                        word.to_uppercase().as_str(),
+                        "CONSTRAINT" | "PRIMARY" | "UNIQUE" | "FOREIGN" | "CHECK"
+                    )
+                }
+                _ => false,
+            };
+
+            if is_constraint {
+                let text = Self::join_tokens_spaced(column, 0);
+                formatted_cols.push((true, text, String::new(), String::new()));
+                continue;
+            }
+
+            let mut tokens_iter = column.iter().peekable();
+            let name_token = tokens_iter.next();
+            let name = name_token.map(|t| Self::token_text(t)).unwrap_or_default();
+
+            let mut type_tokens: Vec<SqlToken> = Vec::new();
+            let mut rest_tokens: Vec<SqlToken> = Vec::new();
+            let mut in_type = true;
+            let constraint_keywords = [
+                "CONSTRAINT",
+                "NOT",
+                "NULL",
+                "DEFAULT",
+                "PRIMARY",
+                "UNIQUE",
+                "CHECK",
+                "REFERENCES",
+                "ENABLE",
+                "DISABLE",
+                "USING",
+                "COLLATE",
+                "GENERATED",
+                "IDENTITY",
+            ];
+
+            for token in tokens_iter {
+                let is_constraint_token = match token {
+                    SqlToken::Word(word) => {
+                        constraint_keywords.contains(&word.to_uppercase().as_str())
+                    }
+                    _ => false,
+                };
+                if in_type && is_constraint_token {
+                    in_type = false;
+                }
+                if in_type {
+                    type_tokens.push(token.clone());
+                } else {
+                    rest_tokens.push(token.clone());
+                }
+            }
+
+            let type_str = Self::join_tokens_compact(&type_tokens);
+            let rest_str = Self::join_tokens_spaced(&rest_tokens, 0);
+
+            max_name = max_name.max(name.len());
+            max_type = max_type.max(type_str.len());
+            formatted_cols.push((false, name, type_str, rest_str));
+        }
+
+        let mut out = String::new();
+        let prefix = Self::join_tokens_spaced(prefix_tokens, 0);
+        out.push_str(prefix.trim_end());
+        out.push_str(" (\n");
+
+        let indent = " ".repeat(4);
+        for (idx, (is_constraint, name, type_str, rest_str)) in
+            formatted_cols.into_iter().enumerate()
+        {
+            out.push_str(&indent);
+            if is_constraint {
+                out.push_str(&name);
+            } else {
+                let name_pad = max_name.saturating_sub(name.len());
+                let type_pad = max_type.saturating_sub(type_str.len());
+                out.push_str(&name);
+                if !type_str.is_empty() {
+                    out.push_str(&" ".repeat(name_pad + 1));
+                    out.push_str(&type_str);
+                    if !rest_str.is_empty() {
+                        out.push_str(&" ".repeat(type_pad + 1));
+                        out.push_str(&rest_str);
+                    }
+                }
+            }
+            if idx + 1 < columns.len() {
+                out.push(',');
+            }
+            out.push('\n');
+        }
+        out.push(')');
+
+        let suffix = Self::format_create_suffix(suffix_tokens);
+        if !suffix.is_empty() {
+            out.push('\n');
+            out.push_str(&suffix);
+        }
+
+        Some(out.trim_end().to_string())
+    }
+
+    fn token_text(token: &SqlToken) -> String {
+        match token {
+            SqlToken::Word(word) => {
+                let upper = word.to_uppercase();
+                if SQL_KEYWORDS.iter().any(|&kw| kw == upper) {
+                    upper
+                } else {
+                    word.clone()
+                }
+            }
+            SqlToken::String(literal) => literal.clone(),
+            SqlToken::Comment(comment) => comment.clone(),
+            SqlToken::Symbol(sym) => sym.clone(),
+        }
+    }
+
+    fn join_tokens_compact(tokens: &[SqlToken]) -> String {
+        let mut out = String::new();
+        let mut needs_space = false;
+        for token in tokens {
+            let text = Self::token_text(token);
+            match token {
+                SqlToken::Symbol(sym) if sym == "(" => {
+                    out.push_str(&text);
+                    needs_space = false;
+                }
+                SqlToken::Symbol(sym) if sym == ")" => {
+                    out.push_str(&text);
+                    needs_space = true;
+                }
+                SqlToken::Symbol(sym) if sym == "," => {
+                    out.push_str(&text);
+                    out.push(' ');
+                    needs_space = false;
+                }
+                _ => {
+                    if needs_space {
+                        out.push(' ');
+                    }
+                    out.push_str(&text);
+                    needs_space = true;
+                }
+            }
+        }
+        out.trim().to_string()
+    }
+
+    fn join_tokens_spaced(tokens: &[SqlToken], indent_level: usize) -> String {
+        let mut out = String::new();
+        let mut needs_space = false;
+        let indent = " ".repeat(indent_level * 4);
+        let mut at_line_start = true;
+
+        for token in tokens {
+            let text = Self::token_text(token);
+            match token {
+                SqlToken::Comment(comment) => {
+                    if !at_line_start {
+                        out.push(' ');
+                    } else if !indent.is_empty() {
+                        out.push_str(&indent);
+                    }
+                    out.push_str(comment);
+                    if comment.ends_with('\n') {
+                        at_line_start = true;
+                        needs_space = false;
+                    } else {
+                        at_line_start = false;
+                        needs_space = true;
+                    }
+                }
+                SqlToken::Symbol(sym) if sym == "." => {
+                    out.push('.');
+                    needs_space = false;
+                    at_line_start = false;
+                }
+                SqlToken::Symbol(sym) if sym == "(" => {
+                    out.push('(');
+                    needs_space = false;
+                    at_line_start = false;
+                }
+                SqlToken::Symbol(sym) if sym == ")" => {
+                    out.push(')');
+                    needs_space = true;
+                    at_line_start = false;
+                }
+                SqlToken::Symbol(sym) if sym == "," => {
+                    out.push(',');
+                    out.push(' ');
+                    needs_space = false;
+                    at_line_start = false;
+                }
+                SqlToken::Symbol(sym) => {
+                    if needs_space {
+                        out.push(' ');
+                    }
+                    out.push_str(sym);
+                    needs_space = true;
+                    at_line_start = false;
+                }
+                _ => {
+                    if at_line_start && !indent.is_empty() {
+                        out.push_str(&indent);
+                    }
+                    if needs_space {
+                        out.push(' ');
+                    }
+                    out.push_str(&text);
+                    needs_space = true;
+                    at_line_start = false;
+                }
+            }
+        }
+
+        out.trim().to_string()
+    }
+
+    fn format_create_suffix(tokens: &[SqlToken]) -> String {
+        if tokens.is_empty() {
+            return String::new();
+        }
+
+        let break_keywords = [
+            "PCTFREE",
+            "PCTUSED",
+            "INITRANS",
+            "MAXTRANS",
+            "COMPRESS",
+            "NOCOMPRESS",
+            "LOGGING",
+            "NOLOGGING",
+            "STORAGE",
+            "TABLESPACE",
+            "USING",
+            "ENABLE",
+            "DISABLE",
+            "CACHE",
+            "NOCACHE",
+            "PARALLEL",
+            "NOPARALLEL",
+            "MONITORING",
+            "NOMONITORING",
+            "ORGANIZATION",
+            "INCLUDING",
+            "LOB",
+            "PARTITION",
+            "SUBPARTITION",
+            "SHARING",
+        ];
+
+        let mut parts: Vec<Vec<SqlToken>> = Vec::new();
+        let mut current: Vec<SqlToken> = Vec::new();
+        let mut depth = 0i32;
+
+        for token in tokens {
+            match token {
+                SqlToken::Symbol(sym) if sym == "(" => {
+                    depth += 1;
+                    current.push(token.clone());
+                }
+                SqlToken::Symbol(sym) if sym == ")" => {
+                    depth = depth.saturating_sub(1);
+                    current.push(token.clone());
+                }
+                SqlToken::Word(word) if depth == 0 => {
+                    let upper = word.to_uppercase();
+                    if break_keywords.contains(&upper.as_str()) && !current.is_empty() {
+                        parts.push(current);
+                        current = Vec::new();
+                    }
+                    current.push(token.clone());
+                }
+                _ => current.push(token.clone()),
+            }
+        }
+        if !current.is_empty() {
+            parts.push(current);
+        }
+
+        let mut out = String::new();
+        for (idx, part) in parts.iter().enumerate() {
+            if idx > 0 {
+                out.push('\n');
+            }
+            out.push_str(&Self::join_tokens_spaced(part, 0));
+        }
+        out.trim().to_string()
     }
 
     fn tokenize_sql(sql: &str) -> Vec<SqlToken> {
