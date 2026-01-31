@@ -10,8 +10,11 @@ use fltk::{
     text::{TextBuffer, TextEditor, WrapMode},
 };
 use oracle::{Connection, Error as OracleError};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::cell::RefCell;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -2222,6 +2225,32 @@ impl SqlEditorWidget {
                     "SET DEFINE OFF".to_string()
                 }
             }
+            ToolCommand::SetFeedback { enabled } => {
+                if *enabled {
+                    "SET FEEDBACK ON".to_string()
+                } else {
+                    "SET FEEDBACK OFF".to_string()
+                }
+            }
+            ToolCommand::SetHeading { enabled } => {
+                if *enabled {
+                    "SET HEADING ON".to_string()
+                } else {
+                    "SET HEADING OFF".to_string()
+                }
+            }
+            ToolCommand::SetPageSize { size } => format!("SET PAGESIZE {}", size),
+            ToolCommand::SetLineSize { size } => format!("SET LINESIZE {}", size),
+            ToolCommand::RunScript {
+                path,
+                relative_to_caller,
+            } => {
+                if *relative_to_caller {
+                    format!("@@{}", path)
+                } else {
+                    format!("@{}", path)
+                }
+            }
             ToolCommand::Unsupported { raw, .. } => raw.clone(),
         }
     }
@@ -3381,6 +3410,12 @@ impl SqlEditorWidget {
             app::flush();
 
             thread::spawn(move || {
+                struct ScriptFrame {
+                    items: Vec<ScriptItem>,
+                    index: usize,
+                    base_dir: PathBuf,
+                }
+
                 let items = QueryExecutor::split_script_items(&sql_text);
                 if items.is_empty() {
                     let _ = sender.send(QueryProgress::BatchFinished);
@@ -3414,11 +3449,25 @@ impl SqlEditorWidget {
                     }
                 };
                 let mut stop_execution = false;
+                let working_dir = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let mut frames = vec![ScriptFrame {
+                    items,
+                    index: 0,
+                    base_dir: working_dir.clone(),
+                }];
 
-                for item in items {
+                while let Some(frame) = frames.last_mut() {
                     if stop_execution {
                         break;
                     }
+
+                    if frame.index >= frame.items.len() {
+                        frames.pop();
+                        continue;
+                    }
+
+                    let item = frame.items[frame.index].clone();
+                    frame.index += 1;
 
                     match item {
                         ScriptItem::ToolCommand(command) => {
@@ -3461,14 +3510,21 @@ impl SqlEditorWidget {
                                             poisoned.into_inner().binds.clone()
                                         }
                                     };
+                                    let (heading_enabled, feedback_enabled) =
+                                        SqlEditorWidget::current_output_settings(&session);
 
                                     if let Some(name) = name {
                                         let key = SessionState::normalize_name(&name);
                                         if let Some(bind) = binds_snapshot.get(&key) {
                                             match &bind.value {
                                                 BindValue::Scalar(value) => {
-                                                    let columns =
-                                                        vec!["NAME".to_string(), "VALUE".to_string()];
+                                                    let columns = SqlEditorWidget::apply_heading_setting(
+                                                        vec![
+                                                            "NAME".to_string(),
+                                                            "VALUE".to_string(),
+                                                        ],
+                                                        heading_enabled,
+                                                    );
                                                     let rows = vec![vec![
                                                         key.clone(),
                                                         value.clone().unwrap_or_else(|| "NULL".to_string()),
@@ -3481,17 +3537,23 @@ impl SqlEditorWidget {
                                                         columns,
                                                         rows,
                                                         true,
+                                                        feedback_enabled,
                                                     );
                                                 }
                                                 BindValue::Cursor(Some(cursor)) => {
+                                                    let columns = SqlEditorWidget::apply_heading_setting(
+                                                        cursor.columns.clone(),
+                                                        heading_enabled,
+                                                    );
                                                     SqlEditorWidget::emit_select_result(
                                                         &sender,
                                                         &conn_name,
                                                         result_index,
                                                         &format!("PRINT {}", key),
-                                                        cursor.columns.clone(),
+                                                        columns,
                                                         cursor.rows.clone(),
                                                         true,
+                                                        feedback_enabled,
                                                     );
                                                 }
                                                 BindValue::Cursor(None) => {
@@ -3562,25 +3624,34 @@ impl SqlEditorWidget {
                                             &conn_name,
                                             result_index,
                                             "PRINT",
-                                            vec![
-                                                "NAME".to_string(),
-                                                "TYPE".to_string(),
-                                                "VALUE".to_string(),
-                                            ],
+                                            SqlEditorWidget::apply_heading_setting(
+                                                vec![
+                                                    "NAME".to_string(),
+                                                    "TYPE".to_string(),
+                                                    "VALUE".to_string(),
+                                                ],
+                                                heading_enabled,
+                                            ),
                                             summary_rows,
                                             true,
+                                            feedback_enabled,
                                         );
                                         result_index += 1;
 
                                         for (cursor_name, cursor) in cursor_results {
+                                            let columns = SqlEditorWidget::apply_heading_setting(
+                                                cursor.columns.clone(),
+                                                heading_enabled,
+                                            );
                                             SqlEditorWidget::emit_select_result(
                                                 &sender,
                                                 &conn_name,
                                                 result_index,
                                                 &format!("PRINT {}", cursor_name),
-                                                cursor.columns.clone(),
+                                                columns,
                                                 cursor.rows.clone(),
                                                 true,
+                                                feedback_enabled,
                                             );
                                             result_index += 1;
                                         }
@@ -3764,18 +3835,24 @@ impl SqlEditorWidget {
                                                     );
                                                     result_index += 1;
                                                 } else {
+                                                    let (heading_enabled, feedback_enabled) =
+                                                        SqlEditorWidget::current_output_settings(&session);
                                                     SqlEditorWidget::emit_select_result(
                                                         &sender,
                                                         &conn_name,
                                                         result_index,
                                                         "SHOW ERRORS",
-                                                        vec![
-                                                            "LINE".to_string(),
-                                                            "POSITION".to_string(),
-                                                            "TEXT".to_string(),
-                                                        ],
+                                                        SqlEditorWidget::apply_heading_setting(
+                                                            vec![
+                                                                "LINE".to_string(),
+                                                                "POSITION".to_string(),
+                                                                "TEXT".to_string(),
+                                                            ],
+                                                            heading_enabled,
+                                                        ),
                                                         rows,
                                                         true,
+                                                        feedback_enabled,
                                                     );
                                                     result_index += 1;
                                                 }
@@ -3846,8 +3923,14 @@ impl SqlEditorWidget {
                                     result_index += 1;
                                 }
                                 ToolCommand::SetDefine { enabled } => {
-                                    // SET DEFINE controls & substitution variables (SQL*Plus feature)
-                                    // Currently not implemented - just acknowledge the command
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    guard.define_enabled = enabled;
                                     SqlEditorWidget::emit_non_select_result(
                                         &sender,
                                         &conn_name,
@@ -3861,6 +3944,152 @@ impl SqlEditorWidget {
                                         false,
                                     );
                                     result_index += 1;
+                                }
+                                ToolCommand::SetFeedback { enabled } => {
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    guard.feedback_enabled = enabled;
+                                    SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        "SET FEEDBACK",
+                                        format!(
+                                            "FEEDBACK {}",
+                                            if enabled { "ON" } else { "OFF" }
+                                        ),
+                                        true,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                }
+                                ToolCommand::SetHeading { enabled } => {
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    guard.heading_enabled = enabled;
+                                    SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        "SET HEADING",
+                                        format!(
+                                            "HEADING {}",
+                                            if enabled { "ON" } else { "OFF" }
+                                        ),
+                                        true,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                }
+                                ToolCommand::SetPageSize { size } => {
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    guard.pagesize = size;
+                                    SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        "SET PAGESIZE",
+                                        format!("PAGESIZE {}", size),
+                                        true,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                }
+                                ToolCommand::SetLineSize { size } => {
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    guard.linesize = size;
+                                    SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        "SET LINESIZE",
+                                        format!("LINESIZE {}", size),
+                                        true,
+                                        false,
+                                    );
+                                    result_index += 1;
+                                }
+                                ToolCommand::RunScript {
+                                    path,
+                                    relative_to_caller,
+                                } => {
+                                    let base_dir = if relative_to_caller {
+                                        frame.base_dir.clone()
+                                    } else {
+                                        working_dir.clone()
+                                    };
+                                    let target_path = if Path::new(&path).is_absolute() {
+                                        PathBuf::from(&path)
+                                    } else {
+                                        base_dir.join(&path)
+                                    };
+                                    match fs::read_to_string(&target_path) {
+                                        Ok(contents) => {
+                                            let script_items =
+                                                QueryExecutor::split_script_items(&contents);
+                                            let script_dir = target_path
+                                                .parent()
+                                                .unwrap_or(&base_dir)
+                                                .to_path_buf();
+                                            frames.push(ScriptFrame {
+                                                items: script_items,
+                                                index: 0,
+                                                base_dir: script_dir,
+                                            });
+                                            SqlEditorWidget::emit_non_select_result(
+                                                &sender,
+                                                &conn_name,
+                                                result_index,
+                                                if relative_to_caller { "@@" } else { "@" },
+                                                format!(
+                                                    "Running script {}",
+                                                    target_path.display()
+                                                ),
+                                                true,
+                                                false,
+                                            );
+                                            result_index += 1;
+                                        }
+                                        Err(err) => {
+                                            SqlEditorWidget::emit_non_select_result(
+                                                &sender,
+                                                &conn_name,
+                                                result_index,
+                                                if relative_to_caller { "@@" } else { "@" },
+                                                format!(
+                                                    "Error: Failed to read script {}: {}",
+                                                    target_path.display(),
+                                                    err
+                                                ),
+                                                false,
+                                                false,
+                                            );
+                                            result_index += 1;
+                                            command_error = true;
+                                        }
+                                    }
                                 }
                                 ToolCommand::Unsupported {
                                     raw,
@@ -3903,14 +4132,48 @@ impl SqlEditorWidget {
                                 continue;
                             }
 
-                            let cleaned = SqlEditorWidget::strip_leading_comments(trimmed);
+                            let mut sql_text = trimmed.to_string();
+                            let (define_enabled, binds_snapshot) = match session.lock() {
+                                Ok(guard) => (guard.define_enabled, guard.binds.clone()),
+                                Err(poisoned) => {
+                                    eprintln!("Warning: session state lock was poisoned; recovering.");
+                                    let guard = poisoned.into_inner();
+                                    (guard.define_enabled, guard.binds.clone())
+                                }
+                            };
+                            if define_enabled {
+                                match SqlEditorWidget::apply_define_substitution(
+                                    &sql_text,
+                                    &binds_snapshot,
+                                ) {
+                                    Ok(updated) => sql_text = updated,
+                                    Err(message) => {
+                                        SqlEditorWidget::emit_non_select_result(
+                                            &sender,
+                                            &conn_name,
+                                            result_index,
+                                            trimmed,
+                                            format!("Error: {}", message),
+                                            false,
+                                            false,
+                                        );
+                                        result_index += 1;
+                                        if !continue_on_error {
+                                            stop_execution = true;
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            let cleaned = SqlEditorWidget::strip_leading_comments(&sql_text);
                             let upper = cleaned.to_uppercase();
 
                             if upper.starts_with("COMMIT") {
                                 let mut timed_out = false;
                                 let result = match conn.commit() {
                                     Ok(()) => QueryResult {
-                                        sql: trimmed.to_string(),
+                                        sql: sql_text.to_string(),
                                         columns: vec![],
                                         rows: vec![],
                                         row_count: 0,
@@ -3921,7 +4184,7 @@ impl SqlEditorWidget {
                                     },
                                     Err(err) => {
                                         timed_out = SqlEditorWidget::is_timeout_error(&err);
-                                        QueryResult::new_error(trimmed, &err.to_string())
+                                        QueryResult::new_error(&sql_text, &err.to_string())
                                     }
                                 };
                                 let result_success = result.success;
@@ -3948,7 +4211,7 @@ impl SqlEditorWidget {
                                 let mut timed_out = false;
                                 let result = match conn.rollback() {
                                     Ok(()) => QueryResult {
-                                        sql: trimmed.to_string(),
+                                        sql: sql_text.to_string(),
                                         columns: vec![],
                                         rows: vec![],
                                         row_count: 0,
@@ -3959,7 +4222,7 @@ impl SqlEditorWidget {
                                     },
                                     Err(err) => {
                                         timed_out = SqlEditorWidget::is_timeout_error(&err);
-                                        QueryResult::new_error(trimmed, &err.to_string())
+                                        QueryResult::new_error(&sql_text, &err.to_string())
                                     }
                                 };
                                 let result_success = result.success;
@@ -3982,7 +4245,7 @@ impl SqlEditorWidget {
                                 continue;
                             }
 
-                            let compiled_object = QueryExecutor::parse_compiled_object(trimmed);
+                            let compiled_object = QueryExecutor::parse_compiled_object(&sql_text);
                             let is_compiled_plsql = compiled_object.is_some();
                             if let Some(object) = compiled_object.clone() {
                                 let mut guard = match session.lock() {
@@ -3995,14 +4258,16 @@ impl SqlEditorWidget {
                                 guard.last_compiled = Some(object);
                             }
 
-                            let exec_call = QueryExecutor::normalize_exec_call(trimmed);
+                            let exec_call = QueryExecutor::normalize_exec_call(&sql_text);
                             if exec_call.is_some() {
-                                if let Err(message) = QueryExecutor::check_named_positional_mix(trimmed) {
+                                if let Err(message) =
+                                    QueryExecutor::check_named_positional_mix(&sql_text)
+                                {
                                     SqlEditorWidget::emit_non_select_result(
                                         &sender,
                                         &conn_name,
                                         result_index,
-                                        trimmed,
+                                        &sql_text,
                                         format!("Error: {}", message),
                                         false,
                                         false,
@@ -4017,11 +4282,11 @@ impl SqlEditorWidget {
 
                             let is_plsql_block =
                                 upper.starts_with("BEGIN") || upper.starts_with("DECLARE");
-                            let is_select = QueryExecutor::is_select_statement(trimmed);
+                            let is_select = QueryExecutor::is_select_statement(&sql_text);
 
                             if exec_call.is_some() || is_plsql_block {
                                 let mut sql_to_execute =
-                                    exec_call.unwrap_or_else(|| trimmed.to_string());
+                                    exec_call.unwrap_or_else(|| sql_text.to_string());
                                 if is_plsql_block {
                                     sql_to_execute =
                                         SqlEditorWidget::ensure_plsql_terminator(&sql_to_execute);
@@ -4041,7 +4306,7 @@ impl SqlEditorWidget {
                                             &sender,
                                             &conn_name,
                                             result_index,
-                                            trimmed,
+                                            &sql_text,
                                             format!("Error: {}", message),
                                             false,
                                             false,
@@ -4075,7 +4340,7 @@ impl SqlEditorWidget {
                                         let index = result_index;
                                         let _ = sender.send(QueryProgress::StatementStart { index });
                                         app::awake();
-                                        let result = QueryResult::new_error(trimmed, &message);
+                                        let result = QueryResult::new_error(&sql_text, &message);
                                         let _ = sender.send(QueryProgress::StatementFinished {
                                             index,
                                             result,
@@ -4092,7 +4357,7 @@ impl SqlEditorWidget {
                                 };
 
                                 let mut result = QueryResult {
-                                    sql: trimmed.to_string(),
+                                    sql: sql_text.to_string(),
                                     columns: vec![],
                                     rows: vec![],
                                     row_count: 0,
@@ -4135,7 +4400,7 @@ impl SqlEditorWidget {
                                 if auto_commit {
                                     if let Err(err) = conn.commit() {
                                         result = QueryResult::new_error(
-                                            trimmed,
+                                            &sql_text,
                                             &format!("Auto-commit failed: {}", err),
                                         );
                                     } else {
@@ -4176,6 +4441,8 @@ impl SqlEditorWidget {
                                     let mut last_flush = Instant::now();
                                     let cursor_start = Instant::now();
                                     let mut cursor_timed_out = false;
+                                    let (heading_enabled, feedback_enabled) =
+                                        SqlEditorWidget::current_output_settings(&session);
 
                                     let cursor_label = format!("REFCURSOR :{}", cursor_name);
                                     let cursor_result = QueryExecutor::execute_ref_cursor_streaming(
@@ -4188,7 +4455,10 @@ impl SqlEditorWidget {
                                                 .collect::<Vec<String>>();
                                             let _ = sender.send(QueryProgress::SelectStart {
                                                 index,
-                                                columns: names,
+                                                columns: SqlEditorWidget::apply_heading_setting(
+                                                    names,
+                                                    heading_enabled,
+                                                ),
                                             });
                                             app::awake();
                                         },
@@ -4229,6 +4499,13 @@ impl SqlEditorWidget {
                                             } else if was_cancelled {
                                                 query_result.message = SqlEditorWidget::cancel_message();
                                                 query_result.success = false;
+                                            }
+                                            SqlEditorWidget::apply_heading_to_result(
+                                                &mut query_result,
+                                                heading_enabled,
+                                            );
+                                            if !feedback_enabled {
+                                                query_result.message.clear();
                                             }
 
                                             let column_names: Vec<String> = query_result
@@ -4308,6 +4585,8 @@ impl SqlEditorWidget {
                                     let mut last_flush = Instant::now();
                                     let cursor_start = Instant::now();
                                     let mut cursor_timed_out = false;
+                                    let (heading_enabled, feedback_enabled) =
+                                        SqlEditorWidget::current_output_settings(&session);
                                     let cursor_label = format!("IMPLICIT RESULT {}", idx + 1);
 
                                     let cursor_result = QueryExecutor::execute_ref_cursor_streaming(
@@ -4320,7 +4599,10 @@ impl SqlEditorWidget {
                                                 .collect::<Vec<String>>();
                                             let _ = sender.send(QueryProgress::SelectStart {
                                                 index,
-                                                columns: names,
+                                                columns: SqlEditorWidget::apply_heading_setting(
+                                                    names,
+                                                    heading_enabled,
+                                                ),
                                             });
                                             app::awake();
                                         },
@@ -4360,6 +4642,13 @@ impl SqlEditorWidget {
                                             } else if was_cancelled {
                                                 query_result.message = SqlEditorWidget::cancel_message();
                                                 query_result.success = false;
+                                            }
+                                            SqlEditorWidget::apply_heading_to_result(
+                                                &mut query_result,
+                                                heading_enabled,
+                                            );
+                                            if !feedback_enabled {
+                                                query_result.message.clear();
                                             }
 
                                             let _ = sender.send(QueryProgress::StatementFinished {
@@ -4422,7 +4711,7 @@ impl SqlEditorWidget {
                                 }
                             } else if is_select {
                                 let sql_to_execute =
-                                    trimmed.trim_end_matches(';').trim().to_string();
+                                    sql_text.trim_end_matches(';').trim().to_string();
                                 let binds = match session.lock() {
                                     Ok(guard) => QueryExecutor::resolve_binds(&sql_to_execute, &guard),
                                     Err(poisoned) => {
@@ -4438,7 +4727,7 @@ impl SqlEditorWidget {
                                             &sender,
                                             &conn_name,
                                             result_index,
-                                            trimmed,
+                                            &sql_text,
                                             format!("Error: {}", message),
                                             false,
                                             false,
@@ -4455,6 +4744,8 @@ impl SqlEditorWidget {
                                 let _ = sender.send(QueryProgress::StatementStart { index });
                                 app::awake();
 
+                                let (heading_enabled, feedback_enabled) =
+                                    SqlEditorWidget::current_output_settings(&session);
                                 let mut buffered_rows: Vec<Vec<String>> = Vec::new();
                                 let mut last_flush = Instant::now();
                                 let statement_start = Instant::now();
@@ -4471,7 +4762,10 @@ impl SqlEditorWidget {
                                             .collect::<Vec<String>>();
                                         let _ = sender.send(QueryProgress::SelectStart {
                                             index,
-                                            columns: names,
+                                            columns: SqlEditorWidget::apply_heading_setting(
+                                                names,
+                                                heading_enabled,
+                                            ),
                                         });
                                         app::awake();
                                     },
@@ -4494,6 +4788,10 @@ impl SqlEditorWidget {
                                     },
                                 ) {
                                     Ok((mut query_result, was_cancelled)) => {
+                                        SqlEditorWidget::apply_heading_to_result(
+                                            &mut query_result,
+                                            heading_enabled,
+                                        );
                                         if timed_out {
                                             query_result.message =
                                                 SqlEditorWidget::timeout_message(query_timeout);
@@ -4502,6 +4800,9 @@ impl SqlEditorWidget {
                                         } else if was_cancelled {
                                             query_result.message = SqlEditorWidget::cancel_message();
                                             query_result.success = false;
+                                        }
+                                        if !feedback_enabled {
+                                            query_result.message.clear();
                                         }
                                         query_result
                                     }
@@ -4515,7 +4816,7 @@ impl SqlEditorWidget {
                                         } else {
                                             err.to_string()
                                         };
-                                        QueryResult::new_error(trimmed, &message)
+                                        QueryResult::new_error(&sql_text, &message)
                                     }
                                 };
 
@@ -4549,9 +4850,9 @@ impl SqlEditorWidget {
                                 }
                             } else {
                                 let sql_to_execute = if is_compiled_plsql {
-                                    SqlEditorWidget::ensure_plsql_terminator(trimmed)
+                                    SqlEditorWidget::ensure_plsql_terminator(&sql_text)
                                 } else {
-                                    trimmed.trim_end_matches(';').trim().to_string()
+                                    sql_text.trim_end_matches(';').trim().to_string()
                                 };
                                 let binds = match session.lock() {
                                     Ok(guard) => QueryExecutor::resolve_binds(&sql_to_execute, &guard),
@@ -4568,7 +4869,7 @@ impl SqlEditorWidget {
                                             &sender,
                                             &conn_name,
                                             result_index,
-                                            trimmed,
+                                            &sql_text,
                                             format!("Error: {}", message),
                                             false,
                                             false,
@@ -4602,7 +4903,7 @@ impl SqlEditorWidget {
                                         let index = result_index;
                                         let _ = sender.send(QueryProgress::StatementStart { index });
                                         app::awake();
-                                        let result = QueryResult::new_error(trimmed, &message);
+                                        let result = QueryResult::new_error(&sql_text, &message);
                                         let _ = sender.send(QueryProgress::StatementFinished {
                                             index,
                                             result,
@@ -4634,14 +4935,14 @@ impl SqlEditorWidget {
                                 let mut result = if let Some(statement_type) = dml_type {
                                     let affected_rows = stmt.row_count().unwrap_or(0);
                                     QueryResult::new_dml(
-                                        trimmed,
+                                        &sql_text,
                                         affected_rows,
                                         execution_time,
                                         statement_type,
                                     )
                                 } else {
                                     QueryResult {
-                                        sql: trimmed.to_string(),
+                                        sql: sql_text.to_string(),
                                         columns: vec![],
                                         rows: vec![],
                                         row_count: 0,
@@ -4728,7 +5029,7 @@ impl SqlEditorWidget {
                                 if auto_commit && result.success {
                                     if let Err(err) = conn.commit() {
                                         result = QueryResult::new_error(
-                                            trimmed,
+                                            &sql_text,
                                             &format!("Auto-commit failed: {}", err),
                                         );
                                     } else {
@@ -4750,18 +5051,24 @@ impl SqlEditorWidget {
                                 result_index += 1;
 
                                 if let Some(rows) = compile_errors {
+                                    let (heading_enabled, feedback_enabled) =
+                                        SqlEditorWidget::current_output_settings(&session);
                                     SqlEditorWidget::emit_select_result(
                                         &sender,
                                         &conn_name,
                                         result_index,
                                         "COMPILE ERRORS",
-                                        vec![
-                                            "LINE".to_string(),
-                                            "POSITION".to_string(),
-                                            "TEXT".to_string(),
-                                        ],
+                                        SqlEditorWidget::apply_heading_setting(
+                                            vec![
+                                                "LINE".to_string(),
+                                                "POSITION".to_string(),
+                                                "TEXT".to_string(),
+                                            ],
+                                            heading_enabled,
+                                        ),
                                         rows,
                                         false,
+                                        feedback_enabled,
                                     );
                                     result_index += 1;
                                 }
@@ -4821,6 +5128,34 @@ impl SqlEditorWidget {
         app::awake();
     }
 
+    fn current_output_settings(session: &Arc<Mutex<SessionState>>) -> (bool, bool) {
+        match session.lock() {
+            Ok(guard) => (guard.heading_enabled, guard.feedback_enabled),
+            Err(poisoned) => {
+                eprintln!("Warning: session state lock was poisoned; recovering.");
+                let guard = poisoned.into_inner();
+                (guard.heading_enabled, guard.feedback_enabled)
+            }
+        }
+    }
+
+    fn apply_heading_setting(column_names: Vec<String>, heading_enabled: bool) -> Vec<String> {
+        if heading_enabled {
+            column_names
+        } else {
+            column_names.into_iter().map(|_| String::new()).collect()
+        }
+    }
+
+    fn apply_heading_to_result(result: &mut QueryResult, heading_enabled: bool) {
+        if heading_enabled {
+            return;
+        }
+        for column in &mut result.columns {
+            column.name.clear();
+        }
+    }
+
     fn emit_select_result(
         sender: &mpsc::Sender<QueryProgress>,
         conn_name: &str,
@@ -4829,6 +5164,7 @@ impl SqlEditorWidget {
         column_names: Vec<String>,
         rows: Vec<Vec<String>>,
         success: bool,
+        feedback_enabled: bool,
     ) {
         let _ = sender.send(QueryProgress::StatementStart { index });
         app::awake();
@@ -4853,6 +5189,9 @@ impl SqlEditorWidget {
             .collect();
         let mut result = QueryResult::new_select(sql, column_info, rows, Duration::from_secs(0));
         result.success = success;
+        if !feedback_enabled {
+            result.message.clear();
+        }
         let _ = sender.send(QueryProgress::StatementFinished {
             index,
             result,
@@ -4860,6 +5199,203 @@ impl SqlEditorWidget {
             timed_out: false,
         });
         app::awake();
+    }
+
+    fn apply_define_substitution(
+        sql: &str,
+        binds_snapshot: &HashMap<String, BindVar>,
+    ) -> Result<String, String> {
+        let mut result = String::with_capacity(sql.len());
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
+        let mut in_q_quote = false;
+        let mut q_quote_end: Option<char> = None;
+
+        let chars: Vec<char> = sql.chars().collect();
+        let len = chars.len();
+        let mut i = 0usize;
+
+        while i < len {
+            let c = chars[i];
+            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
+            let next2 = if i + 2 < len { Some(chars[i + 2]) } else { None };
+
+            if in_line_comment {
+                result.push(c);
+                if c == '\n' {
+                    in_line_comment = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_block_comment {
+                result.push(c);
+                if c == '*' && next == Some('/') {
+                    result.push('/');
+                    in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_q_quote {
+                result.push(c);
+                if Some(c) == q_quote_end && next == Some('\'') {
+                    result.push('\'');
+                    in_q_quote = false;
+                    q_quote_end = None;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_single_quote {
+                result.push(c);
+                if c == '\'' {
+                    if next == Some('\'') {
+                        result.push('\'');
+                        i += 2;
+                        continue;
+                    }
+                    in_single_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_double_quote {
+                result.push(c);
+                if c == '"' {
+                    in_double_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if c == '-' && next == Some('-') {
+                result.push('-');
+                result.push('-');
+                in_line_comment = true;
+                i += 2;
+                continue;
+            }
+
+            if c == '/' && next == Some('*') {
+                result.push('/');
+                result.push('*');
+                in_block_comment = true;
+                i += 2;
+                continue;
+            }
+
+            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
+                let delimiter = chars[i + 2];
+                let closing = match delimiter {
+                    '(' => Some(')'),
+                    '[' => Some(']'),
+                    '{' => Some('}'),
+                    '<' => Some('>'),
+                    _ => Some(delimiter),
+                };
+                result.push(c);
+                result.push('\'');
+                result.push(delimiter);
+                in_q_quote = true;
+                q_quote_end = closing;
+                i += 3;
+                continue;
+            }
+
+            if c == '\'' {
+                result.push(c);
+                in_single_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if c == '"' {
+                result.push(c);
+                in_double_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if c == '&' {
+                let mut j = i + 1;
+                while j < len {
+                    let ch = chars[j];
+                    if ch.is_ascii_alphanumeric() || ch == '_' || ch == '$' || ch == '#' {
+                        j += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if j == i + 1 {
+                    result.push(c);
+                    i += 1;
+                    continue;
+                }
+
+                let name: String = chars[i + 1..j].iter().collect();
+                let key = SessionState::normalize_name(&name);
+                let bind = binds_snapshot.get(&key).ok_or_else(|| {
+                    format!("Substitution variable &{} is not defined.", name)
+                })?;
+
+                let formatted = SqlEditorWidget::format_define_value(&key, bind)?;
+                result.push_str(&formatted);
+                i = j;
+                continue;
+            }
+
+            result.push(c);
+            i += 1;
+        }
+
+        Ok(result)
+    }
+
+    fn format_define_value(name: &str, bind: &BindVar) -> Result<String, String> {
+        let BindValue::Scalar(value) = &bind.value else {
+            return Err(format!(
+                "Substitution variable &{} must be a scalar value.",
+                name
+            ));
+        };
+
+        let value = value.as_ref().ok_or_else(|| {
+            format!("Substitution variable &{} has no value.", name)
+        })?;
+
+        if value.eq_ignore_ascii_case("NULL") {
+            return Ok("NULL".to_string());
+        }
+
+        match bind.data_type {
+            crate::db::session::BindDataType::Number => Ok(value.clone()),
+            crate::db::session::BindDataType::Date
+            | crate::db::session::BindDataType::Timestamp(_)
+            | crate::db::session::BindDataType::Varchar2(_)
+            | crate::db::session::BindDataType::Clob => {
+                Ok(format!("'{}'", SqlEditorWidget::escape_sql_literal(value)))
+            }
+            crate::db::session::BindDataType::RefCursor => Err(format!(
+                "Substitution variable &{} cannot be a REFCURSOR.",
+                name
+            )),
+        }
+    }
+
+    fn escape_sql_literal(value: &str) -> String {
+        value.replace('\'', "''")
     }
 
     fn emit_dbms_output(
@@ -4897,14 +5433,20 @@ impl SqlEditorWidget {
             .map(|line| vec![line])
             .collect::<Vec<Vec<String>>>();
         let index = *result_index;
+        let (heading_enabled, feedback_enabled) =
+            SqlEditorWidget::current_output_settings(session);
         SqlEditorWidget::emit_select_result(
             sender,
             conn_name,
             index,
             "DBMS_OUTPUT",
-            vec!["DBMS_OUTPUT".to_string()],
+            SqlEditorWidget::apply_heading_setting(
+                vec!["DBMS_OUTPUT".to_string()],
+                heading_enabled,
+            ),
             rows,
             true,
+            feedback_enabled,
         );
         *result_index += 1;
         Ok(())

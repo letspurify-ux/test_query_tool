@@ -65,6 +65,11 @@ pub enum ToolCommand {
     Prompt { text: String },
     SetErrorContinue { enabled: bool },
     SetDefine { enabled: bool },
+    SetFeedback { enabled: bool },
+    SetHeading { enabled: bool },
+    SetPageSize { size: u32 },
+    SetLineSize { size: u32 },
+    RunScript { path: String, relative_to_caller: bool },
     Unsupported { raw: String, message: String, is_error: bool },
 }
 
@@ -925,6 +930,22 @@ impl QueryExecutor {
             return Some(Self::parse_define_command(trimmed));
         }
 
+        if upper.starts_with("SET FEEDBACK") {
+            return Some(Self::parse_feedback_command(trimmed));
+        }
+
+        if upper.starts_with("SET HEADING") {
+            return Some(Self::parse_heading_command(trimmed));
+        }
+
+        if upper.starts_with("SET PAGESIZE") {
+            return Some(Self::parse_pagesize_command(trimmed));
+        }
+
+        if upper.starts_with("SET LINESIZE") {
+            return Some(Self::parse_linesize_command(trimmed));
+        }
+
         if upper.starts_with("DEFINE") {
             return Some(ToolCommand::Unsupported {
                 raw: trimmed.to_string(),
@@ -942,11 +963,7 @@ impl QueryExecutor {
         }
 
         if trimmed.starts_with("@@") || trimmed.starts_with('@') {
-            return Some(ToolCommand::Unsupported {
-                raw: trimmed.to_string(),
-                message: "@file.sql is not supported in this editor.".to_string(),
-                is_error: true,
-            });
+            return Some(Self::parse_script_command(trimmed));
         }
 
         if upper.starts_with("WHENEVER SQLERROR") {
@@ -1127,6 +1144,118 @@ impl QueryExecutor {
                 message: "SET DEFINE supports only ON or OFF.".to_string(),
                 is_error: true,
             },
+        }
+    }
+
+    fn parse_feedback_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET FEEDBACK requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetFeedback { enabled: true },
+            "OFF" => ToolCommand::SetFeedback { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET FEEDBACK supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_heading_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET HEADING requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetHeading { enabled: true },
+            "OFF" => ToolCommand::SetHeading { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET HEADING supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_pagesize_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET PAGESIZE requires a number.".to_string(),
+                is_error: true,
+            };
+        }
+
+        match tokens[2].parse::<u32>() {
+            Ok(size) => ToolCommand::SetPageSize { size },
+            Err(_) => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET PAGESIZE requires a number.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_linesize_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET LINESIZE requires a number.".to_string(),
+                is_error: true,
+            };
+        }
+
+        match tokens[2].parse::<u32>() {
+            Ok(size) => ToolCommand::SetLineSize { size },
+            Err(_) => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET LINESIZE requires a number.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_script_command(raw: &str) -> ToolCommand {
+        let trimmed = raw.trim();
+        let relative_to_caller = trimmed.starts_with("@@");
+        let path = if relative_to_caller {
+            trimmed.trim_start_matches("@@").trim()
+        } else {
+            trimmed.trim_start_matches('@').trim()
+        };
+
+        if path.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "@file.sql requires a path.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let cleaned = path
+            .trim_matches('"')
+            .trim_matches('\'')
+            .to_string();
+
+        ToolCommand::RunScript {
+            path: cleaned,
+            relative_to_caller,
         }
     }
 
