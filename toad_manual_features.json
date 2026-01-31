@@ -1,1 +1,278 @@
-[]
+[
+  {
+    "name": "@",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Run a script file by name or extension, with optional arguments."
+  },
+  {
+    "name": "@@",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Run a script from the current script's relative path (nested script support)."
+  },
+  {
+    "name": "/",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Execute the current SQL buffer contents."
+  },
+  {
+    "name": "ACCEPT",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Prompt for user input and store it in a variable (supports HIDE for passwords)."
+  },
+  {
+    "name": "APPEND",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Append text to the end of the current line in the SQL buffer."
+  },
+  {
+    "name": "ARCHIVE LOG",
+    "category": "SQL*Plus Commands (DBA)",
+    "implemented": false,
+    "description": "Archive redo logs (requires DBA privileges)."
+  },
+  {
+    "name": "ATTRIBUTE",
+    "category": "SQL*Plus Commands (Misc)",
+    "implemented": false,
+    "description": "Set PL/SQL object attributes."
+  },
+  {
+    "name": "BREAK",
+    "category": "SQL*Plus Commands (Reporting)",
+    "implemented": false,
+    "description": "Define break formatting for report groups."
+  },
+  {
+    "name": "BTITLE",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Set the report bottom title or turn it off."
+  },
+  {
+    "name": "CHANGE",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Change text in the current line using a substitution pattern."
+  },
+  {
+    "name": "CLEAR",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Clear buffers, screen, timing, or formatting settings."
+  },
+  {
+    "name": "COLUMN",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Set output column formatting such as FORMAT or HEADING."
+  },
+  {
+    "name": "COMPUTE",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Compute aggregates per BREAK group (AVG, COUNT, MAX, MIN, SUM, etc.)."
+  },
+  {
+    "name": "CONNECT",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Connect to a database using credentials or OS authentication with optional role."
+  },
+  {
+    "name": "DEFINE",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Define or show substitution variables."
+  },
+  {
+    "name": "DEL",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Delete specified lines from the SQL buffer."
+  },
+  {
+    "name": "DESCRIBE",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Display the structure of a table, view, or procedure."
+  },
+  {
+    "name": "DISCONNECT",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Disconnect from the database while keeping the session open."
+  },
+  {
+    "name": "EDIT",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Edit the buffer or a file using an external editor."
+  },
+  {
+    "name": "EXECUTE",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Run a single PL/SQL statement."
+  },
+  {
+    "name": "EXIT",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Exit SQL*Plus with optional COMMIT or ROLLBACK."
+  },
+  {
+    "name": "GET",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Load a file into the SQL buffer."
+  },
+  {
+    "name": "HELP",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Show SQL*Plus command help or index."
+  },
+  {
+    "name": "HOST",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Execute an operating system command."
+  },
+  {
+    "name": "INPUT",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Insert a new line after the current line in the SQL buffer."
+  },
+  {
+    "name": "LIST",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "List the contents of the SQL buffer."
+  },
+  {
+    "name": "PAUSE",
+    "category": "SQL*Plus Commands (Misc)",
+    "implemented": true,
+    "description": "Pause execution after displaying a message."
+  },
+  {
+    "name": "PRINT",
+    "category": "SQL*Plus Commands (Misc)",
+    "implemented": false,
+    "description": "Display the value of a bind variable."
+  },
+  {
+    "name": "PROMPT",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Display a message on the screen."
+  },
+  {
+    "name": "RECOVER",
+    "category": "SQL*Plus Commands (DBA)",
+    "implemented": false,
+    "description": "Recover the database or datafiles (requires DBA privileges)."
+  },
+  {
+    "name": "REMARK",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Add a comment line that is ignored during execution."
+  },
+  {
+    "name": "REPFOOTER",
+    "category": "SQL*Plus Commands (Reporting)",
+    "implemented": false,
+    "description": "Define report footer formatting."
+  },
+  {
+    "name": "REPHEADER",
+    "category": "SQL*Plus Commands (Reporting)",
+    "implemented": false,
+    "description": "Define report header formatting."
+  },
+  {
+    "name": "RUN",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "List and execute the SQL buffer contents."
+  },
+  {
+    "name": "SAVE",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Save the SQL buffer to a file (CREATE/REPLACE/APPEND)."
+  },
+  {
+    "name": "SET",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Change SQL*Plus environment settings such as PAGESIZE, LINESIZE, or TIMING."
+  },
+  {
+    "name": "SHOW",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Show current settings, errors, or user information."
+  },
+  {
+    "name": "SHUTDOWN",
+    "category": "SQL*Plus Commands (DBA)",
+    "implemented": false,
+    "description": "Shut down the database instance (requires DBA privileges)."
+  },
+  {
+    "name": "SPOOL",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Write output to a file or stop spooling."
+  },
+  {
+    "name": "STARTUP",
+    "category": "SQL*Plus Commands (DBA)",
+    "implemented": false,
+    "description": "Start up the database instance (requires DBA privileges)."
+  },
+  {
+    "name": "STORE",
+    "category": "SQL*Plus Commands (Misc)",
+    "implemented": false,
+    "description": "Store current settings in a script file."
+  },
+  {
+    "name": "TIMING",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Measure elapsed time for commands (START/STOP/SHOW)."
+  },
+  {
+    "name": "TTITLE",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Set the report top title or turn it off."
+  },
+  {
+    "name": "UNDEFINE",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Remove a previously defined variable."
+  },
+  {
+    "name": "VARIABLE",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Declare a bind variable (NUMBER, CHAR, VARCHAR2, REFCURSOR, etc.)."
+  },
+  {
+    "name": "WHENEVER",
+    "category": "SQL*Plus Commands (Core)",
+    "implemented": false,
+    "description": "Specify action on SQLERROR or OSERROR (EXIT/CONTINUE with COMMIT/ROLLBACK)."
+  }
+]

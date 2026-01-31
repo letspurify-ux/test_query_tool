@@ -115,6 +115,9 @@ pub enum ToolCommand {
     BTitle {
         title: Option<String>,
     },
+    Pause {
+        message: Option<String>,
+    },
     SetErrorContinue {
         enabled: bool,
     },
@@ -1069,6 +1072,16 @@ impl QueryExecutor {
             return Some(ToolCommand::Prompt { text });
         }
 
+        if upper.starts_with("PAUSE") {
+            let text = trimmed[5..].trim();
+            let message = if text.is_empty() {
+                None
+            } else {
+                Some(text.to_string())
+            };
+            return Some(ToolCommand::Pause { message });
+        }
+
         if upper.starts_with("ACCEPT") {
             return Some(Self::parse_accept_command(trimmed));
         }
@@ -1258,8 +1271,8 @@ impl QueryExecutor {
     }
 
     fn parse_trimspool_command(raw: &str) -> ToolCommand {
-        Self::parse_toggle_command(raw, "SET TRIMSPOOL", |enabled| {
-            ToolCommand::SetTrimSpool { enabled }
+        Self::parse_toggle_command(raw, "SET TRIMSPOOL", |enabled| ToolCommand::SetTrimSpool {
+            enabled,
         })
     }
 
@@ -1473,7 +1486,11 @@ impl QueryExecutor {
         }
         let cleaned = rest.trim_matches('"').trim_matches('\'').to_string();
         ToolCommand::TTitle {
-            title: if cleaned.is_empty() { None } else { Some(cleaned) },
+            title: if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned)
+            },
         }
     }
 
@@ -1484,7 +1501,11 @@ impl QueryExecutor {
         }
         let cleaned = rest.trim_matches('"').trim_matches('\'').to_string();
         ToolCommand::BTitle {
-            title: if cleaned.is_empty() { None } else { Some(cleaned) },
+            title: if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned)
+            },
         }
     }
 
@@ -1536,7 +1557,11 @@ impl QueryExecutor {
     }
 
     fn parse_connect_command(raw: &str) -> ToolCommand {
-        let rest = raw.split_whitespace().skip(1).collect::<Vec<&str>>().join(" ");
+        let rest = raw
+            .split_whitespace()
+            .skip(1)
+            .collect::<Vec<&str>>()
+            .join(" ");
         if rest.trim().is_empty() {
             return ToolCommand::Unsupported {
                 raw: raw.to_string(),
@@ -3685,7 +3710,10 @@ impl ObjectBrowser {
         Self::get_object_list(conn, sql)
     }
 
-    pub fn get_sequence_info(conn: &Connection, seq_name: &str) -> Result<SequenceInfo, OracleError> {
+    pub fn get_sequence_info(
+        conn: &Connection,
+        seq_name: &str,
+    ) -> Result<SequenceInfo, OracleError> {
         let sql = r#"
             SELECT
                 sequence_name,
