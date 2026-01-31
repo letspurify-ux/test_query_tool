@@ -33,6 +33,7 @@ struct ScriptOutputTab {
 
 impl ResultTabsWidget {
     const TAB_HEADER_HEIGHT: i32 = 25;
+    const SCRIPT_OUTPUT_PADDING: i32 = 6;
 
     pub fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
         // Use explicit dimensions to avoid "center of requires the size of the
@@ -55,7 +56,12 @@ impl ResultTabsWidget {
         script_group.set_color(theme::panel_bg());
         script_group.set_label_color(theme::text_secondary());
         script_group.begin();
-        let mut script_display = TextDisplay::new(x, y, w, h, None);
+        let padding = Self::SCRIPT_OUTPUT_PADDING;
+        let display_x = x + padding;
+        let display_y = y + padding;
+        let display_w = (w - padding * 2).max(10);
+        let display_h = (h - padding * 2).max(10);
+        let mut script_display = TextDisplay::new(display_x, display_y, display_w, display_h, None);
         script_display.set_color(theme::panel_bg());
         script_display.set_text_color(theme::text_primary());
         script_display.set_text_font(fltk::enums::Font::Courier);
@@ -120,6 +126,12 @@ impl ResultTabsWidget {
         }
         self.clear_script_output();
         *self.active_index.borrow_mut() = None;
+        self.tabs.redraw();
+        let script_output = self.script_output.borrow();
+        let mut script_group = script_output.group.clone();
+        let mut script_display = script_output.display.clone();
+        script_group.redraw();
+        script_display.redraw();
     }
 
     pub fn tab_count(&self) -> usize {

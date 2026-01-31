@@ -643,15 +643,16 @@ impl ObjectBrowserWidget {
                     "Select Data (Top 100)|Generate DDL"
                 }
                 ObjectItem::Simple { object_type, .. }
-                    if object_type == "PROCEDURES"
-                        || object_type == "FUNCTIONS"
-                        || object_type == "SEQUENCES" =>
+                    if object_type == "PROCEDURES" || object_type == "FUNCTIONS" =>
                 {
                     if object_type == "PROCEDURES" {
                         "Execute Procedure|Generate DDL"
                     } else {
                         "Generate DDL"
                     }
+                }
+                ObjectItem::Simple { object_type, .. } if object_type == "SEQUENCES" => {
+                    "View Info|Generate DDL"
                 }
                 ObjectItem::PackageProcedure { .. } => {
                     "Execute Procedure"
@@ -749,6 +750,9 @@ impl ObjectBrowserWidget {
                         }
                         ("View Constraints", ObjectItem::Simple { object_name, .. }) => {
                             Self::show_table_constraints(db_conn.as_ref(), object_name);
+                        }
+                        ("View Info", ObjectItem::Simple { object_name, .. }) => {
+                            Self::show_sequence_info(db_conn.as_ref(), object_name);
                         }
                         (
                             "Generate DDL",
@@ -861,6 +865,27 @@ impl ObjectBrowserWidget {
             }
             Err(e) => {
                 fltk::dialog::alert_default(&format!("Failed to get constraints: {}", e));
+            }
+        }
+    }
+
+    fn show_sequence_info(conn: &oracle::Connection, sequence_name: &str) {
+        match ObjectBrowser::get_sequence_info(conn, sequence_name) {
+            Ok(info) => {
+                let mut details = format!("=== Sequence Info: {} ===\n\n", info.name);
+                details.push_str(&format!("{:<18} {}\n", "Min Value", info.min_value));
+                details.push_str(&format!("{:<18} {}\n", "Max Value", info.max_value));
+                details.push_str(&format!("{:<18} {}\n", "Increment By", info.increment_by));
+                details.push_str(&format!("{:<18} {}\n", "Cycle", info.cycle_flag));
+                details.push_str(&format!("{:<18} {}\n", "Order", info.order_flag));
+                details.push_str(&format!("{:<18} {}\n", "Cache Size", info.cache_size));
+                details.push_str(&format!("{:<18} {}\n", "Last Number", info.last_number));
+                details.push_str("\nNote: LAST_NUMBER is the next value to be generated.\n");
+
+                Self::show_info_dialog("Sequence Info", &details);
+            }
+            Err(e) => {
+                fltk::dialog::alert_default(&format!("Failed to get sequence info: {}", e));
             }
         }
     }

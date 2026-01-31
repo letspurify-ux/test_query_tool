@@ -3365,6 +3365,18 @@ impl QueryExecutor {
 
 pub struct ObjectBrowser;
 
+#[derive(Debug, Clone)]
+pub struct SequenceInfo {
+    pub name: String,
+    pub min_value: i64,
+    pub max_value: i64,
+    pub increment_by: i64,
+    pub cycle_flag: String,
+    pub order_flag: String,
+    pub cache_size: i64,
+    pub last_number: i64,
+}
+
 impl ObjectBrowser {
     pub fn get_tables(conn: &Connection) -> Result<Vec<String>, OracleError> {
         let sql = "SELECT table_name FROM user_tables ORDER BY table_name";
@@ -3389,6 +3401,56 @@ impl ObjectBrowser {
     pub fn get_sequences(conn: &Connection) -> Result<Vec<String>, OracleError> {
         let sql = "SELECT sequence_name FROM user_sequences ORDER BY sequence_name";
         Self::get_object_list(conn, sql)
+    }
+
+    pub fn get_sequence_info(conn: &Connection, seq_name: &str) -> Result<SequenceInfo, OracleError> {
+        let sql = r#"
+            SELECT
+                sequence_name,
+                min_value,
+                max_value,
+                increment_by,
+                cycle_flag,
+                order_flag,
+                cache_size,
+                last_number
+            FROM user_sequences
+            WHERE sequence_name = :1
+        "#;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let row = match stmt.query_row(&[&seq_name.to_uppercase()]) {
+            Ok(row) => row,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+
+        let name: String = row.get(0)?;
+        let min_value: i64 = row.get(1)?;
+        let max_value: i64 = row.get(2)?;
+        let increment_by: i64 = row.get(3)?;
+        let cycle_flag: String = row.get(4)?;
+        let order_flag: String = row.get(5)?;
+        let cache_size: i64 = row.get(6)?;
+        let last_number: i64 = row.get(7)?;
+
+        Ok(SequenceInfo {
+            name,
+            min_value,
+            max_value,
+            increment_by,
+            cycle_flag,
+            order_flag,
+            cache_size,
+            last_number,
+        })
     }
 
     pub fn get_packages(conn: &Connection) -> Result<Vec<String>, OracleError> {

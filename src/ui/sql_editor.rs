@@ -1923,7 +1923,7 @@ impl SqlEditorWidget {
     }
 
     pub fn execute_sql_text(&self, sql: &str) {
-        self.execute_sql(sql);
+        self.execute_sql(sql, false);
     }
 
     pub fn focus(&mut self) {
@@ -1933,7 +1933,7 @@ impl SqlEditorWidget {
 
     pub fn execute_current(&self) {
         let sql = self.buffer.text();
-        self.execute_sql(&sql);
+        self.execute_sql(&sql, true);
     }
 
     pub fn execute_statement_at_cursor(&self) {
@@ -1946,11 +1946,11 @@ impl SqlEditorWidget {
                     .iter()
                     .find(|item| matches!(item, ScriptItem::Statement(_)))
                 {
-                    self.execute_sql(stmt);
+                    self.execute_sql(stmt, false);
                     return;
                 }
             }
-            self.execute_sql(&statement);
+            self.execute_sql(&statement, false);
         } else {
             fltk::dialog::alert_default("No SQL at cursor");
         }
@@ -1966,7 +1966,7 @@ impl SqlEditorWidget {
         let selection = buffer.selection_position();
         let insert_pos = self.editor.insert_position();
         let sql = buffer.selection_text();
-        self.execute_sql(&sql);
+        self.execute_sql(&sql, false);
         if let Some((start, end)) = selection {
             buffer.select(start, end);
             let mut editor = self.editor.clone();
@@ -3419,7 +3419,7 @@ impl SqlEditorWidget {
         tokens
     }
 
-    fn execute_sql(&self, sql: &str) {
+    fn execute_sql(&self, sql: &str, script_mode: bool) {
         if sql.trim().is_empty() {
             return;
         }
@@ -3445,6 +3445,7 @@ impl SqlEditorWidget {
             let conn = db_conn.clone();
             let session = conn_guard.session_state();
             let query_running = self.query_running.clone();
+            let script_mode = script_mode;
 
             *query_running.borrow_mut() = true;
 
@@ -3470,13 +3471,17 @@ impl SqlEditorWidget {
 
                 let previous_timeout = conn.call_timeout().unwrap_or(None);
                 if let Err(err) = conn.set_call_timeout(query_timeout) {
-                    SqlEditorWidget::append_spool_output(&session, &[err.to_string()]);
-                    let _ = sender.send(QueryProgress::StatementFinished {
-                        index: 0,
-                        result: QueryResult::new_error(&sql_text, &err.to_string()),
-                        connection_name: conn_name.clone(),
-                        timed_out: false,
-                    });
+                    if script_mode {
+                        SqlEditorWidget::emit_script_lines(&sender, &session, &err.to_string());
+                    } else {
+                        SqlEditorWidget::append_spool_output(&session, &[err.to_string()]);
+                        let _ = sender.send(QueryProgress::StatementFinished {
+                            index: 0,
+                            result: QueryResult::new_error(&sql_text, &err.to_string()),
+                            connection_name: conn_name.clone(),
+                            timed_out: false,
+                        });
+                    }
                     let _ = sender.send(QueryProgress::BatchFinished);
                     app::awake();
                     let _ = conn.set_call_timeout(previous_timeout);
@@ -3518,17 +3523,21 @@ impl SqlEditorWidget {
                             match command {
                                 ToolCommand::Var { name, data_type } => {
                                     let normalized = SessionState::normalize_name(&name);
-                                    let mut guard = match session.lock() {
-                                        Ok(guard) => guard,
-                                        Err(poisoned) => {
-                                            eprintln!("Warning: session state lock was poisoned; recovering.");
-                                            poisoned.into_inner()
-                                        }
-                                    };
-                                    guard.binds.insert(
-                                        normalized.clone(),
-                                        BindVar::new(data_type.clone()),
-                                    );
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.binds.insert(
+                                            normalized.clone(),
+                                            BindVar::new(data_type.clone()),
+                                        );
+                                    }
                                     let message = format!(
                                         "Variable :{} declared as {}",
                                         normalized,
@@ -3961,14 +3970,18 @@ impl SqlEditorWidget {
                                     );
                                 }
                                 ToolCommand::SetErrorContinue { enabled } => {
-                                    let mut guard = match session.lock() {
-                                        Ok(guard) => guard,
-                                        Err(poisoned) => {
-                                            eprintln!("Warning: session state lock was poisoned; recovering.");
-                                            poisoned.into_inner()
-                                        }
-                                    };
-                                    guard.continue_on_error = enabled;
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.continue_on_error = enabled;
+                                    }
                                     continue_on_error = enabled;
 
                                     SqlEditorWidget::emit_script_message(
@@ -3982,14 +3995,18 @@ impl SqlEditorWidget {
                                     );
                                 }
                                 ToolCommand::SetDefine { enabled } => {
-                                    let mut guard = match session.lock() {
-                                        Ok(guard) => guard,
-                                        Err(poisoned) => {
-                                            eprintln!("Warning: session state lock was poisoned; recovering.");
-                                            poisoned.into_inner()
-                                        }
-                                    };
-                                    guard.define_enabled = enabled;
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.define_enabled = enabled;
+                                    }
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
                                         &session,
@@ -3998,14 +4015,18 @@ impl SqlEditorWidget {
                                     );
                                 }
                                 ToolCommand::SetFeedback { enabled } => {
-                                    let mut guard = match session.lock() {
-                                        Ok(guard) => guard,
-                                        Err(poisoned) => {
-                                            eprintln!("Warning: session state lock was poisoned; recovering.");
-                                            poisoned.into_inner()
-                                        }
-                                    };
-                                    guard.feedback_enabled = enabled;
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.feedback_enabled = enabled;
+                                    }
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
                                         &session,
@@ -4014,14 +4035,18 @@ impl SqlEditorWidget {
                                     );
                                 }
                                 ToolCommand::SetHeading { enabled } => {
-                                    let mut guard = match session.lock() {
-                                        Ok(guard) => guard,
-                                        Err(poisoned) => {
-                                            eprintln!("Warning: session state lock was poisoned; recovering.");
-                                            poisoned.into_inner()
-                                        }
-                                    };
-                                    guard.heading_enabled = enabled;
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.heading_enabled = enabled;
+                                    }
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
                                         &session,
@@ -4030,14 +4055,18 @@ impl SqlEditorWidget {
                                     );
                                 }
                                 ToolCommand::SetPageSize { size } => {
-                                    let mut guard = match session.lock() {
-                                        Ok(guard) => guard,
-                                        Err(poisoned) => {
-                                            eprintln!("Warning: session state lock was poisoned; recovering.");
-                                            poisoned.into_inner()
-                                        }
-                                    };
-                                    guard.pagesize = size;
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.pagesize = size;
+                                    }
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
                                         &session,
@@ -4046,14 +4075,18 @@ impl SqlEditorWidget {
                                     );
                                 }
                                 ToolCommand::SetLineSize { size } => {
-                                    let mut guard = match session.lock() {
-                                        Ok(guard) => guard,
-                                        Err(poisoned) => {
-                                            eprintln!("Warning: session state lock was poisoned; recovering.");
-                                            poisoned.into_inner()
-                                        }
-                                    };
-                                    guard.linesize = size;
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.linesize = size;
+                                    }
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
                                         &session,
@@ -4096,14 +4129,18 @@ impl SqlEditorWidget {
                                     }
                                 },
                                 ToolCommand::WheneverSqlError { exit } => {
-                                    let mut guard = match session.lock() {
-                                        Ok(guard) => guard,
-                                        Err(poisoned) => {
-                                            eprintln!("Warning: session state lock was poisoned; recovering.");
-                                            poisoned.into_inner()
-                                        }
-                                    };
-                                    guard.continue_on_error = !exit;
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.continue_on_error = !exit;
+                                    }
                                     continue_on_error = !exit;
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
@@ -4214,7 +4251,7 @@ impl SqlEditorWidget {
                                 ) {
                                     Ok(updated) => sql_text = updated,
                                     Err(message) => {
-                                        SqlEditorWidget::emit_non_select_result(
+                                        let emitted = SqlEditorWidget::emit_non_select_result(
                                             &sender,
                                             &session,
                                             &conn_name,
@@ -4223,8 +4260,11 @@ impl SqlEditorWidget {
                                             format!("Error: {}", message),
                                             false,
                                             false,
+                                            script_mode,
                                         );
-                                        result_index += 1;
+                                        if emitted {
+                                            result_index += 1;
+                                        }
                                         if !continue_on_error {
                                             stop_execution = true;
                                         }
@@ -4255,23 +4295,31 @@ impl SqlEditorWidget {
                                     }
                                 };
                                 let result_success = result.success;
-                                let index = result_index;
-                                let _ = sender.send(QueryProgress::StatementStart { index });
-                                app::awake();
-                                if !result.message.trim().is_empty() {
-                                    SqlEditorWidget::append_spool_output(
+                                if script_mode {
+                                    SqlEditorWidget::emit_script_lines(
+                                        &sender,
                                         &session,
-                                        &[result.message.clone()],
+                                        &result.message,
                                     );
+                                } else {
+                                    let index = result_index;
+                                    let _ = sender.send(QueryProgress::StatementStart { index });
+                                    app::awake();
+                                    if !result.message.trim().is_empty() {
+                                        SqlEditorWidget::append_spool_output(
+                                            &session,
+                                            &[result.message.clone()],
+                                        );
+                                    }
+                                    let _ = sender.send(QueryProgress::StatementFinished {
+                                        index,
+                                        result,
+                                        connection_name: conn_name.clone(),
+                                        timed_out,
+                                    });
+                                    app::awake();
+                                    result_index += 1;
                                 }
-                                let _ = sender.send(QueryProgress::StatementFinished {
-                                    index,
-                                    result,
-                                    connection_name: conn_name.clone(),
-                                    timed_out,
-                                });
-                                app::awake();
-                                result_index += 1;
                                 if timed_out {
                                     stop_execution = true;
                                 } else if !result_success && !continue_on_error {
@@ -4299,23 +4347,31 @@ impl SqlEditorWidget {
                                     }
                                 };
                                 let result_success = result.success;
-                                let index = result_index;
-                                let _ = sender.send(QueryProgress::StatementStart { index });
-                                app::awake();
-                                if !result.message.trim().is_empty() {
-                                    SqlEditorWidget::append_spool_output(
+                                if script_mode {
+                                    SqlEditorWidget::emit_script_lines(
+                                        &sender,
                                         &session,
-                                        &[result.message.clone()],
+                                        &result.message,
                                     );
+                                } else {
+                                    let index = result_index;
+                                    let _ = sender.send(QueryProgress::StatementStart { index });
+                                    app::awake();
+                                    if !result.message.trim().is_empty() {
+                                        SqlEditorWidget::append_spool_output(
+                                            &session,
+                                            &[result.message.clone()],
+                                        );
+                                    }
+                                    let _ = sender.send(QueryProgress::StatementFinished {
+                                        index,
+                                        result,
+                                        connection_name: conn_name.clone(),
+                                        timed_out,
+                                    });
+                                    app::awake();
+                                    result_index += 1;
                                 }
-                                let _ = sender.send(QueryProgress::StatementFinished {
-                                    index,
-                                    result,
-                                    connection_name: conn_name.clone(),
-                                    timed_out,
-                                });
-                                app::awake();
-                                result_index += 1;
                                 if timed_out {
                                     stop_execution = true;
                                 } else if !result_success && !continue_on_error {
@@ -4344,7 +4400,7 @@ impl SqlEditorWidget {
                                 if let Err(message) =
                                     QueryExecutor::check_named_positional_mix(&sql_text)
                                 {
-                                    SqlEditorWidget::emit_non_select_result(
+                                    let emitted = SqlEditorWidget::emit_non_select_result(
                                         &sender,
                                         &session,
                                         &conn_name,
@@ -4353,8 +4409,11 @@ impl SqlEditorWidget {
                                         format!("Error: {}", message),
                                         false,
                                         false,
+                                        script_mode,
                                     );
-                                    result_index += 1;
+                                    if emitted {
+                                        result_index += 1;
+                                    }
                                     if !continue_on_error {
                                         stop_execution = true;
                                     }
@@ -4391,7 +4450,7 @@ impl SqlEditorWidget {
                                 let binds = match binds {
                                     Ok(binds) => binds,
                                     Err(message) => {
-                                        SqlEditorWidget::emit_non_select_result(
+                                        let emitted = SqlEditorWidget::emit_non_select_result(
                                             &sender,
                                             &session,
                                             &conn_name,
@@ -4400,8 +4459,11 @@ impl SqlEditorWidget {
                                             format!("Error: {}", message),
                                             false,
                                             false,
+                                            script_mode,
                                         );
-                                        result_index += 1;
+                                        if emitted {
+                                            result_index += 1;
+                                        }
                                         if !continue_on_error {
                                             stop_execution = true;
                                         }
@@ -4427,23 +4489,32 @@ impl SqlEditorWidget {
                                         } else {
                                             err.to_string()
                                         };
-                                        let index = result_index;
-                                        let _ =
-                                            sender.send(QueryProgress::StatementStart { index });
-                                        app::awake();
-                                        SqlEditorWidget::append_spool_output(
-                                            &session,
-                                            &[message.clone()],
-                                        );
-                                        let result = QueryResult::new_error(&sql_text, &message);
-                                        let _ = sender.send(QueryProgress::StatementFinished {
-                                            index,
-                                            result,
-                                            connection_name: conn_name.clone(),
-                                            timed_out,
-                                        });
-                                        app::awake();
-                                        result_index += 1;
+                                        if script_mode {
+                                            SqlEditorWidget::emit_script_lines(
+                                                &sender,
+                                                &session,
+                                                &message,
+                                            );
+                                        } else {
+                                            let index = result_index;
+                                            let _ = sender
+                                                .send(QueryProgress::StatementStart { index });
+                                            app::awake();
+                                            SqlEditorWidget::append_spool_output(
+                                                &session,
+                                                &[message.clone()],
+                                            );
+                                            let result =
+                                                QueryResult::new_error(&sql_text, &message);
+                                            let _ = sender.send(QueryProgress::StatementFinished {
+                                                index,
+                                                result,
+                                                connection_name: conn_name.clone(),
+                                                timed_out,
+                                            });
+                                            app::awake();
+                                            result_index += 1;
+                                        }
                                         if timed_out || cancelled || !continue_on_error {
                                             stop_execution = true;
                                         }
@@ -4507,23 +4578,31 @@ impl SqlEditorWidget {
                                     }
                                 }
 
-                                let index = result_index;
-                                let _ = sender.send(QueryProgress::StatementStart { index });
-                                app::awake();
-                                if !result.message.trim().is_empty() {
-                                    SqlEditorWidget::append_spool_output(
+                                if script_mode {
+                                    SqlEditorWidget::emit_script_lines(
+                                        &sender,
                                         &session,
-                                        &[result.message.clone()],
+                                        &result.message,
                                     );
+                                } else {
+                                    let index = result_index;
+                                    let _ = sender.send(QueryProgress::StatementStart { index });
+                                    app::awake();
+                                    if !result.message.trim().is_empty() {
+                                        SqlEditorWidget::append_spool_output(
+                                            &session,
+                                            &[result.message.clone()],
+                                        );
+                                    }
+                                    let _ = sender.send(QueryProgress::StatementFinished {
+                                        index,
+                                        result: result.clone(),
+                                        connection_name: conn_name.clone(),
+                                        timed_out,
+                                    });
+                                    app::awake();
+                                    result_index += 1;
                                 }
-                                let _ = sender.send(QueryProgress::StatementFinished {
-                                    index,
-                                    result: result.clone(),
-                                    connection_name: conn_name.clone(),
-                                    timed_out,
-                                });
-                                app::awake();
-                                result_index += 1;
 
                                 let ref_cursors = QueryExecutor::extract_ref_cursors(&stmt, &binds)
                                     .unwrap_or_default();
@@ -4884,7 +4963,7 @@ impl SqlEditorWidget {
                                 let binds = match binds {
                                     Ok(binds) => binds,
                                     Err(message) => {
-                                        SqlEditorWidget::emit_non_select_result(
+                                        let emitted = SqlEditorWidget::emit_non_select_result(
                                             &sender,
                                             &session,
                                             &conn_name,
@@ -4893,8 +4972,11 @@ impl SqlEditorWidget {
                                             format!("Error: {}", message),
                                             false,
                                             false,
+                                            script_mode,
                                         );
-                                        result_index += 1;
+                                        if emitted {
+                                            result_index += 1;
+                                        }
                                         if !continue_on_error {
                                             stop_execution = true;
                                         }
@@ -5059,7 +5141,7 @@ impl SqlEditorWidget {
                                 let binds = match binds {
                                     Ok(binds) => binds,
                                     Err(message) => {
-                                        SqlEditorWidget::emit_non_select_result(
+                                        let emitted = SqlEditorWidget::emit_non_select_result(
                                             &sender,
                                             &session,
                                             &conn_name,
@@ -5068,8 +5150,11 @@ impl SqlEditorWidget {
                                             format!("Error: {}", message),
                                             false,
                                             false,
+                                            script_mode,
                                         );
-                                        result_index += 1;
+                                        if emitted {
+                                            result_index += 1;
+                                        }
                                         if !continue_on_error {
                                             stop_execution = true;
                                         }
@@ -5095,19 +5180,28 @@ impl SqlEditorWidget {
                                         } else {
                                             err.to_string()
                                         };
-                                        let index = result_index;
-                                        let _ =
-                                            sender.send(QueryProgress::StatementStart { index });
-                                        app::awake();
-                                        let result = QueryResult::new_error(&sql_text, &message);
-                                        let _ = sender.send(QueryProgress::StatementFinished {
-                                            index,
-                                            result,
-                                            connection_name: conn_name.clone(),
-                                            timed_out,
-                                        });
-                                        app::awake();
-                                        result_index += 1;
+                                        if script_mode {
+                                            SqlEditorWidget::emit_script_lines(
+                                                &sender,
+                                                &session,
+                                                &message,
+                                            );
+                                        } else {
+                                            let index = result_index;
+                                            let _ =
+                                                sender.send(QueryProgress::StatementStart { index });
+                                            app::awake();
+                                            let result =
+                                                QueryResult::new_error(&sql_text, &message);
+                                            let _ = sender.send(QueryProgress::StatementFinished {
+                                                index,
+                                                result,
+                                                connection_name: conn_name.clone(),
+                                                timed_out,
+                                            });
+                                            app::awake();
+                                            result_index += 1;
+                                        }
                                         if timed_out || cancelled || !continue_on_error {
                                             stop_execution = true;
                                         }
@@ -5237,23 +5331,31 @@ impl SqlEditorWidget {
                                     }
                                 }
 
-                                let index = result_index;
-                                let _ = sender.send(QueryProgress::StatementStart { index });
-                                app::awake();
-                                if !result.message.trim().is_empty() {
-                                    SqlEditorWidget::append_spool_output(
+                                if script_mode {
+                                    SqlEditorWidget::emit_script_lines(
+                                        &sender,
                                         &session,
-                                        &[result.message.clone()],
+                                        &result.message,
                                     );
+                                } else {
+                                    let index = result_index;
+                                    let _ = sender.send(QueryProgress::StatementStart { index });
+                                    app::awake();
+                                    if !result.message.trim().is_empty() {
+                                        SqlEditorWidget::append_spool_output(
+                                            &session,
+                                            &[result.message.clone()],
+                                        );
+                                    }
+                                    let _ = sender.send(QueryProgress::StatementFinished {
+                                        index,
+                                        result: result.clone(),
+                                        connection_name: conn_name.clone(),
+                                        timed_out,
+                                    });
+                                    app::awake();
+                                    result_index += 1;
                                 }
-                                let _ = sender.send(QueryProgress::StatementFinished {
-                                    index,
-                                    result: result.clone(),
-                                    connection_name: conn_name.clone(),
-                                    timed_out,
-                                });
-                                app::awake();
-                                result_index += 1;
 
                                 if let Some(rows) = compile_errors {
                                     let (heading_enabled, feedback_enabled) =
@@ -5313,7 +5415,13 @@ impl SqlEditorWidget {
         message: String,
         success: bool,
         timed_out: bool,
-    ) {
+        script_mode: bool,
+    ) -> bool {
+        if script_mode {
+            SqlEditorWidget::emit_script_lines(sender, session, &message);
+            return false;
+        }
+
         let _ = sender.send(QueryProgress::StatementStart { index });
         app::awake();
         if !message.trim().is_empty() {
@@ -5336,6 +5444,7 @@ impl SqlEditorWidget {
             timed_out,
         });
         app::awake();
+        true
     }
 
     fn current_output_settings(session: &Arc<Mutex<SessionState>>) -> (bool, bool) {
@@ -5430,6 +5539,18 @@ impl SqlEditorWidget {
         SqlEditorWidget::append_spool_output(session, &lines);
         let _ = sender.send(QueryProgress::ScriptOutput { lines });
         app::awake();
+    }
+
+    fn emit_script_lines(
+        sender: &mpsc::Sender<QueryProgress>,
+        session: &Arc<Mutex<SessionState>>,
+        message: &str,
+    ) {
+        let lines: Vec<String> = message.lines().map(|line| line.to_string()).collect();
+        if lines.is_empty() {
+            return;
+        }
+        SqlEditorWidget::emit_script_output(sender, session, lines);
     }
 
     fn emit_script_message(
