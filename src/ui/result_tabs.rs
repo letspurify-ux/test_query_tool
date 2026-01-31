@@ -7,8 +7,8 @@ use fltk::{
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::ui::ResultTableWidget;
 use crate::ui::theme;
+use crate::ui::ResultTableWidget;
 
 #[derive(Clone)]
 pub struct ResultTabsWidget {
@@ -85,9 +85,7 @@ impl ResultTabsWidget {
                     return;
                 }
                 let data = data_for_cb.borrow();
-                let index = data
-                    .iter()
-                    .position(|tab| tab.group.as_widget_ptr() == ptr);
+                let index = data.iter().position(|tab| tab.group.as_widget_ptr() == ptr);
                 *active_for_cb.borrow_mut() = index;
             }
         });
@@ -129,7 +127,7 @@ impl ResultTabsWidget {
     }
 
     pub fn append_script_output_lines(&mut self, lines: &[String]) {
-        let script_output = self.script_output.borrow();
+        let mut script_output = self.script_output.borrow_mut();
         let mut buffer = script_output.buffer.clone();
         if lines.is_empty() {
             return;
@@ -145,10 +143,8 @@ impl ResultTabsWidget {
             }
         }
         buffer.append("\n");
-        script_output.display.scroll(
-            script_output.display.count_lines(0, buffer.length(), true),
-            0,
-        );
+        let line_count = script_output.display.count_lines(0, buffer.length(), true);
+        script_output.display.scroll(line_count, 0);
     }
 
     pub fn start_statement(&mut self, index: usize, label: &str) {

@@ -1,5 +1,6 @@
 use oracle::sql_type::OracleType;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub enum BindDataType {
@@ -45,6 +46,7 @@ pub struct CompiledObject {
 #[derive(Debug, Clone)]
 pub struct SessionState {
     pub binds: HashMap<String, BindVar>,
+    pub define_vars: HashMap<String, String>,
     pub server_output: ServerOutputConfig,
     pub last_compiled: Option<CompiledObject>,
     pub continue_on_error: bool,
@@ -53,6 +55,8 @@ pub struct SessionState {
     pub heading_enabled: bool,
     pub pagesize: u32,
     pub linesize: u32,
+    pub spool_path: Option<PathBuf>,
+    pub spool_truncate: bool,
 }
 
 impl Default for ServerOutputConfig {
@@ -68,6 +72,7 @@ impl Default for SessionState {
     fn default() -> Self {
         Self {
             binds: HashMap::new(),
+            define_vars: HashMap::new(),
             server_output: ServerOutputConfig::default(),
             last_compiled: None,
             continue_on_error: false,
@@ -76,6 +81,8 @@ impl Default for SessionState {
             heading_enabled: true,
             pagesize: 14,
             linesize: 80,
+            spool_path: None,
+            spool_truncate: false,
         }
     }
 }
@@ -116,9 +123,7 @@ impl BindVar {
 
 impl SessionState {
     pub fn normalize_name(name: &str) -> String {
-        name.trim()
-            .trim_start_matches(':')
-            .to_uppercase()
+        name.trim().trim_start_matches(':').to_uppercase()
     }
 
     pub fn reset(&mut self) {
