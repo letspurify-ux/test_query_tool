@@ -3473,6 +3473,14 @@ impl SqlEditorWidget {
                 if let Err(err) = conn.set_call_timeout(query_timeout) {
                     if script_mode {
                         SqlEditorWidget::emit_script_lines(&sender, &session, &err.to_string());
+                        let result = QueryResult::new_error(&sql_text, &err.to_string());
+                        SqlEditorWidget::emit_script_result(
+                            &sender,
+                            &conn_name,
+                            0,
+                            result,
+                            false,
+                        );
                     } else {
                         SqlEditorWidget::append_spool_output(&session, &[err.to_string()]);
                         let _ = sender.send(QueryProgress::StatementFinished {
@@ -4301,6 +4309,13 @@ impl SqlEditorWidget {
                                         &session,
                                         &result.message,
                                     );
+                                    SqlEditorWidget::emit_script_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        result,
+                                        timed_out,
+                                    );
                                 } else {
                                     let index = result_index;
                                     let _ = sender.send(QueryProgress::StatementStart { index });
@@ -4352,6 +4367,13 @@ impl SqlEditorWidget {
                                         &sender,
                                         &session,
                                         &result.message,
+                                    );
+                                    SqlEditorWidget::emit_script_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        result,
+                                        timed_out,
                                     );
                                 } else {
                                     let index = result_index;
@@ -4495,6 +4517,15 @@ impl SqlEditorWidget {
                                                 &session,
                                                 &message,
                                             );
+                                            let result =
+                                                QueryResult::new_error(&sql_text, &message);
+                                            SqlEditorWidget::emit_script_result(
+                                                &sender,
+                                                &conn_name,
+                                                result_index,
+                                                result,
+                                                timed_out,
+                                            );
                                         } else {
                                             let index = result_index;
                                             let _ = sender
@@ -4583,6 +4614,13 @@ impl SqlEditorWidget {
                                         &sender,
                                         &session,
                                         &result.message,
+                                    );
+                                    SqlEditorWidget::emit_script_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        result.clone(),
+                                        timed_out,
                                     );
                                 } else {
                                     let index = result_index;
@@ -5186,6 +5224,15 @@ impl SqlEditorWidget {
                                                 &session,
                                                 &message,
                                             );
+                                            let result =
+                                                QueryResult::new_error(&sql_text, &message);
+                                            SqlEditorWidget::emit_script_result(
+                                                &sender,
+                                                &conn_name,
+                                                result_index,
+                                                result,
+                                                timed_out,
+                                            );
                                         } else {
                                             let index = result_index;
                                             let _ =
@@ -5337,6 +5384,13 @@ impl SqlEditorWidget {
                                         &session,
                                         &result.message,
                                     );
+                                    SqlEditorWidget::emit_script_result(
+                                        &sender,
+                                        &conn_name,
+                                        result_index,
+                                        result.clone(),
+                                        timed_out,
+                                    );
                                 } else {
                                     let index = result_index;
                                     let _ = sender.send(QueryProgress::StatementStart { index });
@@ -5419,6 +5473,17 @@ impl SqlEditorWidget {
     ) -> bool {
         if script_mode {
             SqlEditorWidget::emit_script_lines(sender, session, &message);
+            let result = QueryResult {
+                sql: sql.to_string(),
+                columns: vec![],
+                rows: vec![],
+                row_count: 0,
+                execution_time: Duration::from_secs(0),
+                message,
+                is_select: false,
+                success,
+            };
+            SqlEditorWidget::emit_script_result(sender, conn_name, index, result, timed_out);
             return false;
         }
 
@@ -5445,6 +5510,22 @@ impl SqlEditorWidget {
         });
         app::awake();
         true
+    }
+
+    fn emit_script_result(
+        sender: &mpsc::Sender<QueryProgress>,
+        conn_name: &str,
+        index: usize,
+        result: QueryResult,
+        timed_out: bool,
+    ) {
+        let _ = sender.send(QueryProgress::StatementFinished {
+            index,
+            result,
+            connection_name: conn_name.to_string(),
+            timed_out,
+        });
+        app::awake();
     }
 
     fn current_output_settings(session: &Arc<Mutex<SessionState>>) -> (bool, bool) {

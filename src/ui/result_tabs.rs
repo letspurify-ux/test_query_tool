@@ -126,6 +126,11 @@ impl ResultTabsWidget {
         }
         self.clear_script_output();
         *self.active_index.borrow_mut() = None;
+        let script_group = {
+            let script_output = self.script_output.borrow();
+            script_output.group.clone()
+        };
+        let _ = self.tabs.set_value(&script_group);
         self.tabs.redraw();
         let script_output = self.script_output.borrow();
         let mut script_group = script_output.group.clone();
