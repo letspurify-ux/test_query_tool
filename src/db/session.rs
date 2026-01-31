@@ -48,6 +48,11 @@ pub struct SessionState {
     pub server_output: ServerOutputConfig,
     pub last_compiled: Option<CompiledObject>,
     pub continue_on_error: bool,
+    pub define_enabled: bool,
+    pub feedback_enabled: bool,
+    pub heading_enabled: bool,
+    pub pagesize: u32,
+    pub linesize: u32,
 }
 
 impl Default for ServerOutputConfig {
@@ -66,6 +71,11 @@ impl Default for SessionState {
             server_output: ServerOutputConfig::default(),
             last_compiled: None,
             continue_on_error: false,
+            define_enabled: true,
+            feedback_enabled: true,
+            heading_enabled: true,
+            pagesize: 14,
+            linesize: 80,
         }
     }
 }
