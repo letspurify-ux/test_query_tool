@@ -484,15 +484,16 @@ impl StatementBuilder {
                 continue;
             }
 
-            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
-                let delimiter = next2.unwrap();
-                self.state.flush_token();
-                self.state.start_q_quote(delimiter);
-                self.current.push(c);
-                self.current.push('\'');
-                self.current.push(delimiter);
-                i += 3;
-                continue;
+            if (c == 'q' || c == 'Q') && next == Some('\'') {
+                if let Some(delimiter) = next2 {
+                    self.state.flush_token();
+                    self.state.start_q_quote(delimiter);
+                    self.current.push(c);
+                    self.current.push('\'');
+                    self.current.push(delimiter);
+                    i += 3;
+                    continue;
+                }
             }
 
             if c == '\'' {
@@ -1615,18 +1616,19 @@ impl QueryExecutor {
                 continue;
             }
 
-            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
-                let delimiter = next2.unwrap();
-                in_q_quote = true;
-                q_quote_end = Some(match delimiter {
-                    '[' => ']',
-                    '(' => ')',
-                    '{' => '}',
-                    '<' => '>',
-                    other => other,
-                });
-                i += 3;
-                continue;
+            if (c == 'q' || c == 'Q') && next == Some('\'') {
+                if let Some(delimiter) = next2 {
+                    in_q_quote = true;
+                    q_quote_end = Some(match delimiter {
+                        '[' => ']',
+                        '(' => ')',
+                        '{' => '}',
+                        '<' => '>',
+                        other => other,
+                    });
+                    i += 3;
+                    continue;
+                }
             }
 
             if c == '\'' {
@@ -1957,18 +1959,19 @@ impl QueryExecutor {
                 continue;
             }
 
-            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
-                let delimiter = next2.unwrap();
-                in_q_quote = true;
-                q_quote_end = Some(match delimiter {
-                    '[' => ']',
-                    '(' => ')',
-                    '{' => '}',
-                    '<' => '>',
-                    other => other,
-                });
-                i += 3;
-                continue;
+            if (c == 'q' || c == 'Q') && next == Some('\'') {
+                if let Some(delimiter) = next2 {
+                    in_q_quote = true;
+                    q_quote_end = Some(match delimiter {
+                        '[' => ']',
+                        '(' => ')',
+                        '{' => '}',
+                        '<' => '>',
+                        other => other,
+                    });
+                    i += 3;
+                    continue;
+                }
             }
 
             if c == '\'' {
@@ -2077,21 +2080,22 @@ impl QueryExecutor {
                 continue;
             }
 
-            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
-                let delimiter = next2.unwrap();
-                in_q_quote = true;
-                q_quote_end = Some(match delimiter {
-                    '[' => ']',
-                    '(' => ')',
-                    '{' => '}',
-                    '<' => '>',
-                    other => other,
-                });
-                current.push(c);
-                current.push('\'');
-                current.push(delimiter);
-                i += 3;
-                continue;
+            if (c == 'q' || c == 'Q') && next == Some('\'') {
+                if let Some(delimiter) = next2 {
+                    in_q_quote = true;
+                    q_quote_end = Some(match delimiter {
+                        '[' => ']',
+                        '(' => ')',
+                        '{' => '}',
+                        '<' => '>',
+                        other => other,
+                    });
+                    current.push(c);
+                    current.push('\'');
+                    current.push(delimiter);
+                    i += 3;
+                    continue;
+                }
             }
 
             if c == '\'' {
@@ -2200,18 +2204,19 @@ impl QueryExecutor {
                 continue;
             }
 
-            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
-                let delimiter = next2.unwrap();
-                in_q_quote = true;
-                q_quote_end = Some(match delimiter {
-                    '[' => ']',
-                    '(' => ')',
-                    '{' => '}',
-                    '<' => '>',
-                    other => other,
-                });
-                i += 3;
-                continue;
+            if (c == 'q' || c == 'Q') && next == Some('\'') {
+                if let Some(delimiter) = next2 {
+                    in_q_quote = true;
+                    q_quote_end = Some(match delimiter {
+                        '[' => ']',
+                        '(' => ')',
+                        '{' => '}',
+                        '<' => '>',
+                        other => other,
+                    });
+                    i += 3;
+                    continue;
+                }
             }
 
             if c == '\'' {
