@@ -2256,6 +2256,10 @@ impl SqlEditorWidget {
                 Some(value) => format!("BTITLE {}", value),
                 None => "BTITLE OFF".to_string(),
             },
+            ToolCommand::Pause { message } => match message {
+                Some(text) => format!("PAUSE {}", text),
+                None => "PAUSE".to_string(),
+            },
             ToolCommand::SetErrorContinue { enabled } => {
                 if *enabled {
                     "SET ERRORCONTINUE ON".to_string()
@@ -3511,13 +3515,7 @@ impl SqlEditorWidget {
                     if script_mode {
                         SqlEditorWidget::emit_script_lines(&sender, &session, &err.to_string());
                         let result = QueryResult::new_error(&sql_text, &err.to_string());
-                        SqlEditorWidget::emit_script_result(
-                            &sender,
-                            &conn_name,
-                            0,
-                            result,
-                            false,
-                        );
+                        SqlEditorWidget::emit_script_result(&sender, &conn_name, 0, result, false);
                     } else {
                         SqlEditorWidget::append_spool_output(&session, &[err.to_string()]);
                         let _ = sender.send(QueryProgress::StatementFinished {
@@ -3577,11 +3575,7 @@ impl SqlEditorWidget {
                             ScriptItem::Statement(statement) => statement.clone(),
                         };
                         if !echoed.trim().is_empty() {
-                            SqlEditorWidget::emit_script_output(
-                                &sender,
-                                &session,
-                                vec![echoed],
-                            );
+                            SqlEditorWidget::emit_script_output(&sender, &session, vec![echoed]);
                         }
                     }
 
@@ -3914,10 +3908,7 @@ impl SqlEditorWidget {
                                         &sender,
                                         &session,
                                         "SET TERMOUT",
-                                        &format!(
-                                            "TERMOUT {}",
-                                            if enabled { "ON" } else { "OFF" }
-                                        ),
+                                        &format!("TERMOUT {}", if enabled { "ON" } else { "OFF" }),
                                     );
                                 }
                                 ToolCommand::SetTrimSpool { enabled } => {
@@ -4168,6 +4159,33 @@ impl SqlEditorWidget {
                                         },
                                     );
                                 }
+                                ToolCommand::Pause { message } => {
+                                    let prompt = match message {
+                                        Some(text) if !text.trim().is_empty() => {
+                                            format!("{}\n\nPress Enter to continue.", text.trim())
+                                        }
+                                        _ => "Press Enter to continue.".to_string(),
+                                    };
+                                    match SqlEditorWidget::prompt_for_input(&prompt) {
+                                        Ok(_) => {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "PAUSE",
+                                                "Paused and resumed execution.",
+                                            );
+                                        }
+                                        Err(message) => {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "PAUSE",
+                                                &format!("Error: {}", message),
+                                            );
+                                            command_error = true;
+                                        }
+                                    }
+                                }
                                 ToolCommand::SetErrorContinue { enabled } => {
                                     {
                                         let mut guard = match session.lock() {
@@ -4328,11 +4346,8 @@ impl SqlEditorWidget {
                                     }
                                 },
                                 ToolCommand::Describe { object } => {
-                                    let object_name = object
-                                        .split('.')
-                                        .last()
-                                        .unwrap_or(&object)
-                                        .to_string();
+                                    let object_name =
+                                        object.split('.').last().unwrap_or(&object).to_string();
                                     match ObjectBrowser::get_table_structure(
                                         conn.as_ref(),
                                         &object_name,
@@ -4809,9 +4824,7 @@ impl SqlEditorWidget {
                                         };
                                         if script_mode {
                                             SqlEditorWidget::emit_script_lines(
-                                                &sender,
-                                                &session,
-                                                &message,
+                                                &sender, &session, &message,
                                             );
                                             let result =
                                                 QueryResult::new_error(&sql_text, &message);
@@ -5528,9 +5541,7 @@ impl SqlEditorWidget {
                                         };
                                         if script_mode {
                                             SqlEditorWidget::emit_script_lines(
-                                                &sender,
-                                                &session,
-                                                &message,
+                                                &sender, &session, &message,
                                             );
                                             let result =
                                                 QueryResult::new_error(&sql_text, &message);
@@ -5543,8 +5554,8 @@ impl SqlEditorWidget {
                                             );
                                         } else {
                                             let index = result_index;
-                                            let _ =
-                                                sender.send(QueryProgress::StatementStart { index });
+                                            let _ = sender
+                                                .send(QueryProgress::StatementStart { index });
                                             app::awake();
                                             let result =
                                                 QueryResult::new_error(&sql_text, &message);
@@ -5851,11 +5862,19 @@ impl SqlEditorWidget {
         session: &Arc<Mutex<SessionState>>,
     ) -> (String, Option<String>, Option<String>) {
         match session.lock() {
-            Ok(guard) => (guard.colsep.clone(), guard.ttitle.clone(), guard.btitle.clone()),
+            Ok(guard) => (
+                guard.colsep.clone(),
+                guard.ttitle.clone(),
+                guard.btitle.clone(),
+            ),
             Err(poisoned) => {
                 eprintln!("Warning: session state lock was poisoned; recovering.");
                 let guard = poisoned.into_inner();
-                (guard.colsep.clone(), guard.ttitle.clone(), guard.btitle.clone())
+                (
+                    guard.colsep.clone(),
+                    guard.ttitle.clone(),
+                    guard.btitle.clone(),
+                )
             }
         }
     }
@@ -6063,7 +6082,11 @@ impl SqlEditorWidget {
         };
 
         for line in lines {
-            let to_write = if trimspool { line.trim_end() } else { line.as_str() };
+            let to_write = if trimspool {
+                line.trim_end()
+            } else {
+                line.as_str()
+            };
             if let Err(err) = writeln!(file, "{}", to_write) {
                 eprintln!("Failed to write to spool file {}: {}", path.display(), err);
                 break;
