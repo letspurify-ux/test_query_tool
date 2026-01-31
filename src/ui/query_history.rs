@@ -104,7 +104,7 @@ impl QueryHistoryDialog {
         preview_display.set_color(theme::editor_bg());
         preview_display.set_text_color(theme::text_primary());
         preview_display.set_text_font(fltk::enums::Font::Courier);
-        preview_display.set_text_size(12);
+        preview_display.set_text_size(14);
 
         preview_flex.end();
 

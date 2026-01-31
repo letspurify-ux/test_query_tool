@@ -89,7 +89,7 @@ impl FeatureCatalogDialog {
         display.set_color(theme::editor_bg());
         display.set_text_color(theme::text_primary());
         display.set_text_font(Font::Courier);
-        display.set_text_size(12);
+        display.set_text_size(14);
 
         let mut button_row = Flex::default();
         button_row.set_type(FlexType::Row);

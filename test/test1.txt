@@ -8,7 +8,7 @@ Prompt 프로시저 테스트1
    - SYS_REFCURSOR return function
    - Pipelined table function (TABLE(...) 조회)
    - "프로시저 실행 후 테이블로 결과 확인" 패턴
-   ============================================================ */
+   ================================================================== */
 
 -- TOAD/SQL*Plus 호환: DBMS_OUTPUT 표시
 SET SERVEROUTPUT ON;

@@ -942,7 +942,7 @@ impl ObjectBrowserWidget {
         display.set_color(theme::editor_bg());
         display.set_text_color(theme::text_primary());
         display.set_text_font(fltk::enums::Font::Courier);
-        display.set_text_size(12);
+        display.set_text_size(14);
 
         let mut buffer = fltk::text::TextBuffer::default();
         buffer.set_text(content);

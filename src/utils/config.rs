@@ -20,7 +20,7 @@ impl AppConfig {
             recent_connections: Vec::new(),
             last_connection: None,
             editor_font_size: 14,
-            result_font_size: 12,
+            result_font_size: 14,
             max_rows: 1000,
             auto_commit: false,
         }

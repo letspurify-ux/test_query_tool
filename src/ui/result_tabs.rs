@@ -65,7 +65,7 @@ impl ResultTabsWidget {
         script_display.set_color(theme::panel_bg());
         script_display.set_text_color(theme::text_primary());
         script_display.set_text_font(fltk::enums::Font::Courier);
-        script_display.set_text_size(12);
+        script_display.set_text_size(14);
         let mut script_buffer = TextBuffer::default();
         script_buffer.set_text("");
         script_display.set_buffer(script_buffer.clone());

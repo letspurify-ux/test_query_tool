@@ -482,6 +482,7 @@ impl MainWindow {
                         }
                         "File/Open SQL File..." => {
                             let mut dialog = FileDialog::new(FileDialogType::BrowseFile);
+                            dialog.set_filter("SQL Files\t*.sql\nAll Files\t*.*");
                             dialog.show();
                             let filename = dialog.filename();
                             if !filename.as_os_str().is_empty() {
@@ -492,6 +493,49 @@ impl MainWindow {
                                     s.window.set_label(&format!("Oracle Query Tool - {}", filename.file_name().unwrap_or_default().to_string_lossy()));
                                     s.sql_editor.refresh_highlighting();
                                     s.sql_editor.focus();
+                                }
+                            }
+                        }
+                        "File/Save SQL File..." => {
+                            let (current_file, sql_text) = {
+                                let s = state_for_menu.borrow();
+                                let current_file = s.current_file.borrow().clone();
+                                let sql_text = s.sql_buffer.text();
+                                (current_file, sql_text)
+                            };
+
+                            let target_path = if let Some(path) = current_file {
+                                Some(path)
+                            } else {
+                                let mut dialog = FileDialog::new(FileDialogType::BrowseSaveFile);
+                                dialog.set_filter("SQL Files\t*.sql\nAll Files\t*.*");
+                                dialog.show();
+                                let filename = dialog.filename();
+                                if filename.as_os_str().is_empty() {
+                                    None
+                                } else {
+                                    Some(filename)
+                                }
+                            };
+
+                            if let Some(path) = target_path {
+                                if let Err(err) = fs::write(&path, sql_text) {
+                                    fltk::dialog::alert_default(&format!(
+                                        "Failed to save SQL file: {}",
+                                        err
+                                    ));
+                                } else {
+                                    let mut s = state_for_menu.borrow_mut();
+                                    *s.current_file.borrow_mut() = Some(path.clone());
+                                    let file_label = path
+                                        .file_name()
+                                        .unwrap_or_default()
+                                        .to_string_lossy();
+                                    s.window.set_label(&format!(
+                                        "Oracle Query Tool - {}",
+                                        file_label
+                                    ));
+                                    s.status_bar.set_label(&format!("Saved {}", file_label));
                                 }
                             }
                         }
@@ -697,6 +741,8 @@ impl MainWindow {
 
     pub fn run() {
         let app = app::App::default().with_scheme(app::Scheme::Gtk);
+        app::set_font_size(14);
+        fltk::misc::Tooltip::set_font_size(14);
 
         // Set default colors for Windows 11-inspired theme
         let (bg_r, bg_g, bg_b) = theme::app_background().to_rgb();
