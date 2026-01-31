@@ -70,6 +70,18 @@ pub enum ToolCommand {
         size: Option<u32>,
         unlimited: bool,
     },
+    SetEcho {
+        enabled: bool,
+    },
+    SetTermout {
+        enabled: bool,
+    },
+    SetTrimSpool {
+        enabled: bool,
+    },
+    SetColSep {
+        separator: String,
+    },
     ShowErrors {
         object_type: Option<String>,
         object_name: Option<String>,
@@ -87,6 +99,21 @@ pub enum ToolCommand {
     },
     Undefine {
         name: String,
+    },
+    Column {
+        raw: String,
+    },
+    Break {
+        raw: String,
+    },
+    Compute {
+        raw: String,
+    },
+    TTitle {
+        title: Option<String>,
+    },
+    BTitle {
+        title: Option<String>,
     },
     SetErrorContinue {
         enabled: bool,
@@ -109,6 +136,14 @@ pub enum ToolCommand {
     Spool {
         path: Option<String>,
     },
+    Describe {
+        object: String,
+    },
+    Connect {
+        descriptor: String,
+    },
+    Disconnect,
+    Exit,
     WheneverSqlError {
         exit: bool,
     },
@@ -720,16 +755,46 @@ impl QueryExecutor {
         )
     }
 
+    pub fn requires_slash_execution(sql: &str) -> bool {
+        let upper = Self::strip_leading_comments(sql).to_uppercase();
+        if upper.starts_with("BEGIN") || upper.starts_with("DECLARE") {
+            return true;
+        }
+
+        if let Some(object) = Self::parse_compiled_object(sql) {
+            return matches!(
+                object.object_type.as_str(),
+                "PROCEDURE"
+                    | "FUNCTION"
+                    | "PACKAGE"
+                    | "PACKAGE BODY"
+                    | "TYPE"
+                    | "TYPE BODY"
+                    | "TRIGGER"
+            );
+        }
+
+        false
+    }
+
     pub fn split_script_items(sql: &str) -> Vec<ScriptItem> {
         let mut items: Vec<ScriptItem> = Vec::new();
         let mut builder = StatementBuilder::new();
+        let mut pending_plsql: Option<String> = None;
 
         // Helper to add statement with comment stripping and extra semicolon removal
-        let add_statement = |stmt: String, items: &mut Vec<ScriptItem>| {
+        let mut add_statement = |stmt: String, items: &mut Vec<ScriptItem>| {
             let stripped = Self::strip_comments(&stmt);
             let cleaned = Self::strip_extra_trailing_semicolons(&stripped);
             if !cleaned.is_empty() {
-                items.push(ScriptItem::Statement(cleaned));
+                if pending_plsql.is_some() {
+                    pending_plsql = None;
+                }
+                if Self::requires_slash_execution(&cleaned) {
+                    pending_plsql = Some(cleaned);
+                } else {
+                    items.push(ScriptItem::Statement(cleaned));
+                }
             }
         };
 
@@ -770,6 +835,9 @@ impl QueryExecutor {
                         add_statement(stmt, &mut items);
                     }
                 }
+                if let Some(statement) = pending_plsql.take() {
+                    items.push(ScriptItem::Statement(statement));
+                }
                 continue;
             }
 
@@ -794,6 +862,7 @@ impl QueryExecutor {
                     for stmt in builder.take_statements() {
                         add_statement(stmt, &mut items);
                     }
+                    pending_plsql = None;
                     items.push(ScriptItem::ToolCommand(command));
                     continue;
                 }
@@ -801,6 +870,7 @@ impl QueryExecutor {
 
             if builder.is_idle() && builder.current_is_empty() {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
+                    pending_plsql = None;
                     items.push(ScriptItem::ToolCommand(command));
                     continue;
                 }
@@ -974,6 +1044,22 @@ impl QueryExecutor {
             return Some(Self::parse_serveroutput_command(trimmed));
         }
 
+        if upper.starts_with("SET ECHO") {
+            return Some(Self::parse_echo_command(trimmed));
+        }
+
+        if upper.starts_with("SET TERMOUT") {
+            return Some(Self::parse_termout_command(trimmed));
+        }
+
+        if upper.starts_with("SET TRIMSPOOL") {
+            return Some(Self::parse_trimspool_command(trimmed));
+        }
+
+        if upper.starts_with("SET COLSEP") {
+            return Some(Self::parse_colsep_command(trimmed));
+        }
+
         if upper.starts_with("SHOW ERRORS") {
             return Some(Self::parse_show_errors_command(trimmed));
         }
@@ -993,6 +1079,26 @@ impl QueryExecutor {
 
         if upper.starts_with("UNDEFINE") {
             return Some(Self::parse_undefine_command(trimmed));
+        }
+
+        if upper.starts_with("COLUMN") || upper.starts_with("COL ") || upper == "COL" {
+            return Some(Self::parse_column_command(trimmed));
+        }
+
+        if upper.starts_with("BREAK") {
+            return Some(Self::parse_break_command(trimmed));
+        }
+
+        if upper.starts_with("COMPUTE") {
+            return Some(Self::parse_compute_command(trimmed));
+        }
+
+        if upper.starts_with("TTITLE") {
+            return Some(Self::parse_ttitle_command(trimmed));
+        }
+
+        if upper.starts_with("BTITLE") {
+            return Some(Self::parse_btitle_command(trimmed));
         }
 
         if upper.starts_with("SPOOL") {
@@ -1021,6 +1127,26 @@ impl QueryExecutor {
 
         if upper.starts_with("SET LINESIZE") {
             return Some(Self::parse_linesize_command(trimmed));
+        }
+
+        if upper.starts_with("DESC ")
+            || upper.starts_with("DESCRIBE ")
+            || upper == "DESC"
+            || upper == "DESCRIBE"
+        {
+            return Some(Self::parse_describe_command(trimmed));
+        }
+
+        if upper.starts_with("CONNECT") || upper.starts_with("CONN ") || upper == "CONN" {
+            return Some(Self::parse_connect_command(trimmed));
+        }
+
+        if upper == "DISCONNECT" {
+            return Some(ToolCommand::Disconnect);
+        }
+
+        if upper == "EXIT" || upper == "QUIT" {
+            return Some(ToolCommand::Exit);
         }
 
         if trimmed.starts_with("@@") || trimmed.starts_with('@') {
@@ -1119,6 +1245,42 @@ impl QueryExecutor {
             size,
             unlimited,
         }
+    }
+
+    fn parse_echo_command(raw: &str) -> ToolCommand {
+        Self::parse_toggle_command(raw, "SET ECHO", |enabled| ToolCommand::SetEcho { enabled })
+    }
+
+    fn parse_termout_command(raw: &str) -> ToolCommand {
+        Self::parse_toggle_command(raw, "SET TERMOUT", |enabled| ToolCommand::SetTermout {
+            enabled,
+        })
+    }
+
+    fn parse_trimspool_command(raw: &str) -> ToolCommand {
+        Self::parse_toggle_command(raw, "SET TRIMSPOOL", |enabled| {
+            ToolCommand::SetTrimSpool { enabled }
+        })
+    }
+
+    fn parse_colsep_command(raw: &str) -> ToolCommand {
+        let rest = raw[10..].trim();
+        if rest.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET COLSEP requires a separator value.".to_string(),
+                is_error: true,
+            };
+        }
+        let cleaned = rest.trim_matches('"').trim_matches('\'').to_string();
+        if cleaned.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET COLSEP requires a separator value.".to_string(),
+                is_error: true,
+            };
+        }
+        ToolCommand::SetColSep { separator: cleaned }
     }
 
     fn parse_show_errors_command(raw: &str) -> ToolCommand {
@@ -1262,6 +1424,70 @@ impl QueryExecutor {
         }
     }
 
+    fn parse_column_command(raw: &str) -> ToolCommand {
+        let trimmed = raw.trim();
+        if trimmed.eq_ignore_ascii_case("COLUMN") || trimmed.eq_ignore_ascii_case("COL") {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "COLUMN requires a column name or formatting options.".to_string(),
+                is_error: true,
+            };
+        }
+        ToolCommand::Column {
+            raw: trimmed.to_string(),
+        }
+    }
+
+    fn parse_break_command(raw: &str) -> ToolCommand {
+        let trimmed = raw.trim();
+        if trimmed.eq_ignore_ascii_case("BREAK") {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "BREAK requires target columns or options.".to_string(),
+                is_error: true,
+            };
+        }
+        ToolCommand::Break {
+            raw: trimmed.to_string(),
+        }
+    }
+
+    fn parse_compute_command(raw: &str) -> ToolCommand {
+        let trimmed = raw.trim();
+        if trimmed.eq_ignore_ascii_case("COMPUTE") {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "COMPUTE requires summary options.".to_string(),
+                is_error: true,
+            };
+        }
+        ToolCommand::Compute {
+            raw: trimmed.to_string(),
+        }
+    }
+
+    fn parse_ttitle_command(raw: &str) -> ToolCommand {
+        let rest = raw[6..].trim();
+        if rest.is_empty() || rest.eq_ignore_ascii_case("OFF") {
+            return ToolCommand::TTitle { title: None };
+        }
+        let cleaned = rest.trim_matches('"').trim_matches('\'').to_string();
+        ToolCommand::TTitle {
+            title: if cleaned.is_empty() { None } else { Some(cleaned) },
+        }
+    }
+
+    fn parse_btitle_command(raw: &str) -> ToolCommand {
+        let rest = raw[6..].trim();
+        if rest.is_empty() || rest.eq_ignore_ascii_case("OFF") {
+            return ToolCommand::BTitle { title: None };
+        }
+        let cleaned = rest.trim_matches('"').trim_matches('\'').to_string();
+        ToolCommand::BTitle {
+            title: if cleaned.is_empty() { None } else { Some(cleaned) },
+        }
+    }
+
     fn parse_spool_command(raw: &str) -> ToolCommand {
         let rest = raw[5..].trim();
         if rest.is_empty() {
@@ -1290,6 +1516,39 @@ impl QueryExecutor {
         }
     }
 
+    fn parse_describe_command(raw: &str) -> ToolCommand {
+        let upper = raw.to_uppercase();
+        let rest = if upper.starts_with("DESCRIBE") {
+            raw[8..].trim()
+        } else {
+            raw[4..].trim()
+        };
+        if rest.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "DESCRIBE requires an object name.".to_string(),
+                is_error: true,
+            };
+        }
+        ToolCommand::Describe {
+            object: rest.to_string(),
+        }
+    }
+
+    fn parse_connect_command(raw: &str) -> ToolCommand {
+        let rest = raw.split_whitespace().skip(1).collect::<Vec<&str>>().join(" ");
+        if rest.trim().is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "CONNECT requires connection credentials.".to_string(),
+                is_error: true,
+            };
+        }
+        ToolCommand::Connect {
+            descriptor: rest.trim().to_string(),
+        }
+    }
+
     fn parse_whenever_sqlerror_command(raw: &str) -> ToolCommand {
         let rest = raw[17..].trim();
         if rest.is_empty() {
@@ -1306,6 +1565,29 @@ impl QueryExecutor {
             _ => ToolCommand::Unsupported {
                 raw: raw.to_string(),
                 message: "WHENEVER SQLERROR supports EXIT or CONTINUE.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_toggle_command<F>(raw: &str, label: &str, builder: F) -> ToolCommand
+    where
+        F: FnOnce(bool) -> ToolCommand,
+    {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: format!("{} requires ON or OFF.", label),
+                is_error: true,
+            };
+        }
+        match tokens[2].to_uppercase().as_str() {
+            "ON" => builder(true),
+            "OFF" => builder(false),
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: format!("{} supports only ON or OFF.", label),
                 is_error: true,
             },
         }
@@ -4263,7 +4545,7 @@ mod tests {
 
     #[test]
     fn test_anonymous_block() {
-        let sql = "DECLARE x NUMBER; BEGIN x := 1; END;";
+        let sql = "DECLARE x NUMBER; BEGIN x := 1; END;\n/";
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4271,7 +4553,7 @@ mod tests {
 
     #[test]
     fn test_create_procedure_simple() {
-        let sql = "CREATE PROCEDURE test_proc AS BEGIN NULL; END;";
+        let sql = "CREATE PROCEDURE test_proc AS BEGIN NULL; END;\n/";
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4286,7 +4568,8 @@ DECLARE
   v_num NUMBER;
 BEGIN
   v_num := 1;
-END;"#;
+END;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4297,7 +4580,8 @@ END;"#;
         let sql = r#"CREATE OR REPLACE PROCEDURE test_proc IS
 BEGIN
   DBMS_OUTPUT.PUT_LINE('Hello');
-END;"#;
+END;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4308,7 +4592,8 @@ END;"#;
         let sql = r#"CREATE FUNCTION add_nums(a NUMBER, b NUMBER) RETURN NUMBER IS
 BEGIN
   RETURN a + b;
-END;"#;
+END;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4319,7 +4604,8 @@ END;"#;
         let sql = r#"CREATE PACKAGE test_pkg AS
   PROCEDURE proc1;
   FUNCTION func1 RETURN NUMBER;
-END test_pkg;"#;
+END test_pkg;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4334,7 +4620,8 @@ END test_pkg;"#;
   BEGIN
     NULL;
   END;
-END test_pkg;"#;
+END test_pkg;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4412,7 +4699,8 @@ END test_pkg;"#;
   BEGIN
     RETURN p_d + p_days;
   END;
-END oqt_pkg;"#;
+END oqt_pkg;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(
@@ -4441,7 +4729,8 @@ END oqt_pkg;"#;
       END;
     END IF;
   END;
-END test_pkg;"#;
+END test_pkg;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4458,7 +4747,8 @@ END test_pkg;"#;
       v_temp := 1;
     END;
   END;
-END test_pkg;"#;
+END test_pkg;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4469,6 +4759,7 @@ END test_pkg;"#;
         let sql = r#"CREATE PACKAGE test_pkg AS
   PROCEDURE proc1;
 END test_pkg;
+/
 
 SELECT 1 FROM DUAL;"#;
         let items = QueryExecutor::split_script_items(sql);
@@ -4483,10 +4774,12 @@ SELECT 1 FROM DUAL;"#;
         let sql = r#"CREATE PACKAGE pkg1 AS
   PROCEDURE proc1;
 END pkg1;
+/
 
 CREATE PACKAGE pkg2 AS
   PROCEDURE proc2;
-END pkg2;"#;
+END pkg2;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 2, "Should have 2 statements, got: {:?}", stmts);
@@ -4499,7 +4792,8 @@ BEFORE INSERT ON test_table
 FOR EACH ROW
 BEGIN
   :NEW.created_at := SYSDATE;
-END;"#;
+END;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4510,7 +4804,8 @@ END;"#;
         let sql = r#"CREATE TYPE test_type AS OBJECT (
   id NUMBER,
   name VARCHAR2(100)
-);"#;
+);
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4547,7 +4842,8 @@ BEGIN
   FOR i IN 1..10 LOOP
     DBMS_OUTPUT.PUT_LINE(i);
   END LOOP;
-END;"#;
+END;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -4562,7 +4858,8 @@ BEGIN
     WHEN 2 THEN DBMS_OUTPUT.PUT_LINE('two');
     ELSE DBMS_OUTPUT.PUT_LINE('other');
   END CASE;
-END;"#;
+END;
+/"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
