@@ -1,9 +1,9 @@
-use oracle::{Connection, Error as OracleError, Row, Statement};
 use oracle::sql_type::{OracleType, RefCursor};
-use std::collections::{HashSet};
+use oracle::{Connection, Error as OracleError, Row, Statement};
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use crate::db::session::{BindDataType, BindValue, SessionState, CompiledObject};
+use crate::db::session::{BindDataType, BindValue, CompiledObject, SessionState};
 
 #[derive(Debug, Clone)]
 pub struct ColumnInfo {
@@ -58,19 +58,69 @@ pub enum FormatItem {
 
 #[derive(Debug, Clone)]
 pub enum ToolCommand {
-    Var { name: String, data_type: BindDataType },
-    Print { name: Option<String> },
-    SetServerOutput { enabled: bool, size: Option<u32>, unlimited: bool },
-    ShowErrors { object_type: Option<String>, object_name: Option<String> },
-    Prompt { text: String },
-    SetErrorContinue { enabled: bool },
-    SetDefine { enabled: bool },
-    SetFeedback { enabled: bool },
-    SetHeading { enabled: bool },
-    SetPageSize { size: u32 },
-    SetLineSize { size: u32 },
-    RunScript { path: String, relative_to_caller: bool },
-    Unsupported { raw: String, message: String, is_error: bool },
+    Var {
+        name: String,
+        data_type: BindDataType,
+    },
+    Print {
+        name: Option<String>,
+    },
+    SetServerOutput {
+        enabled: bool,
+        size: Option<u32>,
+        unlimited: bool,
+    },
+    ShowErrors {
+        object_type: Option<String>,
+        object_name: Option<String>,
+    },
+    Prompt {
+        text: String,
+    },
+    Accept {
+        name: String,
+        prompt: Option<String>,
+    },
+    Define {
+        name: String,
+        value: String,
+    },
+    Undefine {
+        name: String,
+    },
+    SetErrorContinue {
+        enabled: bool,
+    },
+    SetDefine {
+        enabled: bool,
+    },
+    SetFeedback {
+        enabled: bool,
+    },
+    SetHeading {
+        enabled: bool,
+    },
+    SetPageSize {
+        size: u32,
+    },
+    SetLineSize {
+        size: u32,
+    },
+    Spool {
+        path: Option<String>,
+    },
+    WheneverSqlError {
+        exit: bool,
+    },
+    RunScript {
+        path: String,
+        relative_to_caller: bool,
+    },
+    Unsupported {
+        raw: String,
+        message: String,
+        is_error: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -193,10 +243,10 @@ impl SplitState {
             }
             self.pending_end = false;
         }
-        
-        if self.after_as_is==true && matches!(upper.as_str(), "OBJECT" | "VARRAY" | "TABLE") {
+
+        if self.after_as_is == true && matches!(upper.as_str(), "OBJECT" | "VARRAY" | "TABLE") {
             self.block_depth -= 1;
-            self.after_as_is=false;
+            self.after_as_is = false;
         }
 
         // For CREATE PL/SQL (PACKAGE, PROCEDURE, FUNCTION, TYPE, TRIGGER),
@@ -206,9 +256,9 @@ impl SplitState {
             self.block_depth += 1;
             self.after_as_is = true;
         } else if upper == "DECLARE" {
-                // Standalone DECLARE block
-                self.block_depth += 1;
-                self.after_declare = true;
+            // Standalone DECLARE block
+            self.block_depth += 1;
+            self.after_declare = true;
         } else if upper == "BEGIN" {
             if self.after_declare {
                 // DECLARE ... BEGIN - same block, don't increase depth
@@ -343,8 +393,16 @@ impl StatementBuilder {
 
         while i < len {
             let c = chars[i];
-            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
-            let next2 = if i + 2 < len { Some(chars[i + 2]) } else { None };
+            let next = if i + 1 < len {
+                Some(chars[i + 1])
+            } else {
+                None
+            };
+            let next2 = if i + 2 < len {
+                Some(chars[i + 2])
+            } else {
+                None
+            };
 
             if self.state.in_line_comment {
                 self.current.push(c);
@@ -656,7 +714,10 @@ impl QueryExecutor {
     }
 
     pub fn is_select_statement(sql: &str) -> bool {
-        matches!(Self::leading_keyword(sql).as_deref(), Some("SELECT") | Some("WITH"))
+        matches!(
+            Self::leading_keyword(sql).as_deref(),
+            Some("SELECT") | Some("WITH")
+        )
     }
 
     pub fn split_script_items(sql: &str) -> Vec<ScriptItem> {
@@ -922,6 +983,22 @@ impl QueryExecutor {
             return Some(ToolCommand::Prompt { text });
         }
 
+        if upper.starts_with("ACCEPT") {
+            return Some(Self::parse_accept_command(trimmed));
+        }
+
+        if upper.starts_with("DEFINE") {
+            return Some(Self::parse_define_assign_command(trimmed));
+        }
+
+        if upper.starts_with("UNDEFINE") {
+            return Some(Self::parse_undefine_command(trimmed));
+        }
+
+        if upper.starts_with("SPOOL") {
+            return Some(Self::parse_spool_command(trimmed));
+        }
+
         if upper.starts_with("SET ERRORCONTINUE") {
             return Some(Self::parse_errorcontinue_command(trimmed));
         }
@@ -946,33 +1023,12 @@ impl QueryExecutor {
             return Some(Self::parse_linesize_command(trimmed));
         }
 
-        if upper.starts_with("DEFINE") {
-            return Some(ToolCommand::Unsupported {
-                raw: trimmed.to_string(),
-                message: "DEFINE is not supported. Use VAR to declare bind variables.".to_string(),
-                is_error: true,
-            });
-        }
-
-        if upper.starts_with("ACCEPT") {
-            return Some(ToolCommand::Unsupported {
-                raw: trimmed.to_string(),
-                message: "ACCEPT is not supported. Use VAR and EXEC to assign values.".to_string(),
-                is_error: true,
-            });
-        }
-
         if trimmed.starts_with("@@") || trimmed.starts_with('@') {
             return Some(Self::parse_script_command(trimmed));
         }
 
         if upper.starts_with("WHENEVER SQLERROR") {
-            return Some(ToolCommand::Unsupported {
-                raw: trimmed.to_string(),
-                message: "WHENEVER SQLERROR is not supported; execution stops on first error by default."
-                    .to_string(),
-                is_error: false,
-            });
+            return Some(Self::parse_whenever_sqlerror_command(trimmed));
         }
 
         None
@@ -1076,11 +1132,19 @@ impl QueryExecutor {
 
         let mut idx = 2usize;
         let mut object_type = tokens[idx].to_uppercase();
-        if object_type == "PACKAGE" && tokens.get(idx + 1).map(|t| t.eq_ignore_ascii_case("BODY")).unwrap_or(false) {
+        if object_type == "PACKAGE"
+            && tokens
+                .get(idx + 1)
+                .map(|t| t.eq_ignore_ascii_case("BODY"))
+                .unwrap_or(false)
+        {
             object_type = "PACKAGE BODY".to_string();
             idx += 2;
         } else if object_type == "TYPE"
-            && tokens.get(idx + 1).map(|t| t.eq_ignore_ascii_case("BODY")).unwrap_or(false)
+            && tokens
+                .get(idx + 1)
+                .map(|t| t.eq_ignore_ascii_case("BODY"))
+                .unwrap_or(false)
         {
             object_type = "TYPE BODY".to_string();
             idx += 2;
@@ -1088,11 +1152,14 @@ impl QueryExecutor {
             idx += 1;
         }
 
-        let name = tokens.get(idx).map(|v| v.trim_start_matches(':').to_string());
+        let name = tokens
+            .get(idx)
+            .map(|v| v.trim_start_matches(':').to_string());
         if name.is_none() {
             return ToolCommand::Unsupported {
                 raw: raw.to_string(),
-                message: "SHOW ERRORS requires an object name when a type is specified.".to_string(),
+                message: "SHOW ERRORS requires an object name when a type is specified."
+                    .to_string(),
                 is_error: true,
             };
         }
@@ -1100,6 +1167,147 @@ impl QueryExecutor {
         ToolCommand::ShowErrors {
             object_type: Some(object_type),
             object_name: name,
+        }
+    }
+
+    fn parse_accept_command(raw: &str) -> ToolCommand {
+        let rest = raw[6..].trim();
+        if rest.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "ACCEPT requires a variable name.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        let name = parts.next().unwrap_or_default();
+        if name.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "ACCEPT requires a variable name.".to_string(),
+                is_error: true,
+            };
+        }
+        let remainder = parts.next().unwrap_or("").trim();
+        let prompt = if remainder.is_empty() {
+            None
+        } else {
+            let upper = remainder.to_uppercase();
+            if let Some(idx) = upper.find("PROMPT") {
+                let prompt_raw = remainder[idx + 6..].trim();
+                let cleaned = prompt_raw.trim_matches('"').trim_matches('\'').to_string();
+                if cleaned.is_empty() {
+                    None
+                } else {
+                    Some(cleaned)
+                }
+            } else {
+                None
+            }
+        };
+
+        ToolCommand::Accept {
+            name: name.trim_start_matches(':').to_string(),
+            prompt,
+        }
+    }
+
+    fn parse_define_assign_command(raw: &str) -> ToolCommand {
+        let rest = raw[6..].trim();
+        if rest.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "DEFINE requires a variable name and value.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let (name, value) = if let Some(eq_idx) = rest.find('=') {
+            let (left, right) = rest.split_at(eq_idx);
+            (left.trim(), right.trim_start_matches('=').trim())
+        } else {
+            let mut parts = rest.splitn(2, char::is_whitespace);
+            let name = parts.next().unwrap_or_default();
+            let value = parts.next().unwrap_or("").trim();
+            (name, value)
+        };
+
+        if name.is_empty() || value.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "DEFINE requires a variable name and value.".to_string(),
+                is_error: true,
+            };
+        }
+
+        ToolCommand::Define {
+            name: name.trim_start_matches(':').to_string(),
+            value: value.to_string(),
+        }
+    }
+
+    fn parse_undefine_command(raw: &str) -> ToolCommand {
+        let rest = raw[8..].trim();
+        if rest.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "UNDEFINE requires a variable name.".to_string(),
+                is_error: true,
+            };
+        }
+
+        ToolCommand::Undefine {
+            name: rest.trim_start_matches(':').to_string(),
+        }
+    }
+
+    fn parse_spool_command(raw: &str) -> ToolCommand {
+        let rest = raw[5..].trim();
+        if rest.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SPOOL requires a file path or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        if rest.eq_ignore_ascii_case("OFF") {
+            return ToolCommand::Spool { path: None };
+        }
+
+        let cleaned = rest.trim_matches('"').trim_matches('\'').to_string();
+        if cleaned.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SPOOL requires a file path.".to_string(),
+                is_error: true,
+            };
+        }
+
+        ToolCommand::Spool {
+            path: Some(cleaned),
+        }
+    }
+
+    fn parse_whenever_sqlerror_command(raw: &str) -> ToolCommand {
+        let rest = raw[17..].trim();
+        if rest.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "WHENEVER SQLERROR requires EXIT or CONTINUE.".to_string(),
+                is_error: true,
+            };
+        }
+        let token = rest.split_whitespace().next().unwrap_or("").to_uppercase();
+        match token.as_str() {
+            "EXIT" => ToolCommand::WheneverSqlError { exit: true },
+            "CONTINUE" => ToolCommand::WheneverSqlError { exit: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "WHENEVER SQLERROR supports EXIT or CONTINUE.".to_string(),
+                is_error: true,
+            },
         }
     }
 
@@ -1248,10 +1456,7 @@ impl QueryExecutor {
             };
         }
 
-        let cleaned = path
-            .trim_matches('"')
-            .trim_matches('\'')
-            .to_string();
+        let cleaned = path.trim_matches('"').trim_matches('\'').to_string();
 
         ToolCommand::RunScript {
             path: cleaned,
@@ -1289,7 +1494,10 @@ impl QueryExecutor {
             return Ok(BindDataType::Clob);
         }
 
-        if upper.starts_with("VARCHAR2") || upper.starts_with("VARCHAR") || upper.starts_with("NVARCHAR2") {
+        if upper.starts_with("VARCHAR2")
+            || upper.starts_with("VARCHAR")
+            || upper.starts_with("NVARCHAR2")
+        {
             let size = Self::parse_parenthesized_u32(&upper).unwrap_or(4000);
             return Ok(BindDataType::Varchar2(size));
         }
@@ -1331,8 +1539,16 @@ impl QueryExecutor {
 
         while i < len {
             let c = chars[i];
-            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
-            let next2 = if i + 2 < len { Some(chars[i + 2]) } else { None };
+            let next = if i + 1 < len {
+                Some(chars[i + 1])
+            } else {
+                None
+            };
+            let next2 = if i + 2 < len {
+                Some(chars[i + 2])
+            } else {
+                None
+            };
 
             if in_line_comment {
                 if c == '\n' {
@@ -1484,7 +1700,10 @@ impl QueryExecutor {
         for name in names {
             let key = SessionState::normalize_name(&name);
             let bind = session.binds.get(&key).ok_or_else(|| {
-                format!("Bind variable :{} is not defined. Use VAR to declare it.", name)
+                format!(
+                    "Bind variable :{} is not defined. Use VAR to declare it.",
+                    name
+                )
             })?;
 
             let value = match &bind.value {
@@ -1567,7 +1786,9 @@ impl QueryExecutor {
         Ok(cursors)
     }
 
-    pub(crate) fn extract_implicit_results(stmt: &Statement) -> Result<Vec<RefCursor>, OracleError> {
+    pub(crate) fn extract_implicit_results(
+        stmt: &Statement,
+    ) -> Result<Vec<RefCursor>, OracleError> {
         let mut cursors = Vec::new();
         loop {
             match stmt.implicit_result()? {
@@ -1660,8 +1881,16 @@ impl QueryExecutor {
 
         while i < len {
             let c = chars[i];
-            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
-            let next2 = if i + 2 < len { Some(chars[i + 2]) } else { None };
+            let next = if i + 1 < len {
+                Some(chars[i + 1])
+            } else {
+                None
+            };
+            let next2 = if i + 2 < len {
+                Some(chars[i + 2])
+            } else {
+                None
+            };
 
             if in_line_comment {
                 if c == '\n' {
@@ -1796,8 +2025,16 @@ impl QueryExecutor {
 
         while i < len {
             let c = chars[i];
-            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
-            let next2 = if i + 2 < len { Some(chars[i + 2]) } else { None };
+            let next = if i + 1 < len {
+                Some(chars[i + 1])
+            } else {
+                None
+            };
+            let next2 = if i + 2 < len {
+                Some(chars[i + 2])
+            } else {
+                None
+            };
 
             if in_q_quote {
                 current.push(c);
@@ -1917,8 +2154,16 @@ impl QueryExecutor {
 
         while i < len {
             let c = chars[i];
-            let next = if i + 1 < len { Some(chars[i + 1]) } else { None };
-            let next2 = if i + 2 < len { Some(chars[i + 2]) } else { None };
+            let next = if i + 1 < len {
+                Some(chars[i + 1])
+            } else {
+                None
+            };
+            let next2 = if i + 2 < len {
+                Some(chars[i + 2])
+            } else {
+                None
+            };
 
             if in_q_quote {
                 if Some(c) == q_quote_end && next == Some('\'') {
@@ -1998,8 +2243,7 @@ impl QueryExecutor {
         let sql_clean = if matches!(
             Self::leading_keyword(sql_trimmed).as_deref(),
             Some("BEGIN") | Some("DECLARE")
-        )
-        {
+        ) {
             sql_trimmed.to_string()
         } else {
             sql_trimmed.trim_end_matches(';').trim().to_string()
@@ -2050,7 +2294,10 @@ impl QueryExecutor {
         else if sql_upper.starts_with("COMMIT") {
             match conn.commit() {
                 Ok(()) => {}
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             }
             Ok(QueryResult {
                 sql: sql_clean,
@@ -2065,7 +2312,10 @@ impl QueryExecutor {
         } else if sql_upper.starts_with("ROLLBACK") {
             match conn.rollback() {
                 Ok(()) => {}
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             }
             Ok(QueryResult {
                 sql: sql_clean,
@@ -2191,16 +2441,19 @@ impl QueryExecutor {
         let statements = Self::split_statements_with_blocks(sql);
 
         if statements.is_empty() {
-            return Ok((QueryResult {
-                sql: sql.to_string(),
-                columns: vec![],
-                rows: vec![],
-                row_count: 0,
-                execution_time: Duration::from_secs(0),
-                message: "No statements to execute".to_string(),
-                is_select: false,
-                success: true,
-            }, false));
+            return Ok((
+                QueryResult {
+                    sql: sql.to_string(),
+                    columns: vec![],
+                    rows: vec![],
+                    row_count: 0,
+                    execution_time: Duration::from_secs(0),
+                    message: "No statements to execute".to_string(),
+                    is_select: false,
+                    success: true,
+                },
+                false,
+            ));
         }
 
         if statements.len() == 1 {
@@ -2246,7 +2499,10 @@ impl QueryExecutor {
         }
 
         let cursor_pos = cursor_pos.min(sql.len());
-        let line_start = sql[..cursor_pos].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+        let line_start = sql[..cursor_pos]
+            .rfind('\n')
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
         let line_end = sql[cursor_pos..]
             .find('\n')
             .map(|idx| cursor_pos + idx)
@@ -2278,11 +2534,7 @@ impl QueryExecutor {
                         }
                     }
                 }
-                if let Some(prev) = spans
-                    .iter()
-                    .filter(|span| span.end <= line_start)
-                    .last()
-                {
+                if let Some(prev) = spans.iter().filter(|span| span.end <= line_start).last() {
                     return Some(prev.text.clone());
                 }
             }
@@ -2363,7 +2615,10 @@ impl QueryExecutor {
     pub fn disable_dbms_output(conn: &Connection) -> Result<(), OracleError> {
         match conn.execute("BEGIN DBMS_OUTPUT.DISABLE; END;", &[]) {
             Ok(_stmt) => {}
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         }
         Ok(())
     }
@@ -2379,7 +2634,10 @@ impl QueryExecutor {
             .build()
         {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         stmt.bind("line", &OracleType::Varchar2(32767))?;
@@ -2388,18 +2646,27 @@ impl QueryExecutor {
         for _ in 0..max_lines {
             match stmt.execute(&[]) {
                 Ok(()) => {}
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             }
             let status: i32 = match stmt.bind_value("status") {
                 Ok(val) => val,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             if status != 0 {
                 break;
             }
             let line: Option<String> = match stmt.bind_value("line") {
                 Ok(val) => val,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             lines.push(line.unwrap_or_default());
         }
@@ -2420,7 +2687,10 @@ impl QueryExecutor {
         // Execute the query
         let result = match Self::execute_batch(conn, sql) {
             Ok(result) => result,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let output = Self::get_dbms_output(conn, 10000).unwrap_or_default();
@@ -2435,11 +2705,17 @@ impl QueryExecutor {
     ) -> Result<QueryResult, OracleError> {
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let result_set = match stmt.query(&[]) {
             Ok(result_set) => result_set,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let column_info: Vec<ColumnInfo> = result_set
@@ -2456,7 +2732,10 @@ impl QueryExecutor {
         for row_result in result_set {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let mut row_data: Vec<String> = Vec::new();
 
@@ -2493,11 +2772,17 @@ impl QueryExecutor {
         let start = Instant::now();
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let result_set = match stmt.query(&[]) {
             Ok(result_set) => result_set,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let column_info: Vec<ColumnInfo> = result_set
@@ -2517,7 +2802,10 @@ impl QueryExecutor {
         for row_result in result_set {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let mut row_data: Vec<String> = Vec::new();
 
@@ -2536,12 +2824,10 @@ impl QueryExecutor {
         }
 
         let execution_time = start.elapsed();
-        Ok((QueryResult::new_select_streamed(
-            sql,
-            column_info,
-            row_count,
-            execution_time,
-        ), cancelled))
+        Ok((
+            QueryResult::new_select_streamed(sql, column_info, row_count, execution_time),
+            cancelled,
+        ))
     }
 
     pub fn execute_select_streaming_with_binds<F, G>(
@@ -2558,7 +2844,10 @@ impl QueryExecutor {
         let start = Instant::now();
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         if let Err(err) = Self::bind_statement(&mut stmt, binds) {
             eprintln!("Database operation failed: {err}");
@@ -2566,7 +2855,10 @@ impl QueryExecutor {
         }
         let result_set = match stmt.query(&[]) {
             Ok(result_set) => result_set,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let column_info: Vec<ColumnInfo> = result_set
@@ -2586,7 +2878,10 @@ impl QueryExecutor {
         for row_result in result_set {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let mut row_data: Vec<String> = Vec::new();
 
@@ -2605,12 +2900,10 @@ impl QueryExecutor {
         }
 
         let execution_time = start.elapsed();
-        Ok((QueryResult::new_select_streamed(
-            sql,
-            column_info,
-            row_count,
-            execution_time,
-        ), cancelled))
+        Ok((
+            QueryResult::new_select_streamed(sql, column_info, row_count, execution_time),
+            cancelled,
+        ))
     }
 
     pub fn execute_ref_cursor_streaming<F, G>(
@@ -2626,7 +2919,10 @@ impl QueryExecutor {
         let start = Instant::now();
         let result_set = match cursor.query() {
             Ok(result_set) => result_set,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let column_info: Vec<ColumnInfo> = result_set
@@ -2646,7 +2942,10 @@ impl QueryExecutor {
         for row_result in result_set {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let mut row_data: Vec<String> = Vec::new();
 
@@ -2665,12 +2964,10 @@ impl QueryExecutor {
         }
 
         let execution_time = start.elapsed();
-        Ok((QueryResult::new_select_streamed(
-            sql,
-            column_info,
-            row_count,
-            execution_time,
-        ), cancelled))
+        Ok((
+            QueryResult::new_select_streamed(sql, column_info, row_count, execution_time),
+            cancelled,
+        ))
     }
 
     fn execute_dml(
@@ -2681,11 +2978,17 @@ impl QueryExecutor {
     ) -> Result<QueryResult, OracleError> {
         let stmt = match conn.execute(sql, &[]) {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let affected_rows = match stmt.row_count() {
             Ok(affected_rows) => affected_rows,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let execution_time = start.elapsed();
         Ok(QueryResult::new_dml(
@@ -2703,7 +3006,10 @@ impl QueryExecutor {
     ) -> Result<QueryResult, OracleError> {
         match conn.execute(sql, &[]) {
             Ok(_stmt) => {}
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         }
         let execution_time = start.elapsed();
 
@@ -2769,7 +3075,10 @@ impl QueryExecutor {
     ) -> Result<QueryResult, OracleError> {
         match conn.execute(sql, &[]) {
             Ok(_stmt) => {}
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         }
         let execution_time = start.elapsed();
         Ok(QueryResult {
@@ -2792,7 +3101,10 @@ impl QueryExecutor {
     ) -> Result<QueryResult, OracleError> {
         match conn.execute(sql, &[]) {
             Ok(_stmt) => {}
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         }
         let execution_time = start.elapsed();
         Ok(QueryResult {
@@ -2827,7 +3139,10 @@ impl QueryExecutor {
         let plsql = format!("BEGIN {}; END;", proc_call.trim().trim_end_matches(';'));
         match conn.execute(&plsql, &[]) {
             Ok(_stmt) => {}
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         }
         let execution_time = start.elapsed();
         Ok(QueryResult {
@@ -2844,10 +3159,7 @@ impl QueryExecutor {
 
     pub fn parse_compiled_object(sql: &str) -> Option<CompiledObject> {
         let cleaned = Self::strip_leading_comments(sql);
-        let tokens: Vec<String> = cleaned
-            .split_whitespace()
-            .map(|t| t.to_string())
-            .collect();
+        let tokens: Vec<String> = cleaned.split_whitespace().map(|t| t.to_string()).collect();
         if tokens.len() < 3 {
             return None;
         }
@@ -2857,15 +3169,23 @@ impl QueryExecutor {
         }
 
         let mut idx = 1usize;
-        if tokens.get(idx).map(|t| t.eq_ignore_ascii_case("OR")).unwrap_or(false)
-            && tokens.get(idx + 1).map(|t| t.eq_ignore_ascii_case("REPLACE")).unwrap_or(false)
+        if tokens
+            .get(idx)
+            .map(|t| t.eq_ignore_ascii_case("OR"))
+            .unwrap_or(false)
+            && tokens
+                .get(idx + 1)
+                .map(|t| t.eq_ignore_ascii_case("REPLACE"))
+                .unwrap_or(false)
         {
             idx += 2;
         }
 
         if tokens
             .get(idx)
-            .map(|t| t.eq_ignore_ascii_case("EDITIONABLE") || t.eq_ignore_ascii_case("NONEDITIONABLE"))
+            .map(|t| {
+                t.eq_ignore_ascii_case("EDITIONABLE") || t.eq_ignore_ascii_case("NONEDITIONABLE")
+            })
             .unwrap_or(false)
         {
             idx += 1;
@@ -2875,12 +3195,20 @@ impl QueryExecutor {
         idx += 1;
 
         if object_type == "PACKAGE" {
-            if tokens.get(idx).map(|t| t.eq_ignore_ascii_case("BODY")).unwrap_or(false) {
+            if tokens
+                .get(idx)
+                .map(|t| t.eq_ignore_ascii_case("BODY"))
+                .unwrap_or(false)
+            {
                 object_type = "PACKAGE BODY".to_string();
                 idx += 1;
             }
         } else if object_type == "TYPE" {
-            if tokens.get(idx).map(|t| t.eq_ignore_ascii_case("BODY")).unwrap_or(false) {
+            if tokens
+                .get(idx)
+                .map(|t| t.eq_ignore_ascii_case("BODY"))
+                .unwrap_or(false)
+            {
                 object_type = "TYPE BODY".to_string();
                 idx += 1;
             }
@@ -2888,7 +3216,13 @@ impl QueryExecutor {
 
         let tracked = matches!(
             object_type.as_str(),
-            "PROCEDURE" | "FUNCTION" | "PACKAGE" | "PACKAGE BODY" | "TRIGGER" | "TYPE" | "TYPE BODY"
+            "PROCEDURE"
+                | "FUNCTION"
+                | "PACKAGE"
+                | "PACKAGE BODY"
+                | "TRIGGER"
+                | "TYPE"
+                | "TYPE BODY"
         );
         if !tracked {
             return None;
@@ -2925,7 +3259,9 @@ impl QueryExecutor {
         conn: &Connection,
         object: &CompiledObject,
     ) -> Result<Vec<Vec<String>>, OracleError> {
-        let query_errors = |table: &str, use_owner: bool| -> Result<Vec<Vec<String>>, OracleError> {
+        let query_errors = |table: &str,
+                            use_owner: bool|
+         -> Result<Vec<Vec<String>>, OracleError> {
             let sql = if use_owner {
                 format!(
                     "SELECT line, position, text FROM {} WHERE owner = :owner AND name = :name AND type = :type ORDER BY sequence",
@@ -2979,29 +3315,44 @@ impl QueryExecutor {
         let explain_sql = format!("EXPLAIN PLAN FOR {}", sql);
         match conn.execute(&explain_sql, &[]) {
             Ok(_stmt) => {}
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         }
 
         let plan_sql =
             "SELECT plan_table_output FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', NULL, 'ALL'))";
         let mut stmt = match conn.statement(plan_sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let rows = match stmt.query(&[]) {
             Ok(rows) => rows,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let mut plan_lines: Vec<String> = Vec::new();
         for row_result in rows {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let line: Option<String> = match row.get(0) {
                 Ok(line) => line,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             if let Some(l) = line {
                 plan_lines.push(l);
@@ -3059,22 +3410,34 @@ impl ObjectBrowser {
         "#;
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let rows = match stmt.query(&[&package_name.to_uppercase()]) {
             Ok(rows) => rows,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let mut procedures: Vec<String> = Vec::new();
         for row_result in rows {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let name: String = match row.get(0) {
                 Ok(name) => name,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             procedures.push(name);
         }
@@ -3148,18 +3511,27 @@ impl ObjectBrowser {
 
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let rows = if let Some(pkg_name) = package_name {
             match stmt.query(&[&pkg_name.to_uppercase(), &procedure_name.to_uppercase()]) {
                 Ok(rows) => rows,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             }
         } else {
             match stmt.query(&[&procedure_name.to_uppercase()]) {
                 Ok(rows) => rows,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             }
         };
 
@@ -3167,56 +3539,95 @@ impl ObjectBrowser {
         for row_result in rows {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
 
             let name: Option<String> = match row.get(0) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let position: i32 = match row.get(1) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let sequence: i32 = match row.get(2) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let data_type: Option<String> = match row.get(3) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let in_out: Option<String> = match row.get(4) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let data_length: Option<i32> = match row.get(5) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let data_precision: Option<i32> = match row.get(6) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let data_scale: Option<i32> = match row.get(7) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let type_owner: Option<String> = match row.get(8) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let type_name: Option<String> = match row.get(9) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let pls_type: Option<String> = match row.get(10) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let overload: Option<i32> = match row.get(11) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let default_value: Option<String> = match row.get(12) {
                 Ok(value) => value,
@@ -3254,26 +3665,41 @@ impl ObjectBrowser {
         let sql = "SELECT column_name, data_type FROM user_tab_columns WHERE table_name = :1 ORDER BY column_id";
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let rows = match stmt.query(&[&table_name.to_uppercase()]) {
             Ok(rows) => rows,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let mut columns: Vec<ColumnInfo> = Vec::new();
         for row_result in rows {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let name: String = match row.get(0) {
                 Ok(name) => name,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let data_type: String = match row.get(1) {
                 Ok(data_type) => data_type,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             columns.push(ColumnInfo { name, data_type });
         }
@@ -3284,22 +3710,34 @@ impl ObjectBrowser {
     fn get_object_list(conn: &Connection, sql: &str) -> Result<Vec<String>, OracleError> {
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let rows = match stmt.query(&[]) {
             Ok(rows) => rows,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let mut objects: Vec<String> = Vec::new();
         for row_result in rows {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let name: String = match row.get(0) {
                 Ok(name) => name,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             objects.push(name);
         }
@@ -3334,50 +3772,83 @@ impl ObjectBrowser {
 
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let rows = match stmt.query(&[&table_name.to_uppercase()]) {
             Ok(rows) => rows,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let mut columns: Vec<TableColumnDetail> = Vec::new();
         for row_result in rows {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let name = match row.get(0) {
                 Ok(name) => name,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let data_type = match row.get(1) {
                 Ok(data_type) => data_type,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let data_length = match row.get::<_, Option<i32>>(2) {
                 Ok(value) => value.unwrap_or(0),
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let data_precision = match row.get::<_, Option<i32>>(3) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let data_scale = match row.get::<_, Option<i32>>(4) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let nullable = match row.get::<_, String>(5) {
                 Ok(value) => value == "Y",
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let default_value = match row.get(6) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let is_primary_key = match row.get::<_, Option<String>>(7) {
                 Ok(value) => value.is_some(),
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             columns.push(TableColumnDetail {
                 name,
@@ -3413,30 +3884,48 @@ impl ObjectBrowser {
 
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let rows = match stmt.query(&[&table_name.to_uppercase()]) {
             Ok(rows) => rows,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let mut indexes: Vec<IndexInfo> = Vec::new();
         for row_result in rows {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let name = match row.get(0) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let is_unique = match row.get::<_, String>(1) {
                 Ok(value) => value == "UNIQUE",
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let columns = match row.get(2) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             indexes.push(IndexInfo {
                 name,
@@ -3469,34 +3958,55 @@ impl ObjectBrowser {
 
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let rows = match stmt.query(&[&table_name.to_uppercase()]) {
             Ok(rows) => rows,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
 
         let mut constraints: Vec<ConstraintInfo> = Vec::new();
         for row_result in rows {
             let row: Row = match row_result {
                 Ok(row) => row,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let constraint_type: String = match row.get(1) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let name = match row.get(0) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let columns = match row.get::<_, Option<String>>(2) {
                 Ok(value) => value.unwrap_or_default(),
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             let ref_table = match row.get(4) {
                 Ok(value) => value,
-                Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
             };
             constraints.push(ConstraintInfo {
                 name,
@@ -3520,15 +4030,24 @@ impl ObjectBrowser {
         let sql = "SELECT DBMS_METADATA.GET_DDL('TABLE', :1) FROM DUAL";
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let row = match stmt.query_row(&[&table_name.to_uppercase()]) {
             Ok(row) => row,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let ddl: String = match row.get(0) {
             Ok(ddl) => ddl,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         Ok(ddl)
     }
@@ -3538,15 +4057,24 @@ impl ObjectBrowser {
         let sql = "SELECT DBMS_METADATA.GET_DDL('VIEW', :1) FROM DUAL";
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let row = match stmt.query_row(&[&view_name.to_uppercase()]) {
             Ok(row) => row,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let ddl: String = match row.get(0) {
             Ok(ddl) => ddl,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         Ok(ddl)
     }
@@ -3556,15 +4084,24 @@ impl ObjectBrowser {
         let sql = "SELECT DBMS_METADATA.GET_DDL('PROCEDURE', :1) FROM DUAL";
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let row = match stmt.query_row(&[&proc_name.to_uppercase()]) {
             Ok(row) => row,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let ddl: String = match row.get(0) {
             Ok(ddl) => ddl,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         Ok(ddl)
     }
@@ -3574,15 +4111,24 @@ impl ObjectBrowser {
         let sql = "SELECT DBMS_METADATA.GET_DDL('FUNCTION', :1) FROM DUAL";
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let row = match stmt.query_row(&[&func_name.to_uppercase()]) {
             Ok(row) => row,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let ddl: String = match row.get(0) {
             Ok(ddl) => ddl,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         Ok(ddl)
     }
@@ -3592,15 +4138,24 @@ impl ObjectBrowser {
         let sql = "SELECT DBMS_METADATA.GET_DDL('SEQUENCE', :1) FROM DUAL";
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let row = match stmt.query_row(&[&seq_name.to_uppercase()]) {
             Ok(row) => row,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         let ddl: String = match row.get(0) {
             Ok(ddl) => ddl,
-            Err(err) => { eprintln!("Database operation failed: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
         };
         Ok(ddl)
     }
@@ -3699,7 +4254,11 @@ mod tests {
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
-        assert!(!stmts[0].ends_with(";;"), "Should not end with ;;: {}", stmts[0]);
+        assert!(
+            !stmts[0].ends_with(";;"),
+            "Should not end with ;;: {}",
+            stmts[0]
+        );
     }
 
     #[test]
@@ -3856,7 +4415,12 @@ END test_pkg;"#;
 END oqt_pkg;"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
-        assert_eq!(stmts.len(), 1, "Should have 1 statement, got {} statements", stmts.len());
+        assert_eq!(
+            stmts.len(),
+            1,
+            "Should have 1 statement, got {} statements",
+            stmts.len()
+        );
         if stmts.len() > 1 {
             for (i, s) in stmts.iter().enumerate() {
                 println!("Statement {}: {}", i, &s[..s.len().min(100)]);
@@ -3960,7 +4524,10 @@ SELECT 1 FROM DUAL;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
-        assert!(!stmts[0].starts_with("--"), "Leading comment should be stripped");
+        assert!(
+            !stmts[0].starts_with("--"),
+            "Leading comment should be stripped"
+        );
     }
 
     #[test]
@@ -4117,26 +4684,57 @@ SHOW ERRORS PACKAGE BODY oqt_pkg;"#;
         let stmts = get_statements(&items);
 
         // Count tool commands (SHOW ERRORS)
-        let tool_cmds: Vec<_> = items.iter().filter(|item| matches!(item, ScriptItem::ToolCommand(_))).collect();
+        let tool_cmds: Vec<_> = items
+            .iter()
+            .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+            .collect();
 
         if stmts.len() != 2 {
-            println!("\n=== FAILED: Expected 2 statements, got {} ===", stmts.len());
+            println!(
+                "\n=== FAILED: Expected 2 statements, got {} ===",
+                stmts.len()
+            );
             for (i, s) in stmts.iter().enumerate() {
                 let preview = if s.len() > 100 { &s[..100] } else { s };
                 println!("\n--- Statement {} ---\n{}...\n---", i, preview);
             }
         }
 
-        assert_eq!(stmts.len(), 2, "Should have 2 statements (package spec + body), got {}", stmts.len());
-        assert_eq!(tool_cmds.len(), 2, "Should have 2 tool commands (SHOW ERRORS), got {}", tool_cmds.len());
+        assert_eq!(
+            stmts.len(),
+            2,
+            "Should have 2 statements (package spec + body), got {}",
+            stmts.len()
+        );
+        assert_eq!(
+            tool_cmds.len(),
+            2,
+            "Should have 2 tool commands (SHOW ERRORS), got {}",
+            tool_cmds.len()
+        );
 
         // Verify package spec
-        assert!(stmts[0].contains("CREATE OR REPLACE PACKAGE oqt_pkg AS"), "First statement should be package spec");
-        assert!(stmts[0].contains("END oqt_pkg"), "Package spec should end with END oqt_pkg");
-        assert!(!stmts[0].contains("PACKAGE BODY"), "Package spec should not contain BODY");
+        assert!(
+            stmts[0].contains("CREATE OR REPLACE PACKAGE oqt_pkg AS"),
+            "First statement should be package spec"
+        );
+        assert!(
+            stmts[0].contains("END oqt_pkg"),
+            "Package spec should end with END oqt_pkg"
+        );
+        assert!(
+            !stmts[0].contains("PACKAGE BODY"),
+            "Package spec should not contain BODY"
+        );
 
         // Verify package body
-        assert!(stmts[1].contains("CREATE OR REPLACE PACKAGE BODY oqt_pkg AS"), "Second statement should be package body");
-        assert!(stmts[1].contains("END oqt_pkg"), "Package body should end with END oqt_pkg");
+        assert!(
+            stmts[1].contains("CREATE OR REPLACE PACKAGE BODY oqt_pkg AS"),
+            "Second statement should be package body"
+        );
+        assert!(
+            stmts[1].contains("END oqt_pkg"),
+            "Package body should end with END oqt_pkg"
+        );
     }
 }
