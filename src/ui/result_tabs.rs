@@ -1,6 +1,7 @@
 use fltk::{
     group::{Group, Tabs, TabsOverflow},
     prelude::*,
+    text::{TextBuffer, TextDisplay},
     widget::Widget,
 };
 use std::cell::RefCell;
@@ -14,12 +15,20 @@ pub struct ResultTabsWidget {
     tabs: Tabs,
     data: Rc<RefCell<Vec<ResultTab>>>,
     active_index: Rc<RefCell<Option<usize>>>,
+    script_output: Rc<RefCell<ScriptOutputTab>>,
 }
 
 #[derive(Clone)]
 struct ResultTab {
     group: Group,
     table: ResultTableWidget,
+}
+
+#[derive(Clone)]
+struct ScriptOutputTab {
+    group: Group,
+    display: TextDisplay,
+    buffer: TextBuffer,
 }
 
 impl ResultTabsWidget {
@@ -37,11 +46,44 @@ impl ResultTabsWidget {
         let data = Rc::new(RefCell::new(Vec::<ResultTab>::new()));
         let active_index = Rc::new(RefCell::new(None));
 
+        tabs.begin();
+        let x = tabs.x();
+        let y = tabs.y() + Self::TAB_HEADER_HEIGHT;
+        let w = tabs.w().max(100);
+        let h = (tabs.h() - Self::TAB_HEADER_HEIGHT).max(100);
+        let mut script_group = Group::new(x, y, w, h, None).with_label("Script Output");
+        script_group.set_color(theme::panel_bg());
+        script_group.set_label_color(theme::text_secondary());
+        script_group.begin();
+        let mut script_display = TextDisplay::new(x, y, w, h, None);
+        script_display.set_color(theme::panel_bg());
+        script_display.set_text_color(theme::text_primary());
+        script_display.set_text_font(fltk::enums::Font::Courier);
+        script_display.set_text_size(12);
+        let mut script_buffer = TextBuffer::default();
+        script_buffer.set_text("");
+        script_display.set_buffer(script_buffer.clone());
+        script_group.resizable(&script_display);
+        script_group.end();
+        tabs.end();
+
+        let script_output = Rc::new(RefCell::new(ScriptOutputTab {
+            group: script_group,
+            display: script_display,
+            buffer: script_buffer,
+        }));
+
         let data_for_cb = data.clone();
         let active_for_cb = active_index.clone();
+        let script_for_cb = script_output.clone();
         tabs.set_callback(move |t| {
             if let Some(widget) = t.value() {
                 let ptr = widget.as_widget_ptr();
+                let script_ptr = script_for_cb.borrow().group.as_widget_ptr();
+                if ptr == script_ptr {
+                    *active_for_cb.borrow_mut() = None;
+                    return;
+                }
                 let data = data_for_cb.borrow();
                 let index = data
                     .iter()
@@ -61,12 +103,11 @@ impl ResultTabsWidget {
             }
         });
 
-        tabs.end();
-
         Self {
             tabs,
             data,
             active_index,
+            script_output,
         }
     }
 
@@ -79,11 +120,35 @@ impl ResultTabsWidget {
         for tab in tabs_to_delete {
             self.delete_tab(tab);
         }
+        self.clear_script_output();
         *self.active_index.borrow_mut() = None;
     }
 
     pub fn tab_count(&self) -> usize {
         self.data.borrow().len()
+    }
+
+    pub fn append_script_output_lines(&mut self, lines: &[String]) {
+        let script_output = self.script_output.borrow();
+        let mut buffer = script_output.buffer.clone();
+        if lines.is_empty() {
+            return;
+        }
+        let current_text = buffer.text();
+        if !current_text.is_empty() && !current_text.ends_with('\n') {
+            buffer.append("\n");
+        }
+        for (idx, line) in lines.iter().enumerate() {
+            buffer.append(line);
+            if idx + 1 < lines.len() {
+                buffer.append("\n");
+            }
+        }
+        buffer.append("\n");
+        script_output.display.scroll(
+            script_output.display.count_lines(0, buffer.length(), true),
+            0,
+        );
     }
 
     pub fn start_statement(&mut self, index: usize, label: &str) {
@@ -232,6 +297,12 @@ impl ResultTabsWidget {
             self.tabs.remove(&group);
         }
         fltk::group::Group::delete(group);
+    }
+
+    fn clear_script_output(&self) {
+        let script_output = self.script_output.borrow();
+        let mut buffer = script_output.buffer.clone();
+        buffer.set_text("");
     }
 }
 

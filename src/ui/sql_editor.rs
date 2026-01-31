@@ -65,6 +65,9 @@ pub enum QueryProgress {
         index: usize,
         rows: Vec<Vec<String>>,
     },
+    ScriptOutput {
+        lines: Vec<String>,
+    },
     StatementFinished {
         index: usize,
         result: QueryResult,
@@ -3491,16 +3494,11 @@ impl SqlEditorWidget {
                                         normalized,
                                         data_type.display()
                                     );
-                                    SqlEditorWidget::emit_non_select_result(
+                                    SqlEditorWidget::emit_script_message(
                                         &sender,
-                                        &conn_name,
-                                        result_index,
                                         &format!("VAR {} {}", normalized, data_type.display()),
-                                        message,
-                                        true,
-                                        false,
+                                        &message,
                                     );
-                                    result_index += 1;
                                 }
                                 ToolCommand::Print { name } => {
                                     let binds_snapshot = match session.lock() {
@@ -3510,7 +3508,7 @@ impl SqlEditorWidget {
                                             poisoned.into_inner().binds.clone()
                                         }
                                     };
-                                    let (heading_enabled, feedback_enabled) =
+                                    let (heading_enabled, _feedback_enabled) =
                                         SqlEditorWidget::current_output_settings(&session);
 
                                     if let Some(name) = name {
@@ -3518,84 +3516,58 @@ impl SqlEditorWidget {
                                         if let Some(bind) = binds_snapshot.get(&key) {
                                             match &bind.value {
                                                 BindValue::Scalar(value) => {
-                                                    let columns = SqlEditorWidget::apply_heading_setting(
-                                                        vec![
-                                                            "NAME".to_string(),
-                                                            "VALUE".to_string(),
-                                                        ],
-                                                        heading_enabled,
-                                                    );
+                                                    let columns = vec![
+                                                        "NAME".to_string(),
+                                                        "VALUE".to_string(),
+                                                    ];
                                                     let rows = vec![vec![
                                                         key.clone(),
                                                         value.clone().unwrap_or_else(|| "NULL".to_string()),
                                                     ]];
-                                                    SqlEditorWidget::emit_select_result(
+                                                    SqlEditorWidget::emit_script_table(
                                                         &sender,
-                                                        &conn_name,
-                                                        result_index,
                                                         &format!("PRINT {}", key),
                                                         columns,
                                                         rows,
-                                                        true,
-                                                        feedback_enabled,
+                                                        heading_enabled,
                                                     );
                                                 }
                                                 BindValue::Cursor(Some(cursor)) => {
-                                                    let columns = SqlEditorWidget::apply_heading_setting(
-                                                        cursor.columns.clone(),
-                                                        heading_enabled,
-                                                    );
-                                                    SqlEditorWidget::emit_select_result(
+                                                    let columns = cursor.columns.clone();
+                                                    SqlEditorWidget::emit_script_table(
                                                         &sender,
-                                                        &conn_name,
-                                                        result_index,
                                                         &format!("PRINT {}", key),
                                                         columns,
                                                         cursor.rows.clone(),
-                                                        true,
-                                                        feedback_enabled,
+                                                        heading_enabled,
                                                     );
                                                 }
                                                 BindValue::Cursor(None) => {
-                                                    SqlEditorWidget::emit_non_select_result(
+                                                    SqlEditorWidget::emit_script_message(
                                                         &sender,
-                                                        &conn_name,
-                                                        result_index,
                                                         &format!("PRINT {}", key),
-                                                        format!(
+                                                        &format!(
                                                             "Error: Cursor :{} has no data to print.",
                                                             key
                                                         ),
-                                                        false,
-                                                        false,
                                                     );
                                                     command_error = true;
                                                 }
                                             }
                                         } else {
-                                            SqlEditorWidget::emit_non_select_result(
+                                            SqlEditorWidget::emit_script_message(
                                                 &sender,
-                                                &conn_name,
-                                                result_index,
                                                 &format!("PRINT {}", key),
-                                                format!("Error: Bind variable :{} is not defined.", key),
-                                                false,
-                                                false,
+                                                &format!("Error: Bind variable :{} is not defined.", key),
                                             );
                                             command_error = true;
                                         }
-                                        result_index += 1;
                                     } else if binds_snapshot.is_empty() {
-                                        SqlEditorWidget::emit_non_select_result(
+                                        SqlEditorWidget::emit_script_message(
                                             &sender,
-                                            &conn_name,
-                                            result_index,
                                             "PRINT",
-                                            "No bind variables declared.".to_string(),
-                                            true,
-                                            false,
+                                            "No bind variables declared.",
                                         );
-                                        result_index += 1;
                                     } else {
                                         let mut summary_rows: Vec<Vec<String>> = Vec::new();
                                         let mut cursor_results: Vec<(String, CursorResult)> = Vec::new();
@@ -3619,41 +3591,27 @@ impl SqlEditorWidget {
                                             ]);
                                         }
 
-                                        SqlEditorWidget::emit_select_result(
+                                        SqlEditorWidget::emit_script_table(
                                             &sender,
-                                            &conn_name,
-                                            result_index,
                                             "PRINT",
-                                            SqlEditorWidget::apply_heading_setting(
-                                                vec![
-                                                    "NAME".to_string(),
-                                                    "TYPE".to_string(),
-                                                    "VALUE".to_string(),
-                                                ],
-                                                heading_enabled,
-                                            ),
+                                            vec![
+                                                "NAME".to_string(),
+                                                "TYPE".to_string(),
+                                                "VALUE".to_string(),
+                                            ],
                                             summary_rows,
-                                            true,
-                                            feedback_enabled,
+                                            heading_enabled,
                                         );
-                                        result_index += 1;
 
                                         for (cursor_name, cursor) in cursor_results {
-                                            let columns = SqlEditorWidget::apply_heading_setting(
-                                                cursor.columns.clone(),
-                                                heading_enabled,
-                                            );
-                                            SqlEditorWidget::emit_select_result(
+                                            let columns = cursor.columns.clone();
+                                            SqlEditorWidget::emit_script_table(
                                                 &sender,
-                                                &conn_name,
-                                                result_index,
                                                 &format!("PRINT {}", cursor_name),
                                                 columns,
                                                 cursor.rows.clone(),
-                                                true,
-                                                feedback_enabled,
+                                                heading_enabled,
                                             );
-                                            result_index += 1;
                                         }
                                     }
                                 }
@@ -3765,16 +3723,11 @@ impl SqlEditorWidget {
                                         }
                                     }
 
-                                    SqlEditorWidget::emit_non_select_result(
+                                    SqlEditorWidget::emit_script_message(
                                         &sender,
-                                        &conn_name,
-                                        result_index,
                                         "SET SERVEROUTPUT",
-                                        message,
-                                        success,
-                                        false,
+                                        &message,
                                     );
-                                    result_index += 1;
                                     if !success {
                                         command_error = true;
                                     }
@@ -3824,78 +3777,47 @@ impl SqlEditorWidget {
                                         ) {
                                             Ok(rows) => {
                                                 if rows.is_empty() {
-                                                    SqlEditorWidget::emit_non_select_result(
+                                                    SqlEditorWidget::emit_script_message(
                                                         &sender,
-                                                        &conn_name,
-                                                        result_index,
                                                         "SHOW ERRORS",
-                                                        "No errors found.".to_string(),
-                                                        true,
-                                                        false,
+                                                        "No errors found.",
                                                     );
-                                                    result_index += 1;
                                                 } else {
-                                                    let (heading_enabled, feedback_enabled) =
+                                                    let (heading_enabled, _feedback_enabled) =
                                                         SqlEditorWidget::current_output_settings(&session);
-                                                    SqlEditorWidget::emit_select_result(
+                                                    SqlEditorWidget::emit_script_table(
                                                         &sender,
-                                                        &conn_name,
-                                                        result_index,
                                                         "SHOW ERRORS",
-                                                        SqlEditorWidget::apply_heading_setting(
-                                                            vec![
-                                                                "LINE".to_string(),
-                                                                "POSITION".to_string(),
-                                                                "TEXT".to_string(),
-                                                            ],
-                                                            heading_enabled,
-                                                        ),
+                                                        vec![
+                                                            "LINE".to_string(),
+                                                            "POSITION".to_string(),
+                                                            "TEXT".to_string(),
+                                                        ],
                                                         rows,
-                                                        true,
-                                                        feedback_enabled,
+                                                        heading_enabled,
                                                     );
-                                                    result_index += 1;
                                                 }
                                             }
                                             Err(err) => {
-                                                SqlEditorWidget::emit_non_select_result(
+                                                SqlEditorWidget::emit_script_message(
                                                     &sender,
-                                                    &conn_name,
-                                                    result_index,
                                                     "SHOW ERRORS",
-                                                    format!("Error: {}", err),
-                                                    false,
-                                                    false,
+                                                    &format!("Error: {}", err),
                                                 );
-                                                result_index += 1;
                                                 command_error = true;
                                             }
                                         }
                                     } else {
-                                        SqlEditorWidget::emit_non_select_result(
+                                        SqlEditorWidget::emit_script_message(
                                             &sender,
-                                            &conn_name,
-                                            result_index,
                                             "SHOW ERRORS",
-                                            "Error: No compiled object found to show errors.".to_string(),
-                                            false,
-                                            false,
+                                            "Error: No compiled object found to show errors.",
                                         );
-                                        result_index += 1;
                                         command_error = true;
                                     }
                                 }
                                 ToolCommand::Prompt { text } => {
-                                    SqlEditorWidget::emit_non_select_result(
-                                        &sender,
-                                        &conn_name,
-                                        result_index,
-                                        "PROMPT",
-                                        text,
-                                        true,
-                                        false,
-                                    );
-                                    result_index += 1;
+                                    SqlEditorWidget::emit_script_output(&sender, vec![text]);
                                 }
                                 ToolCommand::SetErrorContinue { enabled } => {
                                     let mut guard = match session.lock() {
@@ -3908,19 +3830,14 @@ impl SqlEditorWidget {
                                     guard.continue_on_error = enabled;
                                     continue_on_error = enabled;
 
-                                    SqlEditorWidget::emit_non_select_result(
+                                    SqlEditorWidget::emit_script_message(
                                         &sender,
-                                        &conn_name,
-                                        result_index,
                                         "SET ERRORCONTINUE",
-                                        format!(
+                                        &format!(
                                             "ERRORCONTINUE {}",
                                             if enabled { "ON" } else { "OFF" }
                                         ),
-                                        true,
-                                        false,
                                     );
-                                    result_index += 1;
                                 }
                                 ToolCommand::SetDefine { enabled } => {
                                     let mut guard = match session.lock() {
@@ -3931,19 +3848,14 @@ impl SqlEditorWidget {
                                         }
                                     };
                                     guard.define_enabled = enabled;
-                                    SqlEditorWidget::emit_non_select_result(
+                                    SqlEditorWidget::emit_script_message(
                                         &sender,
-                                        &conn_name,
-                                        result_index,
                                         "SET DEFINE",
-                                        format!(
+                                        &format!(
                                             "DEFINE {}",
                                             if enabled { "ON" } else { "OFF" }
                                         ),
-                                        true,
-                                        false,
                                     );
-                                    result_index += 1;
                                 }
                                 ToolCommand::SetFeedback { enabled } => {
                                     let mut guard = match session.lock() {
@@ -3954,19 +3866,14 @@ impl SqlEditorWidget {
                                         }
                                     };
                                     guard.feedback_enabled = enabled;
-                                    SqlEditorWidget::emit_non_select_result(
+                                    SqlEditorWidget::emit_script_message(
                                         &sender,
-                                        &conn_name,
-                                        result_index,
                                         "SET FEEDBACK",
-                                        format!(
+                                        &format!(
                                             "FEEDBACK {}",
                                             if enabled { "ON" } else { "OFF" }
                                         ),
-                                        true,
-                                        false,
                                     );
-                                    result_index += 1;
                                 }
                                 ToolCommand::SetHeading { enabled } => {
                                     let mut guard = match session.lock() {
@@ -3977,19 +3884,14 @@ impl SqlEditorWidget {
                                         }
                                     };
                                     guard.heading_enabled = enabled;
-                                    SqlEditorWidget::emit_non_select_result(
+                                    SqlEditorWidget::emit_script_message(
                                         &sender,
-                                        &conn_name,
-                                        result_index,
                                         "SET HEADING",
-                                        format!(
+                                        &format!(
                                             "HEADING {}",
                                             if enabled { "ON" } else { "OFF" }
                                         ),
-                                        true,
-                                        false,
                                     );
-                                    result_index += 1;
                                 }
                                 ToolCommand::SetPageSize { size } => {
                                     let mut guard = match session.lock() {
@@ -4000,16 +3902,11 @@ impl SqlEditorWidget {
                                         }
                                     };
                                     guard.pagesize = size;
-                                    SqlEditorWidget::emit_non_select_result(
+                                    SqlEditorWidget::emit_script_message(
                                         &sender,
-                                        &conn_name,
-                                        result_index,
                                         "SET PAGESIZE",
-                                        format!("PAGESIZE {}", size),
-                                        true,
-                                        false,
+                                        &format!("PAGESIZE {}", size),
                                     );
-                                    result_index += 1;
                                 }
                                 ToolCommand::SetLineSize { size } => {
                                     let mut guard = match session.lock() {
@@ -4020,16 +3917,11 @@ impl SqlEditorWidget {
                                         }
                                     };
                                     guard.linesize = size;
-                                    SqlEditorWidget::emit_non_select_result(
+                                    SqlEditorWidget::emit_script_message(
                                         &sender,
-                                        &conn_name,
-                                        result_index,
                                         "SET LINESIZE",
-                                        format!("LINESIZE {}", size),
-                                        true,
-                                        false,
+                                        &format!("LINESIZE {}", size),
                                     );
-                                    result_index += 1;
                                 }
                                 ToolCommand::RunScript {
                                     path,
@@ -4058,35 +3950,25 @@ impl SqlEditorWidget {
                                                 index: 0,
                                                 base_dir: script_dir,
                                             });
-                                            SqlEditorWidget::emit_non_select_result(
+                                            SqlEditorWidget::emit_script_message(
                                                 &sender,
-                                                &conn_name,
-                                                result_index,
                                                 if relative_to_caller { "@@" } else { "@" },
-                                                format!(
+                                                &format!(
                                                     "Running script {}",
                                                     target_path.display()
                                                 ),
-                                                true,
-                                                false,
                                             );
-                                            result_index += 1;
                                         }
                                         Err(err) => {
-                                            SqlEditorWidget::emit_non_select_result(
+                                            SqlEditorWidget::emit_script_message(
                                                 &sender,
-                                                &conn_name,
-                                                result_index,
                                                 if relative_to_caller { "@@" } else { "@" },
-                                                format!(
+                                                &format!(
                                                     "Error: Failed to read script {}: {}",
                                                     target_path.display(),
                                                     err
                                                 ),
-                                                false,
-                                                false,
                                             );
-                                            result_index += 1;
                                             command_error = true;
                                         }
                                     }
@@ -4097,28 +3979,19 @@ impl SqlEditorWidget {
                                     is_error,
                                 } => {
                                     if is_error {
-                                        SqlEditorWidget::emit_non_select_result(
+                                        SqlEditorWidget::emit_script_message(
                                             &sender,
-                                            &conn_name,
-                                            result_index,
                                             &raw,
-                                            format!("Error: {}", message),
-                                            false,
-                                            false,
+                                            &format!("Error: {}", message),
                                         );
                                         command_error = true;
                                     } else {
-                                        SqlEditorWidget::emit_non_select_result(
+                                        SqlEditorWidget::emit_script_message(
                                             &sender,
-                                            &conn_name,
-                                            result_index,
                                             &raw,
-                                            format!("Warning: {}", message),
-                                            true,
-                                            false,
+                                            &format!("Warning: {}", message),
                                         );
                                     }
-                                    result_index += 1;
                                 }
                             }
 
@@ -5201,6 +5074,41 @@ impl SqlEditorWidget {
         app::awake();
     }
 
+    fn emit_script_output(sender: &mpsc::Sender<QueryProgress>, lines: Vec<String>) {
+        if lines.is_empty() {
+            return;
+        }
+        let _ = sender.send(QueryProgress::ScriptOutput { lines });
+        app::awake();
+    }
+
+    fn emit_script_message(sender: &mpsc::Sender<QueryProgress>, title: &str, message: &str) {
+        let mut lines = Vec::new();
+        lines.push(format!("[{}]", title));
+        for line in message.lines() {
+            lines.push(line.to_string());
+        }
+        SqlEditorWidget::emit_script_output(sender, lines);
+    }
+
+    fn emit_script_table(
+        sender: &mpsc::Sender<QueryProgress>,
+        title: &str,
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+        heading_enabled: bool,
+    ) {
+        let mut lines = Vec::new();
+        lines.push(format!("[{}]", title));
+        if heading_enabled && !columns.is_empty() {
+            lines.push(columns.join(" | "));
+        }
+        for row in rows {
+            lines.push(row.join(" | "));
+        }
+        SqlEditorWidget::emit_script_output(sender, lines);
+    }
+
     fn apply_define_substitution(
         sql: &str,
         binds_snapshot: &HashMap<String, BindVar>,
@@ -5400,10 +5308,10 @@ impl SqlEditorWidget {
 
     fn emit_dbms_output(
         sender: &mpsc::Sender<QueryProgress>,
-        conn_name: &str,
+        _conn_name: &str,
         conn: &Connection,
         session: &Arc<Mutex<SessionState>>,
-        result_index: &mut usize,
+        _result_index: &mut usize,
     ) -> Result<(), OracleError> {
         let (enabled, size) = match session.lock() {
             Ok(guard) => (guard.server_output.enabled, guard.server_output.size),
@@ -5428,27 +5336,10 @@ impl SqlEditorWidget {
             return Ok(());
         }
 
-        let rows = lines
-            .into_iter()
-            .map(|line| vec![line])
-            .collect::<Vec<Vec<String>>>();
-        let index = *result_index;
-        let (heading_enabled, feedback_enabled) =
-            SqlEditorWidget::current_output_settings(session);
-        SqlEditorWidget::emit_select_result(
-            sender,
-            conn_name,
-            index,
-            "DBMS_OUTPUT",
-            SqlEditorWidget::apply_heading_setting(
-                vec!["DBMS_OUTPUT".to_string()],
-                heading_enabled,
-            ),
-            rows,
-            true,
-            feedback_enabled,
-        );
-        *result_index += 1;
+        let mut output_lines = Vec::with_capacity(lines.len() + 1);
+        output_lines.push("DBMS_OUTPUT".to_string());
+        output_lines.extend(lines);
+        SqlEditorWidget::emit_script_output(sender, output_lines);
         Ok(())
     }
 
