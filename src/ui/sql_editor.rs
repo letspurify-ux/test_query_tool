@@ -2390,6 +2390,13 @@ impl SqlEditorWidget {
                     "SET DEFINE OFF".to_string()
                 }
             }
+            ToolCommand::SetEcho { enabled } => {
+                if *enabled {
+                    "SET ECHO ON".to_string()
+                } else {
+                    "SET ECHO OFF".to_string()
+                }
+            }
             ToolCommand::SetFeedback { enabled } => {
                 if *enabled {
                     "SET FEEDBACK ON".to_string()
@@ -3683,6 +3690,29 @@ impl SqlEditorWidget {
                     let item = frame.items[frame.index].clone();
                     frame.index += 1;
 
+                    let echo_enabled = match session.lock() {
+                        Ok(guard) => guard.echo_enabled,
+                        Err(poisoned) => {
+                            eprintln!("Warning: session state lock was poisoned; recovering.");
+                            poisoned.into_inner().echo_enabled
+                        }
+                    };
+                    if echo_enabled {
+                        let echo_line = match &item {
+                            ScriptItem::Statement(statement) => statement.trim().to_string(),
+                            ScriptItem::ToolCommand(command) => {
+                                SqlEditorWidget::format_tool_command(command)
+                            }
+                        };
+                        if !echo_line.trim().is_empty() {
+                            SqlEditorWidget::emit_script_output(
+                                &sender,
+                                &session,
+                                vec![echo_line],
+                            );
+                        }
+                    }
+
                     match item {
                         ScriptItem::ToolCommand(command) => {
                             let mut command_error = false;
@@ -4104,11 +4134,12 @@ impl SqlEditorWidget {
                                     }
                                 }
                                 ToolCommand::ShowAll => {
-                                    let (server_output, define_enabled, feedback_enabled, heading_enabled, pagesize, linesize, continue_on_error, spool_path) =
+                                    let (server_output, define_enabled, echo_enabled, feedback_enabled, heading_enabled, pagesize, linesize, continue_on_error, spool_path) =
                                         match session.lock() {
                                             Ok(guard) => (
                                                 guard.server_output.clone(),
                                                 guard.define_enabled,
+                                                guard.echo_enabled,
                                                 guard.feedback_enabled,
                                                 guard.heading_enabled,
                                                 guard.pagesize,
@@ -4122,6 +4153,7 @@ impl SqlEditorWidget {
                                                 (
                                                     guard.server_output.clone(),
                                                     guard.define_enabled,
+                                                    guard.echo_enabled,
                                                     guard.feedback_enabled,
                                                     guard.heading_enabled,
                                                     guard.pagesize,
@@ -4162,6 +4194,7 @@ impl SqlEditorWidget {
                                             "DEFINE {}",
                                             if define_enabled { "ON" } else { "OFF" }
                                         ),
+                                        format!("ECHO {}", if echo_enabled { "ON" } else { "OFF" }),
                                         format!(
                                             "FEEDBACK {}",
                                             if feedback_enabled { "ON" } else { "OFF" }
@@ -4339,6 +4372,26 @@ impl SqlEditorWidget {
                                         &session,
                                         "SET DEFINE",
                                         &format!("DEFINE {}", if enabled { "ON" } else { "OFF" }),
+                                    );
+                                }
+                                ToolCommand::SetEcho { enabled } => {
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.echo_enabled = enabled;
+                                    }
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "SET ECHO",
+                                        &format!("ECHO {}", if enabled { "ON" } else { "OFF" }),
                                     );
                                 }
                                 ToolCommand::SetFeedback { enabled } => {

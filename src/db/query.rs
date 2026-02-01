@@ -102,6 +102,9 @@ pub enum ToolCommand {
     SetDefine {
         enabled: bool,
     },
+    SetEcho {
+        enabled: bool,
+    },
     SetFeedback {
         enabled: bool,
     },
@@ -1030,6 +1033,10 @@ impl QueryExecutor {
             return Some(Self::parse_define_command(trimmed));
         }
 
+        if upper.starts_with("SET ECHO") {
+            return Some(Self::parse_echo_command(trimmed));
+        }
+
         if upper.starts_with("SET FEEDBACK") {
             return Some(Self::parse_feedback_command(trimmed));
         }
@@ -1440,6 +1447,28 @@ impl QueryExecutor {
             _ => ToolCommand::Unsupported {
                 raw: raw.to_string(),
                 message: "SET DEFINE supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_echo_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET ECHO requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetEcho { enabled: true },
+            "OFF" => ToolCommand::SetEcho { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET ECHO supports only ON or OFF.".to_string(),
                 is_error: true,
             },
         }
