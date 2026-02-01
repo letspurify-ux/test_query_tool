@@ -306,6 +306,23 @@ impl MainWindow {
                     s.result_tabs.append_script_output_lines(&lines);
                 }
                 QueryProgress::PromptInput { .. } => {}
+                QueryProgress::AutoCommitChanged { enabled } => {
+                    if let Some(menu) = app::widget_from_id::<MenuBar>("main_menu") {
+                        if let Some(mut item) = menu.find_item("&Tools/&Auto-Commit\t") {
+                            if enabled {
+                                item.set();
+                            } else {
+                                item.clear();
+                            }
+                        }
+                    }
+                    let status = if enabled {
+                        "Auto-commit enabled"
+                    } else {
+                        "Auto-commit disabled"
+                    };
+                    s.status_bar.set_label(status);
+                }
                 QueryProgress::StatementFinished { index, result, .. } => {
                     let tab_index = s.result_tab_offset + index;
                     if result.is_select {

@@ -76,6 +76,9 @@ pub enum QueryProgress {
         prompt: String,
         response: mpsc::Sender<Option<String>>,
     },
+    AutoCommitChanged {
+        enabled: bool,
+    },
     StatementFinished {
         index: usize,
         result: QueryResult,
@@ -2244,6 +2247,13 @@ impl SqlEditorWidget {
                     "SET ERRORCONTINUE OFF".to_string()
                 }
             }
+            ToolCommand::SetAutoCommit { enabled } => {
+                if *enabled {
+                    "SET AUTOCOMMIT ON".to_string()
+                } else {
+                    "SET AUTOCOMMIT OFF".to_string()
+                }
+            }
             ToolCommand::SetDefine { enabled } => {
                 if *enabled {
                     "SET DEFINE ON".to_string()
@@ -3453,6 +3463,7 @@ impl SqlEditorWidget {
 
         let conn_name = conn_guard.get_info().name.clone();
         let auto_commit = conn_guard.auto_commit();
+        let shared_connection = self.connection.clone();
         let query_timeout = Self::parse_timeout(&self.timeout_input.value());
 
         if let Some(db_conn) = conn_guard.get_connection() {
@@ -3460,6 +3471,7 @@ impl SqlEditorWidget {
             let sender = self.progress_sender.clone();
             let conn = db_conn.clone();
             let session = conn_guard.session_state();
+            let shared_connection = shared_connection.clone();
             let query_running = self.query_running.clone();
             let script_mode = script_mode;
 
@@ -3513,6 +3525,7 @@ impl SqlEditorWidget {
                 }
 
                 let mut result_index = 0usize;
+                let mut auto_commit = auto_commit;
                 let mut continue_on_error = match session.lock() {
                     Ok(guard) => guard.continue_on_error,
                     Err(poisoned) => {
@@ -4046,6 +4059,27 @@ impl SqlEditorWidget {
                                             if enabled { "ON" } else { "OFF" }
                                         ),
                                     );
+                                }
+                                ToolCommand::SetAutoCommit { enabled } => {
+                                    {
+                                        let mut conn_guard = lock_connection(&shared_connection);
+                                        conn_guard.set_auto_commit(enabled);
+                                    }
+                                    auto_commit = enabled;
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "SET AUTOCOMMIT",
+                                        if enabled {
+                                            "Auto-commit enabled"
+                                        } else {
+                                            "Auto-commit disabled"
+                                        },
+                                    );
+                                    let _ = sender.send(QueryProgress::AutoCommitChanged {
+                                        enabled,
+                                    });
+                                    app::awake();
                                 }
                                 ToolCommand::SetDefine { enabled } => {
                                     {

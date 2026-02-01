@@ -94,6 +94,9 @@ pub enum ToolCommand {
     SetErrorContinue {
         enabled: bool,
     },
+    SetAutoCommit {
+        enabled: bool,
+    },
     SetDefine {
         enabled: bool,
     },
@@ -1013,6 +1016,10 @@ impl QueryExecutor {
             return Some(Self::parse_errorcontinue_command(trimmed));
         }
 
+        if upper.starts_with("SET AUTOCOMMIT") {
+            return Some(Self::parse_autocommit_command(trimmed));
+        }
+
         if upper.starts_with("SET DEFINE") {
             return Some(Self::parse_define_command(trimmed));
         }
@@ -1360,6 +1367,28 @@ impl QueryExecutor {
             _ => ToolCommand::Unsupported {
                 raw: raw.to_string(),
                 message: "SET ERRORCONTINUE supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_autocommit_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET AUTOCOMMIT requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetAutoCommit { enabled: true },
+            "OFF" => ToolCommand::SetAutoCommit { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET AUTOCOMMIT supports only ON or OFF.".to_string(),
                 is_error: true,
             },
         }
