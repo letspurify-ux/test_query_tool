@@ -4960,4 +4960,306 @@ SHOW ERRORS PACKAGE BODY oqt_pkg;"#;
             "Package body should end with END oqt_pkg"
         );
     }
+
+    // =========================================================================
+    // Test file parsing tests (@test1.txt, @test2.txt, @test3.txt)
+    // =========================================================================
+
+    fn load_test_file(name: &str) -> String {
+        use std::fs;
+        use std::path::PathBuf;
+
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("test");
+        path.push(name);
+        fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("Failed to load test file {}: {}", path.display(), e)
+        })
+    }
+
+    fn get_tool_commands(items: &[ScriptItem]) -> Vec<&ToolCommand> {
+        items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::ToolCommand(cmd) => Some(cmd),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_file_test1_txt_parses_without_error() {
+        let sql = load_test_file("test1.txt");
+        let items = QueryExecutor::split_script_items(&sql);
+        let stmts = get_statements(&items);
+        let cmds = get_tool_commands(&items);
+
+        // test1.txt contains complex PL/SQL including:
+        // - PROMPT commands
+        // - SET SERVEROUTPUT ON
+        // - DROP/CREATE TABLE/TYPE/PACKAGE statements
+        // - SHOW ERRORS
+        // - Multiple anonymous blocks
+        // - SELECT statements
+
+        assert!(
+            !stmts.is_empty(),
+            "test1.txt should produce statements, got 0"
+        );
+
+        // Verify key tool commands are parsed
+        let has_prompt = cmds.iter().any(|cmd| matches!(cmd, ToolCommand::Prompt { .. }));
+        let has_serveroutput = cmds.iter().any(|cmd| matches!(cmd, ToolCommand::SetServerOutput { .. }));
+        let has_show_errors = cmds.iter().any(|cmd| matches!(cmd, ToolCommand::ShowErrors { .. }));
+
+        assert!(has_prompt, "test1.txt should have PROMPT commands");
+        assert!(has_serveroutput, "test1.txt should have SET SERVEROUTPUT command");
+        assert!(has_show_errors, "test1.txt should have SHOW ERRORS commands");
+
+        // Verify key SQL statements exist
+        let has_create_table = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("CREATE TABLE OQT_EMP")
+        });
+        let has_create_type = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("CREATE OR REPLACE TYPE OQT_ROW")
+        });
+        let has_create_package = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("CREATE OR REPLACE PACKAGE OQT_DEMO_PKG")
+        });
+        let has_select = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("SELECT") && upper.contains("FROM")
+        });
+
+        assert!(has_create_table, "test1.txt should have CREATE TABLE oqt_emp");
+        assert!(has_create_type, "test1.txt should have CREATE TYPE oqt_row");
+        assert!(has_create_package, "test1.txt should have CREATE PACKAGE oqt_demo_pkg");
+        assert!(has_select, "test1.txt should have SELECT statements");
+
+        println!(
+            "test1.txt: {} statements, {} tool commands parsed successfully",
+            stmts.len(),
+            cmds.len()
+        );
+    }
+
+    #[test]
+    fn test_file_test2_txt_parses_without_error() {
+        let sql = load_test_file("test2.txt");
+        let items = QueryExecutor::split_script_items(&sql);
+        let stmts = get_statements(&items);
+        let cmds = get_tool_commands(&items);
+
+        // test2.txt contains:
+        // - PROMPT commands
+        // - SET SERVEROUTPUT ON SIZE UNLIMITED
+        // - DROP statements with cleanup
+        // - CREATE TABLE/SEQUENCE/PACKAGE
+        // - SHOW ERRORS for PACKAGE and PACKAGE BODY
+        // - EXEC commands
+        // - Anonymous blocks with named/positional/default parameters
+        // - REF CURSOR tests
+        // - ROLLBACK/COMMIT tests
+
+        assert!(
+            !stmts.is_empty(),
+            "test2.txt should produce statements, got 0"
+        );
+
+        // Verify tool commands
+        let has_prompt = cmds.iter().any(|cmd| matches!(cmd, ToolCommand::Prompt { .. }));
+        let has_serveroutput = cmds
+            .iter()
+            .any(|cmd| matches!(cmd, ToolCommand::SetServerOutput { enabled: true, .. }));
+        let has_show_errors = cmds.iter().any(|cmd| matches!(cmd, ToolCommand::ShowErrors { .. }));
+
+        assert!(has_prompt, "test2.txt should have PROMPT commands");
+        assert!(has_serveroutput, "test2.txt should have SET SERVEROUTPUT ON");
+        assert!(has_show_errors, "test2.txt should have SHOW ERRORS commands");
+
+        // EXEC statements are parsed as regular statements (converted to BEGIN...END by executor)
+        let has_exec = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.starts_with("EXEC ")
+        });
+        assert!(has_exec, "test2.txt should have EXEC statements");
+
+        // Verify key SQL statements
+        let has_create_package = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("CREATE OR REPLACE PACKAGE OQT_PKG")
+        });
+        let has_create_synonym = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("CREATE SYNONYM OQT_SYN")
+        });
+        let has_rollback = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.trim() == "ROLLBACK"
+        });
+        let has_commit = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.trim() == "COMMIT"
+        });
+
+        assert!(has_create_package, "test2.txt should have CREATE PACKAGE oqt_pkg");
+        assert!(has_create_synonym, "test2.txt should have CREATE SYNONYM oqt_syn");
+        assert!(has_rollback, "test2.txt should have ROLLBACK");
+        assert!(has_commit, "test2.txt should have COMMIT");
+
+        println!(
+            "test2.txt: {} statements, {} tool commands parsed successfully",
+            stmts.len(),
+            cmds.len()
+        );
+    }
+
+    #[test]
+    fn test_file_test3_txt_parses_without_error() {
+        let sql = load_test_file("test3.txt");
+        let items = QueryExecutor::split_script_items(&sql);
+        let stmts = get_statements(&items);
+        let cmds = get_tool_commands(&items);
+
+        // test3.txt (TOAD-like compatibility test) contains:
+        // - PROMPT commands
+        // - SET SERVEROUTPUT/DEFINE commands
+        // - Cleanup DROP statements
+        // - DDL with COMMENT ON
+        // - DML with COMMIT/ROLLBACK
+        // - SELECT with hints and comments
+        // - CREATE FUNCTION/PROCEDURE (standalone)
+        // - SHOW ERRORS
+        // - VARIABLE/EXEC/PRINT commands
+        // - CREATE PACKAGE with overloads and REF CURSOR
+        // - MERGE statement
+        // - BULK COLLECT
+
+        assert!(
+            !stmts.is_empty(),
+            "test3.txt should produce statements, got 0"
+        );
+
+        // Verify tool commands
+        let has_prompt = cmds.iter().any(|cmd| matches!(cmd, ToolCommand::Prompt { .. }));
+        let has_serveroutput = cmds.iter().any(|cmd| matches!(cmd, ToolCommand::SetServerOutput { .. }));
+        let has_set_define = cmds.iter().any(|cmd| matches!(cmd, ToolCommand::SetDefine { .. }));
+        let has_show_errors = cmds.iter().any(|cmd| matches!(cmd, ToolCommand::ShowErrors { .. }));
+        let has_var = cmds.iter().any(|cmd| matches!(cmd, ToolCommand::Var { .. }));
+        let has_print = cmds.iter().any(|cmd| matches!(cmd, ToolCommand::Print { .. }));
+
+        assert!(has_prompt, "test3.txt should have PROMPT commands");
+        assert!(has_serveroutput, "test3.txt should have SET SERVEROUTPUT command");
+        assert!(has_set_define, "test3.txt should have SET DEFINE command");
+        assert!(has_show_errors, "test3.txt should have SHOW ERRORS commands");
+        assert!(has_var, "test3.txt should have VARIABLE commands");
+        assert!(has_print, "test3.txt should have PRINT commands");
+
+        // Verify key SQL statements
+        let has_create_table = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("CREATE TABLE OQT_EMP")
+        });
+        let has_comment_on = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("COMMENT ON TABLE") || upper.contains("COMMENT ON COLUMN")
+        });
+        let has_create_function = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("CREATE OR REPLACE FUNCTION OQT_F_ADD")
+        });
+        let has_create_procedure = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("CREATE OR REPLACE PROCEDURE OQT_P_BASIC")
+        });
+        let has_merge = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("MERGE INTO OQT_EMP")
+        });
+        let has_select_hint = stmts.iter().any(|s| {
+            let upper = s.to_uppercase();
+            upper.contains("SELECT") && upper.contains("/*+")
+        });
+
+        assert!(has_create_table, "test3.txt should have CREATE TABLE oqt_emp");
+        assert!(has_comment_on, "test3.txt should have COMMENT ON statements");
+        assert!(has_create_function, "test3.txt should have CREATE FUNCTION oqt_f_add");
+        assert!(has_create_procedure, "test3.txt should have CREATE PROCEDURE oqt_p_basic");
+        assert!(has_merge, "test3.txt should have MERGE statement");
+        assert!(has_select_hint, "test3.txt should have SELECT with hint");
+
+        println!(
+            "test3.txt: {} statements, {} tool commands parsed successfully",
+            stmts.len(),
+            cmds.len()
+        );
+    }
+
+    #[test]
+    fn test_all_test_files_complete_parsing() {
+        // Comprehensive test that ensures all test files can be fully parsed
+        // This simulates running @test1.txt @test2.txt @test3.txt
+
+        let files = ["test1.txt", "test2.txt", "test3.txt"];
+        let mut total_statements = 0;
+        let mut total_commands = 0;
+
+        for file in &files {
+            let sql = load_test_file(file);
+            let items = QueryExecutor::split_script_items(&sql);
+            let stmts = get_statements(&items);
+            let cmds = get_tool_commands(&items);
+
+            assert!(
+                !stmts.is_empty(),
+                "{} should produce statements",
+                file
+            );
+            assert!(
+                !cmds.is_empty(),
+                "{} should produce tool commands",
+                file
+            );
+
+            // Verify no statement is empty after trimming
+            for (i, stmt) in stmts.iter().enumerate() {
+                assert!(
+                    !stmt.trim().is_empty(),
+                    "{}: statement {} is empty",
+                    file,
+                    i
+                );
+            }
+
+            total_statements += stmts.len();
+            total_commands += cmds.len();
+
+            println!(
+                "{}: {} statements, {} commands",
+                file,
+                stmts.len(),
+                cmds.len()
+            );
+        }
+
+        println!(
+            "\nTotal: {} statements, {} commands across all test files",
+            total_statements, total_commands
+        );
+
+        // Ensure reasonable counts (these are approximate minimums)
+        assert!(
+            total_statements >= 30,
+            "Expected at least 30 total statements, got {}",
+            total_statements
+        );
+        assert!(
+            total_commands >= 20,
+            "Expected at least 20 total commands, got {}",
+            total_commands
+        );
+    }
 }
