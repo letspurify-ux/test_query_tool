@@ -77,6 +77,9 @@ pub enum ToolCommand {
     Prompt {
         text: String,
     },
+    Pause {
+        message: Option<String>,
+    },
     Accept {
         name: String,
         prompt: Option<String>,
@@ -112,6 +115,8 @@ pub enum ToolCommand {
     WheneverSqlError {
         exit: bool,
     },
+    Exit,
+    Quit,
     RunScript {
         path: String,
         relative_to_caller: bool,
@@ -789,7 +794,7 @@ impl QueryExecutor {
                 continue;
             }
 
-            if builder.is_idle() && !builder.current_is_empty() {
+            if builder.is_idle() && !builder.current_is_empty() && builder.block_depth() == 0 {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
                     builder.force_terminate();
                     for stmt in builder.take_statements() {
@@ -800,7 +805,7 @@ impl QueryExecutor {
                 }
             }
 
-            if builder.is_idle() && builder.current_is_empty() {
+            if builder.is_idle() && builder.current_is_empty() && builder.block_depth() == 0 {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
                     items.push(ScriptItem::ToolCommand(command));
                     continue;
@@ -911,7 +916,7 @@ impl QueryExecutor {
                 continue;
             }
 
-            if builder.is_idle() && !builder.current_is_empty() {
+            if builder.is_idle() && !builder.current_is_empty() && builder.block_depth() == 0 {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
                     builder.force_terminate();
                     for stmt in builder.take_statements() {
@@ -922,7 +927,7 @@ impl QueryExecutor {
                 }
             }
 
-            if builder.is_idle() && builder.current_is_empty() {
+            if builder.is_idle() && builder.current_is_empty() && builder.block_depth() == 0 {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
                     items.push(FormatItem::ToolCommand(command));
                     continue;
@@ -984,6 +989,10 @@ impl QueryExecutor {
             return Some(ToolCommand::Prompt { text });
         }
 
+        if upper.starts_with("PAUSE") {
+            return Some(Self::parse_pause_command(trimmed));
+        }
+
         if upper.starts_with("ACCEPT") {
             return Some(Self::parse_accept_command(trimmed));
         }
@@ -1033,6 +1042,14 @@ impl QueryExecutor {
 
         if upper.starts_with("WHENEVER SQLERROR") {
             return Some(Self::parse_whenever_sqlerror_command(trimmed));
+        }
+
+        if upper == "EXIT" || upper.starts_with("EXIT ") {
+            return Some(ToolCommand::Exit);
+        }
+
+        if upper == "QUIT" || upper.starts_with("QUIT ") {
+            return Some(ToolCommand::Quit);
         }
 
         None
@@ -1215,6 +1232,17 @@ impl QueryExecutor {
             name: name.trim_start_matches(':').to_string(),
             prompt,
         }
+    }
+
+    fn parse_pause_command(raw: &str) -> ToolCommand {
+        let rest = raw[5..].trim();
+        let message = if rest.is_empty() {
+            None
+        } else {
+            Some(rest.to_string())
+        };
+
+        ToolCommand::Pause { message }
     }
 
     fn parse_define_assign_command(raw: &str) -> ToolCommand {

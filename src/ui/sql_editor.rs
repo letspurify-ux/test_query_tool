@@ -2,10 +2,10 @@ use fltk::{
     app,
     button::Button,
     draw::set_cursor,
-    enums::{Cursor, Event, Font, FrameType, Key},
+    enums::{Align, CallbackTrigger, Cursor, Event, Font, FrameType, Key},
     frame::Frame,
     group::{Flex, FlexType, Pack, PackType},
-    input::IntInput,
+    input::{Input, IntInput},
     prelude::*,
     text::{TextBuffer, TextEditor, WrapMode},
 };
@@ -71,6 +71,10 @@ pub enum QueryProgress {
     },
     ScriptOutput {
         lines: Vec<String>,
+    },
+    PromptInput {
+        prompt: String,
+        response: mpsc::Sender<Option<String>>,
     },
     StatementFinished {
         index: usize,
@@ -271,51 +275,57 @@ impl SqlEditorWidget {
         ) {
             let mut disconnected = false;
             // Process any pending messages
-            {
-                let r = receiver.borrow();
-                loop {
-                    match r.try_recv() {
-                        Ok(message) => {
-                            if let Some(ref mut cb) = *progress_callback.borrow_mut() {
-                                cb(message.clone());
-                            }
+            loop {
+                let message = {
+                    let r = receiver.borrow();
+                    r.try_recv()
+                };
 
-                            match message {
-                                QueryProgress::StatementFinished {
-                                    result,
-                                    connection_name,
-                                    timed_out,
-                                    ..
-                                } => {
-                                    if timed_out {
-                                        fltk::dialog::alert_default(&format!(
-                                            "Query timed out!\n\n{}",
-                                            result.message
-                                        ));
-                                    }
-                                    QueryHistoryDialog::add_to_history(
-                                        &result.sql,
-                                        result.execution_time.as_millis() as u64,
-                                        result.row_count,
-                                        &connection_name,
-                                    );
-                                    if let Some(ref mut cb) = *execute_callback.borrow_mut() {
-                                        cb(result);
-                                    }
-                                }
-                                QueryProgress::BatchFinished => {
-                                    *query_running.borrow_mut() = false;
-                                    set_cursor(Cursor::Default);
-                                    app::flush();
-                                }
-                                _ => {}
+                match message {
+                    Ok(message) => {
+                        if let Some(ref mut cb) = *progress_callback.borrow_mut() {
+                            cb(message.clone());
+                        }
+
+                        match message {
+                            QueryProgress::PromptInput { prompt, response } => {
+                                let value = SqlEditorWidget::prompt_input_dialog(&prompt);
+                                let _ = response.send(value);
                             }
+                            QueryProgress::StatementFinished {
+                                result,
+                                connection_name,
+                                timed_out,
+                                ..
+                            } => {
+                                if timed_out {
+                                    fltk::dialog::alert_default(&format!(
+                                        "Query timed out!\n\n{}",
+                                        result.message
+                                    ));
+                                }
+                                QueryHistoryDialog::add_to_history(
+                                    &result.sql,
+                                    result.execution_time.as_millis() as u64,
+                                    result.row_count,
+                                    &connection_name,
+                                );
+                                if let Some(ref mut cb) = *execute_callback.borrow_mut() {
+                                    cb(result);
+                                }
+                            }
+                            QueryProgress::BatchFinished => {
+                                *query_running.borrow_mut() = false;
+                                set_cursor(Cursor::Default);
+                                app::flush();
+                            }
+                            _ => {}
                         }
-                        Err(mpsc::TryRecvError::Empty) => break,
-                        Err(mpsc::TryRecvError::Disconnected) => {
-                            disconnected = true;
-                            break;
-                        }
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
                     }
                 }
             }
@@ -2217,6 +2227,10 @@ impl SqlEditorWidget {
                     format!("PROMPT {}", text)
                 }
             }
+            ToolCommand::Pause { message } => match message {
+                Some(text) if !text.trim().is_empty() => format!("PAUSE {}", text),
+                _ => "PAUSE".to_string(),
+            },
             ToolCommand::Accept { name, prompt } => match prompt {
                 Some(text) => format!("ACCEPT {} PROMPT '{}'", name, text),
                 None => format!("ACCEPT {}", name),
@@ -2264,6 +2278,8 @@ impl SqlEditorWidget {
                     "WHENEVER SQLERROR CONTINUE".to_string()
                 }
             }
+            ToolCommand::Exit => "EXIT".to_string(),
+            ToolCommand::Quit => "QUIT".to_string(),
             ToolCommand::RunScript {
                 path,
                 relative_to_caller,
@@ -3924,10 +3940,39 @@ impl SqlEditorWidget {
                                         vec![text],
                                     );
                                 }
+                                ToolCommand::Pause { message } => {
+                                    let prompt_text = message
+                                        .filter(|text| !text.trim().is_empty())
+                                        .unwrap_or_else(|| "Press ENTER to continue.".to_string());
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "PAUSE",
+                                        &prompt_text,
+                                    );
+                                    match SqlEditorWidget::prompt_for_input_with_sender(
+                                        &sender,
+                                        &prompt_text,
+                                    ) {
+                                        Ok(_) => {}
+                                        Err(_) => {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "PAUSE",
+                                                "Error: PAUSE cancelled.",
+                                            );
+                                            command_error = true;
+                                        }
+                                    }
+                                }
                                 ToolCommand::Accept { name, prompt } => {
                                     let prompt_text = prompt
                                         .unwrap_or_else(|| format!("Enter value for {}:", name));
-                                    match SqlEditorWidget::prompt_for_input(&prompt_text) {
+                                    match SqlEditorWidget::prompt_for_input_with_sender(
+                                        &sender,
+                                        &prompt_text,
+                                    ) {
                                         Ok(value) => {
                                             let key = SessionState::normalize_name(&name);
                                             if let Ok(mut guard) = session.lock() {
@@ -4157,6 +4202,24 @@ impl SqlEditorWidget {
                                         if exit { "Mode EXIT" } else { "Mode CONTINUE" },
                                     );
                                 }
+                                ToolCommand::Exit => {
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "EXIT",
+                                        "Execution stopped.",
+                                    );
+                                    stop_execution = true;
+                                }
+                                ToolCommand::Quit => {
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "QUIT",
+                                        "Execution stopped.",
+                                    );
+                                    stop_execution = true;
+                                }
                                 ToolCommand::RunScript {
                                     path,
                                     relative_to_caller,
@@ -4255,7 +4318,9 @@ impl SqlEditorWidget {
                             };
                             if define_enabled {
                                 match SqlEditorWidget::apply_define_substitution(
-                                    &sql_text, &session,
+                                    &sql_text,
+                                    &session,
+                                    &sender,
                                 ) {
                                     Ok(updated) => sql_text = updated,
                                     Err(message) => {
@@ -5732,6 +5797,7 @@ impl SqlEditorWidget {
     fn apply_define_substitution(
         sql: &str,
         session: &Arc<Mutex<SessionState>>,
+        sender: &mpsc::Sender<QueryProgress>,
     ) -> Result<String, String> {
         let mut result = String::with_capacity(sql.len());
         let mut in_single_quote = false;
@@ -5779,42 +5845,6 @@ impl SqlEditorWidget {
                 continue;
             }
 
-            if in_q_quote {
-                result.push(c);
-                if Some(c) == q_quote_end && next == Some('\'') {
-                    result.push('\'');
-                    in_q_quote = false;
-                    q_quote_end = None;
-                    i += 2;
-                    continue;
-                }
-                i += 1;
-                continue;
-            }
-
-            if in_single_quote {
-                result.push(c);
-                if c == '\'' {
-                    if next == Some('\'') {
-                        result.push('\'');
-                        i += 2;
-                        continue;
-                    }
-                    in_single_quote = false;
-                }
-                i += 1;
-                continue;
-            }
-
-            if in_double_quote {
-                result.push(c);
-                if c == '"' {
-                    in_double_quote = false;
-                }
-                i += 1;
-                continue;
-            }
-
             if c == '-' && next == Some('-') {
                 result.push('-');
                 result.push('-');
@@ -5828,38 +5858,6 @@ impl SqlEditorWidget {
                 result.push('*');
                 in_block_comment = true;
                 i += 2;
-                continue;
-            }
-
-            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
-                let delimiter = chars[i + 2];
-                let closing = match delimiter {
-                    '(' => Some(')'),
-                    '[' => Some(']'),
-                    '{' => Some('}'),
-                    '<' => Some('>'),
-                    _ => Some(delimiter),
-                };
-                result.push(c);
-                result.push('\'');
-                result.push(delimiter);
-                in_q_quote = true;
-                q_quote_end = closing;
-                i += 3;
-                continue;
-            }
-
-            if c == '\'' {
-                result.push(c);
-                in_single_quote = true;
-                i += 1;
-                continue;
-            }
-
-            if c == '"' {
-                result.push(c);
-                in_double_quote = true;
-                i += 1;
                 continue;
             }
 
@@ -5911,7 +5909,7 @@ impl SqlEditorWidget {
                     result.push_str(&formatted);
                 } else {
                     let prompt = format!("Enter value for {}:", name);
-                    let input = SqlEditorWidget::prompt_for_input(&prompt)?;
+                    let input = SqlEditorWidget::prompt_for_input_with_sender(sender, &prompt)?;
                     if is_double {
                         if let Ok(mut guard) = session.lock() {
                             guard.define_vars.insert(key.clone(), input.clone());
@@ -5923,6 +5921,74 @@ impl SqlEditorWidget {
                 continue;
             }
 
+            if in_q_quote {
+                result.push(c);
+                if Some(c) == q_quote_end && next == Some('\'') {
+                    result.push('\'');
+                    in_q_quote = false;
+                    q_quote_end = None;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_single_quote {
+                result.push(c);
+                if c == '\'' {
+                    if next == Some('\'') {
+                        result.push('\'');
+                        i += 2;
+                        continue;
+                    }
+                    in_single_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_double_quote {
+                result.push(c);
+                if c == '"' {
+                    in_double_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
+                let delimiter = chars[i + 2];
+                let closing = match delimiter {
+                    '(' => Some(')'),
+                    '[' => Some(']'),
+                    '{' => Some('}'),
+                    '<' => Some('>'),
+                    _ => Some(delimiter),
+                };
+                result.push(c);
+                result.push('\'');
+                result.push(delimiter);
+                in_q_quote = true;
+                q_quote_end = closing;
+                i += 3;
+                continue;
+            }
+
+            if c == '\'' {
+                result.push(c);
+                in_single_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if c == '"' {
+                result.push(c);
+                in_double_quote = true;
+                i += 1;
+                continue;
+            }
+
             result.push(c);
             i += 1;
         }
@@ -5930,10 +5996,134 @@ impl SqlEditorWidget {
         Ok(result)
     }
 
-    fn prompt_for_input(prompt: &str) -> Result<String, String> {
-        match fltk::dialog::input_default(prompt, "") {
-            Some(value) => Ok(value),
-            None => Err("Substitution prompt cancelled.".to_string()),
+    fn prompt_for_input_with_sender(
+        sender: &mpsc::Sender<QueryProgress>,
+        prompt: &str,
+    ) -> Result<String, String> {
+        let (response_tx, response_rx) = mpsc::channel();
+        if sender
+            .send(QueryProgress::PromptInput {
+                prompt: prompt.to_string(),
+                response: response_tx,
+            })
+            .is_err()
+        {
+            return Err("Substitution prompt failed: UI disconnected.".to_string());
+        }
+
+        match response_rx.recv() {
+            Ok(Some(value)) => Ok(value),
+            Ok(None) => Err("Substitution prompt cancelled.".to_string()),
+            Err(_) => Err("Substitution prompt failed: UI disconnected.".to_string()),
+        }
+    }
+
+    fn prompt_input_dialog(prompt: &str) -> Option<String> {
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
+
+        let mut dialog = fltk::window::Window::default()
+            .with_size(420, 150)
+            .with_label("Input")
+            .center_screen();
+        dialog.set_color(theme::panel_raised());
+        dialog.make_modal(true);
+
+        let mut main_flex = Flex::default()
+            .with_pos(10, 10)
+            .with_size(400, 130);
+        main_flex.set_type(FlexType::Column);
+        main_flex.set_spacing(8);
+
+        let mut prompt_frame = Frame::default().with_label(prompt);
+        prompt_frame.set_label_color(theme::text_primary());
+        prompt_frame.set_align(Align::Left | Align::Inside | Align::Wrap);
+        main_flex.fixed(&prompt_frame, 48);
+
+        let mut input = Input::default();
+        input.set_color(theme::input_bg());
+        input.set_text_color(theme::text_primary());
+        input.set_trigger(CallbackTrigger::EnterKeyAlways);
+        main_flex.fixed(&input, 30);
+
+        let mut button_flex = Flex::default();
+        button_flex.set_type(FlexType::Row);
+        button_flex.set_spacing(8);
+
+        let _spacer = Frame::default();
+
+        let mut ok_btn = Button::default().with_size(80, 24).with_label("OK");
+        ok_btn.set_color(theme::button_primary());
+        ok_btn.set_label_color(theme::text_primary());
+        ok_btn.set_frame(FrameType::RFlatBox);
+
+        let mut cancel_btn = Button::default()
+            .with_size(80, 24)
+            .with_label("Cancel");
+        cancel_btn.set_color(theme::button_subtle());
+        cancel_btn.set_label_color(theme::text_primary());
+        cancel_btn.set_frame(FrameType::RFlatBox);
+
+        button_flex.fixed(&ok_btn, 80);
+        button_flex.fixed(&cancel_btn, 80);
+        button_flex.end();
+        main_flex.fixed(&button_flex, 28);
+        main_flex.end();
+        dialog.end();
+
+        let result: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        let cancelled = Rc::new(RefCell::new(false));
+
+        {
+            let result = result.clone();
+            let mut dialog = dialog.clone();
+            let input = input.clone();
+            ok_btn.set_callback(move |_| {
+                *result.borrow_mut() = Some(input.value());
+                dialog.hide();
+            });
+        }
+
+        {
+            let cancelled = cancelled.clone();
+            let mut dialog = dialog.clone();
+            cancel_btn.set_callback(move |_| {
+                *cancelled.borrow_mut() = true;
+                dialog.hide();
+            });
+        }
+
+        {
+            let result = result.clone();
+            let mut input_cb = input.clone();
+            let input_value = input.clone();
+            let mut dialog_cb = dialog.clone();
+            input_cb.set_callback(move |_| {
+                *result.borrow_mut() = Some(input_value.value());
+                dialog_cb.hide();
+            });
+        }
+
+        {
+            let cancelled = cancelled.clone();
+            let mut dialog_cb = dialog.clone();
+            let mut dialog_handle = dialog.clone();
+            dialog_cb.set_callback(move |_| {
+                *cancelled.borrow_mut() = true;
+                dialog_handle.hide();
+            });
+        }
+
+        dialog.show();
+        input.take_focus().ok();
+
+        while dialog.shown() {
+            app::wait();
+        }
+
+        if *cancelled.borrow() {
+            None
+        } else {
+            result.borrow().clone()
         }
     }
 

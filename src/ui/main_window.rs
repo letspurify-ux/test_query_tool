@@ -305,6 +305,7 @@ impl MainWindow {
                 QueryProgress::ScriptOutput { lines } => {
                     s.result_tabs.append_script_output_lines(&lines);
                 }
+                QueryProgress::PromptInput { .. } => {}
                 QueryProgress::StatementFinished { index, result, .. } => {
                     let tab_index = s.result_tab_offset + index;
                     if result.is_select {
