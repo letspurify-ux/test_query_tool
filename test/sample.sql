@@ -1,0 +1,4 @@
+select * from help;
+select * from help;
+@@sample2.sql
+@@sub/sample3.sql

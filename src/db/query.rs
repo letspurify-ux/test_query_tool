@@ -1024,7 +1024,10 @@ impl QueryExecutor {
             return Some(Self::parse_linesize_command(trimmed));
         }
 
-        if trimmed.starts_with("@@") || trimmed.starts_with('@') {
+        if trimmed.starts_with("@@")
+            || trimmed.starts_with('@')
+            || Self::is_start_script_command(trimmed)
+        {
             return Some(Self::parse_script_command(trimmed));
         }
 
@@ -1442,17 +1445,32 @@ impl QueryExecutor {
 
     fn parse_script_command(raw: &str) -> ToolCommand {
         let trimmed = raw.trim();
-        let relative_to_caller = trimmed.starts_with("@@");
-        let path = if relative_to_caller {
-            trimmed.trim_start_matches("@@").trim()
+        let (relative_to_caller, command_label, path) = if trimmed.starts_with("@@") {
+            (
+                true,
+                "@@",
+                trimmed.trim_start_matches("@@").trim(),
+            )
+        } else if trimmed.starts_with('@') {
+            (false, "@", trimmed.trim_start_matches('@').trim())
+        } else if Self::is_start_script_command(trimmed) {
+            (
+                false,
+                "START",
+                trimmed.get(5..).unwrap_or_default().trim(),
+            )
         } else {
-            trimmed.trim_start_matches('@').trim()
+            (false, "@", "")
         };
 
         if path.is_empty() {
             return ToolCommand::Unsupported {
                 raw: raw.to_string(),
-                message: "@file.sql requires a path.".to_string(),
+                message: if command_label == "START" {
+                    "START requires a path.".to_string()
+                } else {
+                    "@file.sql requires a path.".to_string()
+                },
                 is_error: true,
             };
         }
@@ -1463,6 +1481,29 @@ impl QueryExecutor {
             path: cleaned,
             relative_to_caller,
         }
+    }
+
+    fn is_start_script_command(trimmed: &str) -> bool {
+        if trimmed.len() < 5 {
+            return false;
+        }
+        let head = match trimmed.get(0..5) {
+            Some(head) => head,
+            None => return false,
+        };
+        if !head.eq_ignore_ascii_case("START") {
+            return false;
+        }
+        let tail = match trimmed.get(5..) {
+            Some(tail) => tail,
+            None => return false,
+        };
+        tail.is_empty()
+            || tail
+                .chars()
+                .next()
+                .map(|ch| ch.is_whitespace())
+                .unwrap_or(false)
     }
 
     fn parse_bind_type(type_str: &str) -> Result<BindDataType, String> {
