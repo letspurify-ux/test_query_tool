@@ -2223,6 +2223,8 @@ impl SqlEditorWidget {
                     "SHOW ERRORS".to_string()
                 }
             }
+            ToolCommand::ShowUser => "SHOW USER".to_string(),
+            ToolCommand::ShowAll => "SHOW ALL".to_string(),
             ToolCommand::Prompt { text } => {
                 if text.trim().is_empty() {
                     "PROMPT".to_string()
@@ -3945,6 +3947,117 @@ impl SqlEditorWidget {
                                         );
                                         command_error = true;
                                     }
+                                }
+                                ToolCommand::ShowUser => {
+                                    let sql = "SELECT USER FROM DUAL";
+                                    let user_result: Result<String, OracleError> = (|| {
+                                        let mut stmt = conn.statement(sql).build()?;
+                                        let row = stmt.query_row(&[])?;
+                                        let user: String = row.get(0)?;
+                                        Ok(user)
+                                    })();
+                                    match user_result {
+                                        Ok(user) => {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "SHOW USER",
+                                                &format!("USER: {}", user),
+                                            );
+                                        }
+                                        Err(err) => {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "SHOW USER",
+                                                &format!("Error: {}", err),
+                                            );
+                                            command_error = true;
+                                        }
+                                    }
+                                }
+                                ToolCommand::ShowAll => {
+                                    let (server_output, define_enabled, feedback_enabled, heading_enabled, pagesize, linesize, continue_on_error, spool_path) =
+                                        match session.lock() {
+                                            Ok(guard) => (
+                                                guard.server_output.clone(),
+                                                guard.define_enabled,
+                                                guard.feedback_enabled,
+                                                guard.heading_enabled,
+                                                guard.pagesize,
+                                                guard.linesize,
+                                                guard.continue_on_error,
+                                                guard.spool_path.clone(),
+                                            ),
+                                            Err(poisoned) => {
+                                                eprintln!("Warning: session state lock was poisoned; recovering.");
+                                                let guard = poisoned.into_inner();
+                                                (
+                                                    guard.server_output.clone(),
+                                                    guard.define_enabled,
+                                                    guard.feedback_enabled,
+                                                    guard.heading_enabled,
+                                                    guard.pagesize,
+                                                    guard.linesize,
+                                                    guard.continue_on_error,
+                                                    guard.spool_path.clone(),
+                                                )
+                                            }
+                                        };
+
+                                    let autocommit_enabled = {
+                                        let conn_guard = lock_connection(&shared_connection);
+                                        conn_guard.auto_commit()
+                                    };
+
+                                    let serveroutput_line = if server_output.enabled {
+                                        if server_output.size == 0 {
+                                            "SERVEROUTPUT ON SIZE UNLIMITED".to_string()
+                                        } else {
+                                            format!("SERVEROUTPUT ON SIZE {}", server_output.size)
+                                        }
+                                    } else {
+                                        "SERVEROUTPUT OFF".to_string()
+                                    };
+
+                                    let spool_line = match spool_path {
+                                        Some(path) => format!("SPOOL {}", path.display()),
+                                        None => "SPOOL OFF".to_string(),
+                                    };
+
+                                    let lines = vec![
+                                        format!(
+                                            "AUTOCOMMIT {}",
+                                            if autocommit_enabled { "ON" } else { "OFF" }
+                                        ),
+                                        serveroutput_line,
+                                        format!(
+                                            "DEFINE {}",
+                                            if define_enabled { "ON" } else { "OFF" }
+                                        ),
+                                        format!(
+                                            "FEEDBACK {}",
+                                            if feedback_enabled { "ON" } else { "OFF" }
+                                        ),
+                                        format!(
+                                            "HEADING {}",
+                                            if heading_enabled { "ON" } else { "OFF" }
+                                        ),
+                                        format!("PAGESIZE {}", pagesize),
+                                        format!("LINESIZE {}", linesize),
+                                        format!(
+                                            "ERRORCONTINUE {}",
+                                            if continue_on_error { "ON" } else { "OFF" }
+                                        ),
+                                        spool_line,
+                                    ];
+
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "SHOW ALL",
+                                        &lines.join("\n"),
+                                    );
                                 }
                                 ToolCommand::Prompt { text } => {
                                     SqlEditorWidget::emit_script_output(

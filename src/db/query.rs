@@ -74,6 +74,8 @@ pub enum ToolCommand {
         object_type: Option<String>,
         object_name: Option<String>,
     },
+    ShowUser,
+    ShowAll,
     Prompt {
         text: String,
     },
@@ -987,6 +989,10 @@ impl QueryExecutor {
             return Some(Self::parse_show_errors_command(trimmed));
         }
 
+        if upper.starts_with("SHOW ") || upper == "SHOW" {
+            return Some(Self::parse_show_command(trimmed));
+        }
+
         if upper.starts_with("PROMPT") {
             let text = trimmed[6..].trim().to_string();
             return Some(ToolCommand::Prompt { text });
@@ -1195,6 +1201,29 @@ impl QueryExecutor {
         ToolCommand::ShowErrors {
             object_type: Some(object_type),
             object_name: name,
+        }
+    }
+
+    fn parse_show_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 2 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SHOW requires a topic (USER, ALL, ERRORS).".to_string(),
+                is_error: true,
+            };
+        }
+
+        let topic = tokens[1].to_uppercase();
+        match topic.as_str() {
+            "USER" => ToolCommand::ShowUser,
+            "ALL" => ToolCommand::ShowAll,
+            "ERRORS" => Self::parse_show_errors_command(raw),
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SHOW supports USER, ALL, or ERRORS.".to_string(),
+                is_error: true,
+            },
         }
     }
 
