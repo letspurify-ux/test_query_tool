@@ -12,7 +12,10 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::thread;
 
-use crate::db::{lock_connection, ObjectBrowser, ProcedureArgument, SharedConnection};
+use crate::db::{
+    lock_connection, ConstraintInfo, IndexInfo, ObjectBrowser, ProcedureArgument, SequenceInfo,
+    SharedConnection, TableColumnDetail,
+};
 use crate::ui::{sql_editor::SqlEditorWidget, theme};
 
 #[derive(Clone)]
@@ -50,6 +53,28 @@ struct ObjectCache {
 }
 
 #[derive(Clone)]
+enum ObjectActionResult {
+    TableStructure {
+        table_name: String,
+        result: Result<Vec<TableColumnDetail>, String>,
+    },
+    TableIndexes {
+        table_name: String,
+        result: Result<Vec<IndexInfo>, String>,
+    },
+    TableConstraints {
+        table_name: String,
+        result: Result<Vec<ConstraintInfo>, String>,
+    },
+    SequenceInfo(Result<SequenceInfo, String>),
+    Ddl(Result<String, String>),
+    ProcedureScript {
+        qualified_name: String,
+        result: Result<String, String>,
+    },
+}
+
+#[derive(Clone)]
 pub struct ObjectBrowserWidget {
     flex: Flex,
     tree: Tree,
@@ -58,6 +83,7 @@ pub struct ObjectBrowserWidget {
     filter_input: Input,
     object_cache: Rc<RefCell<ObjectCache>>,
     refresh_sender: std::sync::mpsc::Sender<ObjectCache>,
+    action_sender: std::sync::mpsc::Sender<ObjectActionResult>,
 }
 
 impl ObjectBrowserWidget {
@@ -120,6 +146,7 @@ impl ObjectBrowserWidget {
         let object_cache = Rc::new(RefCell::new(ObjectCache::default()));
 
         let (refresh_sender, refresh_receiver) = std::sync::mpsc::channel::<ObjectCache>();
+        let (action_sender, action_receiver) = std::sync::mpsc::channel::<ObjectActionResult>();
 
         let mut widget = Self {
             flex,
@@ -129,10 +156,12 @@ impl ObjectBrowserWidget {
             object_cache,
             sql_callback,
             refresh_sender,
+            action_sender,
         };
         widget.setup_callbacks();
         widget.setup_filter_callback();
         widget.setup_refresh_handler(refresh_receiver);
+        widget.setup_action_handler(action_receiver);
         widget
     }
 
@@ -207,9 +236,219 @@ impl ObjectBrowserWidget {
         schedule_poll(receiver, tree, object_cache, filter_input);
     }
 
+    fn setup_action_handler(
+        &mut self,
+        action_receiver: std::sync::mpsc::Receiver<ObjectActionResult>,
+    ) {
+        let sql_callback = self.sql_callback.clone();
+
+        let receiver: Rc<RefCell<std::sync::mpsc::Receiver<ObjectActionResult>>> =
+            Rc::new(RefCell::new(action_receiver));
+
+        fn schedule_poll(
+            receiver: Rc<RefCell<std::sync::mpsc::Receiver<ObjectActionResult>>>,
+            sql_callback: SqlExecuteCallback,
+        ) {
+            let mut disconnected = false;
+            loop {
+                let message = {
+                    let r = receiver.borrow();
+                    r.try_recv()
+                };
+
+                match message {
+                    Ok(action) => match action {
+                        ObjectActionResult::TableStructure { table_name, result } => match result
+                        {
+                            Ok(columns) => {
+                                let mut info = format!(
+                                    "=== Table Structure: {} ===\n\n",
+                                    table_name
+                                );
+                                info.push_str(&format!(
+                                    "{:<30} {:<20} {:<10} {:<10}\n",
+                                    "Column Name", "Data Type", "Nullable", "PK"
+                                ));
+                                info.push_str(&format!("{}\n", "-".repeat(70)));
+
+                                for col in columns {
+                                    info.push_str(&format!(
+                                        "{:<30} {:<20} {:<10} {:<10}\n",
+                                        col.name,
+                                        col.get_type_display(),
+                                        if col.nullable { "YES" } else { "NO" },
+                                        if col.is_primary_key { "PK" } else { "" }
+                                    ));
+                                }
+
+                                ObjectBrowserWidget::show_info_dialog("Table Structure", &info);
+                            }
+                            Err(err) => {
+                                fltk::dialog::alert_default(&format!(
+                                    "Failed to get table structure: {}",
+                                    err
+                                ));
+                            }
+                        },
+                        ObjectActionResult::TableIndexes { table_name, result } => match result {
+                            Ok(indexes) => {
+                                let mut info =
+                                    format!("=== Indexes: {} ===\n\n", table_name);
+                                info.push_str(&format!(
+                                    "{:<30} {:<10} {:<40}\n",
+                                    "Index Name", "Unique", "Columns"
+                                ));
+                                info.push_str(&format!("{}\n", "-".repeat(80)));
+
+                                for idx in indexes {
+                                    info.push_str(&format!(
+                                        "{:<30} {:<10} {:<40}\n",
+                                        idx.name,
+                                        if idx.is_unique { "YES" } else { "NO" },
+                                        idx.columns
+                                    ));
+                                }
+
+                                ObjectBrowserWidget::show_info_dialog("Table Indexes", &info);
+                            }
+                            Err(err) => {
+                                fltk::dialog::alert_default(&format!(
+                                    "Failed to get indexes: {}",
+                                    err
+                                ));
+                            }
+                        },
+                        ObjectActionResult::TableConstraints { table_name, result } => match result
+                        {
+                            Ok(constraints) => {
+                                let mut info =
+                                    format!("=== Constraints: {} ===\n\n", table_name);
+                                info.push_str(&format!(
+                                    "{:<30} {:<15} {:<25} {:<20}\n",
+                                    "Constraint Name", "Type", "Columns", "Ref Table"
+                                ));
+                                info.push_str(&format!("{}\n", "-".repeat(90)));
+
+                                for con in constraints {
+                                    info.push_str(&format!(
+                                        "{:<30} {:<15} {:<25} {:<20}\n",
+                                        con.name,
+                                        con.constraint_type,
+                                        con.columns,
+                                        con.ref_table.unwrap_or_default()
+                                    ));
+                                }
+
+                                ObjectBrowserWidget::show_info_dialog("Table Constraints", &info);
+                            }
+                            Err(err) => {
+                                fltk::dialog::alert_default(&format!(
+                                    "Failed to get constraints: {}",
+                                    err
+                                ));
+                            }
+                        },
+                        ObjectActionResult::SequenceInfo(result) => match result {
+                            Ok(info) => {
+                                let mut details =
+                                    format!("=== Sequence Info: {} ===\n\n", info.name);
+                                details.push_str(&format!("{:<18} {}\n", "Min Value", info.min_value));
+                                details.push_str(&format!("{:<18} {}\n", "Max Value", info.max_value));
+                                details.push_str(&format!(
+                                    "{:<18} {}\n",
+                                    "Increment By", info.increment_by
+                                ));
+                                details.push_str(&format!("{:<18} {}\n", "Cycle", info.cycle_flag));
+                                details.push_str(&format!("{:<18} {}\n", "Order", info.order_flag));
+                                details.push_str(&format!(
+                                    "{:<18} {}\n",
+                                    "Cache Size", info.cache_size
+                                ));
+                                details.push_str(&format!(
+                                    "{:<18} {}\n",
+                                    "Last Number", info.last_number
+                                ));
+                                details.push_str(
+                                    "\nNote: LAST_NUMBER is the next value to be generated.\n",
+                                );
+
+                                ObjectBrowserWidget::show_info_dialog("Sequence Info", &details);
+                            }
+                            Err(err) => {
+                                fltk::dialog::alert_default(&format!(
+                                    "Failed to get sequence info: {}",
+                                    err
+                                ));
+                            }
+                        },
+                        ObjectActionResult::Ddl(result) => match result {
+                            Ok(ddl) => {
+                                let formatted = SqlEditorWidget::format_sql_basic(&ddl);
+                                let ddl = if formatted.trim().is_empty() {
+                                    ddl
+                                } else {
+                                    formatted
+                                };
+                                let cb_opt = sql_callback.borrow_mut().take();
+                                if let Some(mut cb) = cb_opt {
+                                    cb(SqlAction::Set(ddl));
+                                    *sql_callback.borrow_mut() = Some(cb);
+                                }
+                            }
+                            Err(err) => {
+                                fltk::dialog::alert_default(&format!(
+                                    "Failed to generate DDL: {}",
+                                    err
+                                ));
+                            }
+                        },
+                        ObjectActionResult::ProcedureScript {
+                            qualified_name,
+                            result,
+                        } => {
+                            let sql = match result {
+                                Ok(sql) => sql,
+                                Err(err) => {
+                                    fltk::dialog::alert_default(&format!(
+                                        "Failed to load procedure arguments: {}",
+                                        err
+                                    ));
+                                    ObjectBrowserWidget::build_simple_procedure_script(
+                                        &qualified_name,
+                                    )
+                                }
+                            };
+                            let cb_opt = sql_callback.borrow_mut().take();
+                            if let Some(mut cb) = cb_opt {
+                                cb(SqlAction::Insert(sql));
+                                *sql_callback.borrow_mut() = Some(cb);
+                            }
+                        }
+                    },
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+
+            if disconnected {
+                return;
+            }
+
+            app::add_timeout3(0.05, move |_| {
+                schedule_poll(Rc::clone(&receiver), sql_callback.clone());
+            });
+        }
+
+        schedule_poll(receiver, sql_callback);
+    }
+
     fn setup_callbacks(&mut self) {
         let connection = self.connection.clone();
         let sql_callback = self.sql_callback.clone();
+        let action_sender = self.action_sender.clone();
 
         self.tree.handle(move |t, ev| {
             if !t.active() {
@@ -227,9 +466,19 @@ impl ObjectBrowserWidget {
                         if let Some(mut item) = clicked_item {
                             item.select(1);
                             t.set_item_focus(&item);
-                            Self::show_context_menu(&connection, &item, &sql_callback);
+                            Self::show_context_menu(
+                                &connection,
+                                &item,
+                                &sql_callback,
+                                &action_sender,
+                            );
                         } else if let Some(item) = t.first_selected_item() {
-                            Self::show_context_menu(&connection, &item, &sql_callback);
+                            Self::show_context_menu(
+                                &connection,
+                                &item,
+                                &sql_callback,
+                                &action_sender,
+                            );
                         }
                         return true;
                     }
@@ -633,6 +882,7 @@ impl ObjectBrowserWidget {
         connection: &SharedConnection,
         item: &TreeItem,
         sql_callback: &SqlExecuteCallback,
+        action_sender: &std::sync::mpsc::Sender<ObjectActionResult>,
     ) {
         if let Some(item_info) = Self::get_item_info(item) {
             let menu_choices = match &item_info {
@@ -672,109 +922,251 @@ impl ObjectBrowserWidget {
             if let Some(choice_item) = menu.popup() {
                 let choice_label = choice_item.label().unwrap_or_default();
 
-                let conn_guard = lock_connection(&connection);
-                if !conn_guard.is_connected() {
-                    fltk::dialog::alert_default("Not connected to database");
-                } else if let Some(db_conn) = conn_guard.get_connection() {
-                    match (choice_label.as_str(), &item_info) {
-                        ("Select Data (Top 100)", ObjectItem::Simple { object_name, .. }) => {
-                            let sql = format!("SELECT * FROM {} WHERE ROWNUM <= 100", object_name);
-                            drop(conn_guard);
-                            // Take the callback out, call it, then put it back
-                            let cb_opt = sql_callback.borrow_mut().take();
-                            if let Some(mut cb) = cb_opt {
-                                cb(SqlAction::Execute(sql));
-                                *sql_callback.borrow_mut() = Some(cb);
-                            }
+                match (choice_label.as_str(), &item_info) {
+                    ("Select Data (Top 100)", ObjectItem::Simple { object_name, .. }) => {
+                        let sql = format!("SELECT * FROM {} WHERE ROWNUM <= 100", object_name);
+                        let cb_opt = sql_callback.borrow_mut().take();
+                        if let Some(mut cb) = cb_opt {
+                            cb(SqlAction::Execute(sql));
+                            *sql_callback.borrow_mut() = Some(cb);
                         }
-                        (
-                            "Execute Procedure",
-                            ObjectItem::Simple { object_name, .. },
-                        ) => {
-                            let sql = match ObjectBrowser::get_procedure_arguments(
-                                db_conn.as_ref(),
-                                object_name,
-                            ) {
-                                Ok(arguments) => Self::build_procedure_script(object_name, &arguments),
-                                Err(err) => {
-                                    fltk::dialog::alert_default(&format!(
-                                        "Failed to load procedure arguments: {}",
-                                        err
-                                    ));
-                                    Self::build_simple_procedure_script(object_name)
-                                }
-                            };
-                            drop(conn_guard);
-                            let cb_opt = sql_callback.borrow_mut().take();
-                            if let Some(mut cb) = cb_opt {
-                                cb(SqlAction::Insert(sql));
-                                *sql_callback.borrow_mut() = Some(cb);
-                            }
-                        }
-                        (
-                            "Execute Procedure",
-                            ObjectItem::PackageProcedure {
-                                package_name,
-                                procedure_name,
-                            },
-                        ) => {
-                            let qualified_name = format!("{}.{}", package_name, procedure_name);
-                            let sql = match ObjectBrowser::get_package_procedure_arguments(
-                                db_conn.as_ref(),
-                                package_name,
-                                procedure_name,
-                            ) {
-                                Ok(arguments) => {
-                                    Self::build_procedure_script(&qualified_name, &arguments)
-                                }
-                                Err(err) => {
-                                    fltk::dialog::alert_default(&format!(
-                                        "Failed to load procedure arguments: {}",
-                                        err
-                                    ));
-                                    Self::build_simple_procedure_script(&qualified_name)
-                                }
-                            };
-                            drop(conn_guard);
-                            let cb_opt = sql_callback.borrow_mut().take();
-                            if let Some(mut cb) = cb_opt {
-                                cb(SqlAction::Insert(sql));
-                                *sql_callback.borrow_mut() = Some(cb);
-                            }
-                        }
-                        ("View Structure", ObjectItem::Simple { object_name, .. }) => {
-                            Self::show_table_structure(db_conn.as_ref(), object_name);
-                        }
-                        ("View Indexes", ObjectItem::Simple { object_name, .. }) => {
-                            Self::show_table_indexes(db_conn.as_ref(), object_name);
-                        }
-                        ("View Constraints", ObjectItem::Simple { object_name, .. }) => {
-                            Self::show_table_constraints(db_conn.as_ref(), object_name);
-                        }
-                        ("View Info", ObjectItem::Simple { object_name, .. }) => {
-                            Self::show_sequence_info(db_conn.as_ref(), object_name);
-                        }
-                        (
-                            "Generate DDL",
-                            ObjectItem::Simple {
-                                object_type,
-                                object_name,
-                            },
-                        ) => {
-                            let obj_type = match object_type.as_str() {
-                                "TABLES" => Some("TABLE"),
-                                "VIEWS" => Some("VIEW"),
-                                "PROCEDURES" => Some("PROCEDURE"),
-                                "FUNCTIONS" => Some("FUNCTION"),
-                                "SEQUENCES" => Some("SEQUENCE"),
-                                _ => None,
-                            };
-                            if let Some(obj_type) = obj_type {
-                                Self::show_ddl(db_conn.as_ref(), obj_type, object_name, sql_callback);
-                            }
-                        }
-                        _ => {}
                     }
+                    ("Execute Procedure", ObjectItem::Simple { object_name, .. }) => {
+                        let connection = connection.clone();
+                        let sender = action_sender.clone();
+                        let object_name = object_name.clone();
+                        thread::spawn(move || {
+                            let result = {
+                                let conn_guard = lock_connection(&connection);
+                                if !conn_guard.is_connected() {
+                                    Err("Not connected to database".to_string())
+                                } else if let Some(db_conn) = conn_guard.get_connection() {
+                                    ObjectBrowser::get_procedure_arguments(
+                                        db_conn.as_ref(),
+                                        &object_name,
+                                    )
+                                    .map(|arguments| {
+                                        ObjectBrowserWidget::build_procedure_script(
+                                            &object_name,
+                                            &arguments,
+                                        )
+                                    })
+                                    .map_err(|err| err.to_string())
+                                } else {
+                                    Err("Not connected to database".to_string())
+                                }
+                            };
+
+                            let _ = sender.send(ObjectActionResult::ProcedureScript {
+                                qualified_name: object_name,
+                                result,
+                            });
+                            app::awake();
+                        });
+                    }
+                    (
+                        "Execute Procedure",
+                        ObjectItem::PackageProcedure {
+                            package_name,
+                            procedure_name,
+                        },
+                    ) => {
+                        let connection = connection.clone();
+                        let sender = action_sender.clone();
+                        let qualified_name = format!("{}.{}", package_name, procedure_name);
+                        let package_name = package_name.clone();
+                        let procedure_name = procedure_name.clone();
+                        thread::spawn(move || {
+                            let result = {
+                                let conn_guard = lock_connection(&connection);
+                                if !conn_guard.is_connected() {
+                                    Err("Not connected to database".to_string())
+                                } else if let Some(db_conn) = conn_guard.get_connection() {
+                                    ObjectBrowser::get_package_procedure_arguments(
+                                        db_conn.as_ref(),
+                                        &package_name,
+                                        &procedure_name,
+                                    )
+                                    .map(|arguments| {
+                                        ObjectBrowserWidget::build_procedure_script(
+                                            &qualified_name,
+                                            &arguments,
+                                        )
+                                    })
+                                    .map_err(|err| err.to_string())
+                                } else {
+                                    Err("Not connected to database".to_string())
+                                }
+                            };
+
+                            let _ = sender.send(ObjectActionResult::ProcedureScript {
+                                qualified_name,
+                                result,
+                            });
+                            app::awake();
+                        });
+                    }
+                    ("View Structure", ObjectItem::Simple { object_name, .. }) => {
+                        let connection = connection.clone();
+                        let sender = action_sender.clone();
+                        let table_name = object_name.clone();
+                        thread::spawn(move || {
+                            let result = {
+                                let conn_guard = lock_connection(&connection);
+                                if !conn_guard.is_connected() {
+                                    Err("Not connected to database".to_string())
+                                } else if let Some(db_conn) = conn_guard.get_connection() {
+                                    ObjectBrowser::get_table_structure(
+                                        db_conn.as_ref(),
+                                        &table_name,
+                                    )
+                                    .map_err(|err| err.to_string())
+                                } else {
+                                    Err("Not connected to database".to_string())
+                                }
+                            };
+                            let _ = sender.send(ObjectActionResult::TableStructure {
+                                table_name,
+                                result,
+                            });
+                            app::awake();
+                        });
+                    }
+                    ("View Indexes", ObjectItem::Simple { object_name, .. }) => {
+                        let connection = connection.clone();
+                        let sender = action_sender.clone();
+                        let table_name = object_name.clone();
+                        thread::spawn(move || {
+                            let result = {
+                                let conn_guard = lock_connection(&connection);
+                                if !conn_guard.is_connected() {
+                                    Err("Not connected to database".to_string())
+                                } else if let Some(db_conn) = conn_guard.get_connection() {
+                                    ObjectBrowser::get_table_indexes(
+                                        db_conn.as_ref(),
+                                        &table_name,
+                                    )
+                                    .map_err(|err| err.to_string())
+                                } else {
+                                    Err("Not connected to database".to_string())
+                                }
+                            };
+                            let _ = sender.send(ObjectActionResult::TableIndexes {
+                                table_name,
+                                result,
+                            });
+                            app::awake();
+                        });
+                    }
+                    ("View Constraints", ObjectItem::Simple { object_name, .. }) => {
+                        let connection = connection.clone();
+                        let sender = action_sender.clone();
+                        let table_name = object_name.clone();
+                        thread::spawn(move || {
+                            let result = {
+                                let conn_guard = lock_connection(&connection);
+                                if !conn_guard.is_connected() {
+                                    Err("Not connected to database".to_string())
+                                } else if let Some(db_conn) = conn_guard.get_connection() {
+                                    ObjectBrowser::get_table_constraints(
+                                        db_conn.as_ref(),
+                                        &table_name,
+                                    )
+                                    .map_err(|err| err.to_string())
+                                } else {
+                                    Err("Not connected to database".to_string())
+                                }
+                            };
+                            let _ = sender.send(ObjectActionResult::TableConstraints {
+                                table_name,
+                                result,
+                            });
+                            app::awake();
+                        });
+                    }
+                    ("View Info", ObjectItem::Simple { object_name, .. }) => {
+                        let connection = connection.clone();
+                        let sender = action_sender.clone();
+                        let sequence_name = object_name.clone();
+                        thread::spawn(move || {
+                            let result = {
+                                let conn_guard = lock_connection(&connection);
+                                if !conn_guard.is_connected() {
+                                    Err("Not connected to database".to_string())
+                                } else if let Some(db_conn) = conn_guard.get_connection() {
+                                    ObjectBrowser::get_sequence_info(
+                                        db_conn.as_ref(),
+                                        &sequence_name,
+                                    )
+                                    .map_err(|err| err.to_string())
+                                } else {
+                                    Err("Not connected to database".to_string())
+                                }
+                            };
+                            let _ = sender.send(ObjectActionResult::SequenceInfo(result));
+                            app::awake();
+                        });
+                    }
+                    (
+                        "Generate DDL",
+                        ObjectItem::Simple {
+                            object_type,
+                            object_name,
+                        },
+                    ) => {
+                        let obj_type = match object_type.as_str() {
+                            "TABLES" => Some("TABLE"),
+                            "VIEWS" => Some("VIEW"),
+                            "PROCEDURES" => Some("PROCEDURE"),
+                            "FUNCTIONS" => Some("FUNCTION"),
+                            "SEQUENCES" => Some("SEQUENCE"),
+                            _ => None,
+                        };
+                        if let Some(obj_type) = obj_type {
+                            let connection = connection.clone();
+                            let sender = action_sender.clone();
+                            let object_type = obj_type.to_string();
+                            let object_name = object_name.clone();
+                            thread::spawn(move || {
+                                let result = {
+                                    let conn_guard = lock_connection(&connection);
+                                    if !conn_guard.is_connected() {
+                                        Err("Not connected to database".to_string())
+                                    } else if let Some(db_conn) = conn_guard.get_connection() {
+                                        match object_type.as_str() {
+                                            "TABLE" => ObjectBrowser::get_table_ddl(
+                                                db_conn.as_ref(),
+                                                &object_name,
+                                            ),
+                                            "VIEW" => ObjectBrowser::get_view_ddl(
+                                                db_conn.as_ref(),
+                                                &object_name,
+                                            ),
+                                            "PROCEDURE" => ObjectBrowser::get_procedure_ddl(
+                                                db_conn.as_ref(),
+                                                &object_name,
+                                            ),
+                                            "FUNCTION" => ObjectBrowser::get_function_ddl(
+                                                db_conn.as_ref(),
+                                                &object_name,
+                                            ),
+                                            "SEQUENCE" => ObjectBrowser::get_sequence_ddl(
+                                                db_conn.as_ref(),
+                                                &object_name,
+                                            ),
+                                            _ => return,
+                                        }
+                                        .map_err(|err| err.to_string())
+                                    } else {
+                                        Err("Not connected to database".to_string())
+                                    }
+                                };
+                                let _ = sender.send(ObjectActionResult::Ddl(result));
+                                app::awake();
+                            });
+                        }
+                    }
+                    _ => {}
                 }
             }
 
@@ -782,146 +1174,6 @@ impl ObjectBrowserWidget {
             unsafe {
                 let widget = Widget::from_widget_ptr(menu.as_widget_ptr());
                 Widget::delete(widget);
-            }
-        }
-    }
-
-    fn show_table_structure(conn: &oracle::Connection, table_name: &str) {
-        match ObjectBrowser::get_table_structure(conn, table_name) {
-            Ok(columns) => {
-                let mut info = format!("=== Table Structure: {} ===\n\n", table_name);
-                info.push_str(&format!(
-                    "{:<30} {:<20} {:<10} {:<10}\n",
-                    "Column Name", "Data Type", "Nullable", "PK"
-                ));
-                info.push_str(&format!("{}\n", "-".repeat(70)));
-
-                for col in columns {
-                    info.push_str(&format!(
-                        "{:<30} {:<20} {:<10} {:<10}\n",
-                        col.name,
-                        col.get_type_display(),
-                        if col.nullable { "YES" } else { "NO" },
-                        if col.is_primary_key { "PK" } else { "" }
-                    ));
-                }
-
-                Self::show_info_dialog("Table Structure", &info);
-            }
-            Err(e) => {
-                fltk::dialog::alert_default(&format!("Failed to get table structure: {}", e));
-            }
-        }
-    }
-
-    fn show_table_indexes(conn: &oracle::Connection, table_name: &str) {
-        match ObjectBrowser::get_table_indexes(conn, table_name) {
-            Ok(indexes) => {
-                let mut info = format!("=== Indexes: {} ===\n\n", table_name);
-                info.push_str(&format!(
-                    "{:<30} {:<10} {:<40}\n",
-                    "Index Name", "Unique", "Columns"
-                ));
-                info.push_str(&format!("{}\n", "-".repeat(80)));
-
-                for idx in indexes {
-                    info.push_str(&format!(
-                        "{:<30} {:<10} {:<40}\n",
-                        idx.name,
-                        if idx.is_unique { "YES" } else { "NO" },
-                        idx.columns
-                    ));
-                }
-
-                Self::show_info_dialog("Table Indexes", &info);
-            }
-            Err(e) => {
-                fltk::dialog::alert_default(&format!("Failed to get indexes: {}", e));
-            }
-        }
-    }
-
-    fn show_table_constraints(conn: &oracle::Connection, table_name: &str) {
-        match ObjectBrowser::get_table_constraints(conn, table_name) {
-            Ok(constraints) => {
-                let mut info = format!("=== Constraints: {} ===\n\n", table_name);
-                info.push_str(&format!(
-                    "{:<30} {:<15} {:<25} {:<20}\n",
-                    "Constraint Name", "Type", "Columns", "Ref Table"
-                ));
-                info.push_str(&format!("{}\n", "-".repeat(90)));
-
-                for con in constraints {
-                    info.push_str(&format!(
-                        "{:<30} {:<15} {:<25} {:<20}\n",
-                        con.name,
-                        con.constraint_type,
-                        con.columns,
-                        con.ref_table.unwrap_or_default()
-                    ));
-                }
-
-                Self::show_info_dialog("Table Constraints", &info);
-            }
-            Err(e) => {
-                fltk::dialog::alert_default(&format!("Failed to get constraints: {}", e));
-            }
-        }
-    }
-
-    fn show_sequence_info(conn: &oracle::Connection, sequence_name: &str) {
-        match ObjectBrowser::get_sequence_info(conn, sequence_name) {
-            Ok(info) => {
-                let mut details = format!("=== Sequence Info: {} ===\n\n", info.name);
-                details.push_str(&format!("{:<18} {}\n", "Min Value", info.min_value));
-                details.push_str(&format!("{:<18} {}\n", "Max Value", info.max_value));
-                details.push_str(&format!("{:<18} {}\n", "Increment By", info.increment_by));
-                details.push_str(&format!("{:<18} {}\n", "Cycle", info.cycle_flag));
-                details.push_str(&format!("{:<18} {}\n", "Order", info.order_flag));
-                details.push_str(&format!("{:<18} {}\n", "Cache Size", info.cache_size));
-                details.push_str(&format!("{:<18} {}\n", "Last Number", info.last_number));
-                details.push_str("\nNote: LAST_NUMBER is the next value to be generated.\n");
-
-                Self::show_info_dialog("Sequence Info", &details);
-            }
-            Err(e) => {
-                fltk::dialog::alert_default(&format!("Failed to get sequence info: {}", e));
-            }
-        }
-    }
-
-    fn show_ddl(
-        conn: &oracle::Connection,
-        object_type: &str,
-        object_name: &str,
-        sql_callback: &SqlExecuteCallback,
-    ) {
-        let result = match object_type {
-            "TABLE" => ObjectBrowser::get_table_ddl(conn, object_name),
-            "VIEW" => ObjectBrowser::get_view_ddl(conn, object_name),
-            "PROCEDURE" => ObjectBrowser::get_procedure_ddl(conn, object_name),
-            "FUNCTION" => ObjectBrowser::get_function_ddl(conn, object_name),
-            "SEQUENCE" => ObjectBrowser::get_sequence_ddl(conn, object_name),
-            _ => return,
-        };
-
-        match result {
-            Ok(ddl) => {
-                let formatted = SqlEditorWidget::format_sql_basic(&ddl);
-                let ddl = if formatted.trim().is_empty() {
-                    ddl
-                } else {
-                    formatted
-                };
-                // Take the callback out, call it, then put it back
-                let cb_opt = sql_callback.borrow_mut().take();
-                if let Some(mut cb) = cb_opt {
-                    cb(SqlAction::Set(ddl));
-                    *sql_callback.borrow_mut() = Some(cb);
-                }
-            }
-            Err(e) => {
-                fltk::dialog::alert_default(&format!("Failed to generate DDL: {}", e));
             }
         }
     }

@@ -23,8 +23,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::db::{
-    lock_connection, BindValue, BindVar, ColumnInfo, CursorResult, FormatItem, QueryExecutor,
-    QueryResult, ScriptItem, SessionState, SharedConnection, ToolCommand,
+    lock_connection, BindValue, BindVar, ColumnInfo, CursorResult, FormatItem, ObjectBrowser,
+    QueryExecutor, QueryResult, ScriptItem, SessionState, SharedConnection, TableColumnDetail,
+    ToolCommand,
 };
 use crate::ui::intellisense::{
     detect_sql_context, get_word_at_cursor, IntellisenseData, IntellisensePopup, SqlContext,
@@ -100,6 +101,18 @@ struct PendingIntellisense {
 }
 
 #[derive(Clone)]
+enum UiActionResult {
+    ExplainPlan(Result<Vec<String>, String>),
+    QuickDescribe {
+        object_name: String,
+        result: Result<Vec<TableColumnDetail>, String>,
+    },
+    Commit(Result<(), String>),
+    Rollback(Result<(), String>),
+    Cancel(Result<(), String>),
+}
+
+#[derive(Clone)]
 pub struct SqlEditorWidget {
     group: Flex,
     editor: TextEditor,
@@ -110,6 +123,7 @@ pub struct SqlEditorWidget {
     progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>>,
     progress_sender: mpsc::Sender<QueryProgress>,
     column_sender: mpsc::Sender<ColumnLoadUpdate>,
+    ui_action_sender: mpsc::Sender<UiActionResult>,
     query_running: Rc<RefCell<bool>>,
     intellisense_data: Rc<RefCell<IntellisenseData>>,
     intellisense_popup: Rc<RefCell<IntellisensePopup>>,
@@ -208,6 +222,7 @@ impl SqlEditorWidget {
             Rc::new(RefCell::new(None));
         let (progress_sender, progress_receiver) = mpsc::channel::<QueryProgress>();
         let (column_sender, column_receiver) = mpsc::channel::<ColumnLoadUpdate>();
+        let (ui_action_sender, ui_action_receiver) = mpsc::channel::<UiActionResult>();
         let query_running = Rc::new(RefCell::new(false));
 
         let intellisense_data = Rc::new(RefCell::new(IntellisenseData::new()));
@@ -230,6 +245,7 @@ impl SqlEditorWidget {
             progress_callback: progress_callback.clone(),
             progress_sender,
             column_sender,
+            ui_action_sender,
             query_running: query_running.clone(),
             intellisense_data,
             intellisense_popup,
@@ -254,6 +270,7 @@ impl SqlEditorWidget {
         widget.setup_syntax_highlighting();
         widget.setup_progress_handler(progress_receiver, progress_callback, query_running);
         widget.setup_column_loader(column_receiver);
+        widget.setup_ui_action_handler(ui_action_receiver);
 
         widget
     }
@@ -447,6 +464,122 @@ impl SqlEditorWidget {
             connection,
             pending_intellisense,
         );
+    }
+
+    fn setup_ui_action_handler(&self, ui_action_receiver: mpsc::Receiver<UiActionResult>) {
+        let widget = self.clone();
+
+        let receiver: Rc<RefCell<mpsc::Receiver<UiActionResult>>> =
+            Rc::new(RefCell::new(ui_action_receiver));
+
+        fn schedule_poll(
+            receiver: Rc<RefCell<mpsc::Receiver<UiActionResult>>>,
+            widget: SqlEditorWidget,
+        ) {
+            let mut disconnected = false;
+            loop {
+                let message = {
+                    let r = receiver.borrow();
+                    r.try_recv()
+                };
+
+                match message {
+                    Ok(action) => match action {
+                        UiActionResult::ExplainPlan(result) => match result {
+                            Ok(plan_lines) => {
+                                let plan_text = if plan_lines.is_empty() {
+                                    "No plan output.".to_string()
+                                } else {
+                                    plan_lines.join("\n")
+                                };
+                                SqlEditorWidget::show_plan_dialog(&plan_text);
+                            }
+                            Err(err) => {
+                                fltk::dialog::alert_default(&format!(
+                                    "Failed to explain plan: {}",
+                                    err
+                                ));
+                            }
+                        },
+                        UiActionResult::QuickDescribe {
+                            object_name,
+                            result,
+                        } => match result {
+                            Ok(columns) => {
+                                if columns.is_empty() {
+                                    fltk::dialog::message_default(&format!(
+                                        "No table or view found with name: {}",
+                                        object_name.to_uppercase()
+                                    ));
+                                } else {
+                                    SqlEditorWidget::show_quick_describe_dialog(
+                                        &object_name,
+                                        &columns,
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                if err.contains("Not connected") {
+                                    fltk::dialog::alert_default("Not connected to database");
+                                } else {
+                                    fltk::dialog::message_default(&format!(
+                                        "Object not found or not accessible: {} ({})",
+                                        object_name.to_uppercase(),
+                                        err
+                                    ));
+                                }
+                            }
+                        },
+                        UiActionResult::Commit(result) => match result {
+                            Ok(()) => {
+                                widget.emit_status("Committed");
+                            }
+                            Err(err) => {
+                                fltk::dialog::alert_default(&format!("Commit failed: {}", err));
+                                if err.contains("Not connected") {
+                                    widget.emit_status("Commit failed: not connected");
+                                } else {
+                                    widget.emit_status("Commit failed");
+                                }
+                            }
+                        },
+                        UiActionResult::Rollback(result) => match result {
+                            Ok(()) => {
+                                widget.emit_status("Rolled back");
+                            }
+                            Err(err) => {
+                                fltk::dialog::alert_default(&format!("Rollback failed: {}", err));
+                                if err.contains("Not connected") {
+                                    widget.emit_status("Rollback failed: not connected");
+                                } else {
+                                    widget.emit_status("Rollback failed");
+                                }
+                            }
+                        },
+                        UiActionResult::Cancel(result) => {
+                            if let Err(err) = result {
+                                fltk::dialog::alert_default(&format!("Cancel failed: {}", err));
+                            }
+                        }
+                    },
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+
+            if disconnected {
+                return;
+            }
+
+            app::add_timeout3(0.05, move |_| {
+                schedule_poll(Rc::clone(&receiver), widget.clone());
+            });
+        }
+
+        schedule_poll(receiver, widget);
     }
 
     fn setup_syntax_highlighting(&self) {
@@ -1502,90 +1635,68 @@ impl SqlEditorWidget {
     }
 
     /// Show quick describe dialog for a table (F4 functionality)
-    fn show_quick_describe(conn: &oracle::Connection, object_name: &str) {
-        use crate::db::ObjectBrowser;
+    fn show_quick_describe_dialog(object_name: &str, columns: &[TableColumnDetail]) {
         use fltk::{prelude::*, text::TextDisplay, window::Window};
 
-        // Try to get table structure
-        match ObjectBrowser::get_table_structure(conn, object_name) {
-            Ok(columns) => {
-                if columns.is_empty() {
-                    fltk::dialog::message_default(&format!(
-                        "No table or view found with name: {}",
-                        object_name.to_uppercase()
-                    ));
-                    return;
-                }
+        let mut info = format!("=== {} ===\n\n", object_name.to_uppercase());
+        info.push_str(&format!(
+            "{:<30} {:<20} {:<10} {:<10}\n",
+            "Column Name", "Data Type", "Nullable", "PK"
+        ));
+        info.push_str(&format!("{}\n", "-".repeat(70)));
 
-                // Build description text
-                let mut info = format!("=== {} ===\n\n", object_name.to_uppercase());
-                info.push_str(&format!(
-                    "{:<30} {:<20} {:<10} {:<10}\n",
-                    "Column Name", "Data Type", "Nullable", "PK"
-                ));
-                info.push_str(&format!("{}\n", "-".repeat(70)));
+        for col in columns {
+            info.push_str(&format!(
+                "{:<30} {:<20} {:<10} {:<10}\n",
+                col.name,
+                col.get_type_display(),
+                if col.nullable { "YES" } else { "NO" },
+                if col.is_primary_key { "PK" } else { "" }
+            ));
+        }
 
-                for col in columns {
-                    info.push_str(&format!(
-                        "{:<30} {:<20} {:<10} {:<10}\n",
-                        col.name,
-                        col.get_type_display(),
-                        if col.nullable { "YES" } else { "NO" },
-                        if col.is_primary_key { "PK" } else { "" }
-                    ));
-                }
+        let current_group = fltk::group::Group::try_current();
 
-                // Show in a dialog
-                let current_group = fltk::group::Group::try_current();
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
-                fltk::group::Group::set_current(None::<&fltk::group::Group>);
+        let mut dialog = Window::default()
+            .with_size(600, 400)
+            .with_label(&format!("Describe: {}", object_name.to_uppercase()))
+            .center_screen();
+        dialog.set_color(theme::panel_raised());
+        dialog.make_modal(true);
+        dialog.begin();
 
-                let mut dialog = Window::default()
-                    .with_size(600, 400)
-                    .with_label(&format!("Describe: {}", object_name.to_uppercase()))
-                    .center_screen();
-                dialog.set_color(theme::panel_raised());
-                dialog.make_modal(true);
-                dialog.begin();
+        let mut display = TextDisplay::default().with_pos(10, 10).with_size(580, 340);
+        display.set_color(theme::editor_bg());
+        display.set_text_color(theme::text_primary());
+        display.set_text_font(fltk::enums::Font::Courier);
+        display.set_text_size(14);
 
-                let mut display = TextDisplay::default().with_pos(10, 10).with_size(580, 340);
-                display.set_color(theme::editor_bg());
-                display.set_text_color(theme::text_primary());
-                display.set_text_font(fltk::enums::Font::Courier);
-                display.set_text_size(14);
+        let mut buffer = fltk::text::TextBuffer::default();
+        buffer.set_text(&info);
+        display.set_buffer(buffer);
 
-                let mut buffer = fltk::text::TextBuffer::default();
-                buffer.set_text(&info);
-                display.set_buffer(buffer);
+        let mut close_btn = fltk::button::Button::default()
+            .with_pos(250, 360)
+            .with_size(100, 20)
+            .with_label("Close");
+        close_btn.set_color(theme::button_secondary());
+        close_btn.set_label_color(theme::text_primary());
 
-                let mut close_btn = fltk::button::Button::default()
-                    .with_pos(250, 360)
-                    .with_size(100, 20)
-                    .with_label("Close");
-                close_btn.set_color(theme::button_secondary());
-                close_btn.set_label_color(theme::text_primary());
+        let (sender, receiver) = mpsc::channel::<()>();
+        close_btn.set_callback(move |_| {
+            let _ = sender.send(());
+        });
 
-                let (sender, receiver) = mpsc::channel::<()>();
-                close_btn.set_callback(move |_| {
-                    let _ = sender.send(());
-                });
+        dialog.end();
+        dialog.show();
+        fltk::group::Group::set_current(current_group.as_ref());
 
-                dialog.end();
-                dialog.show();
-                fltk::group::Group::set_current(current_group.as_ref());
-
-                while dialog.shown() {
-                    fltk::app::wait();
-                    if receiver.try_recv().is_ok() {
-                        dialog.hide();
-                    }
-                }
-            }
-            Err(_) => {
-                fltk::dialog::message_default(&format!(
-                    "Object not found or not accessible: {}",
-                    object_name.to_uppercase()
-                ));
+        while dialog.shown() {
+            fltk::app::wait();
+            if receiver.try_recv().is_ok() {
+                dialog.hide();
             }
         }
     }
@@ -1638,27 +1749,24 @@ impl SqlEditorWidget {
             return;
         };
 
-        let conn_guard = lock_connection(&self.connection);
-        if !conn_guard.is_connected() {
-            fltk::dialog::alert_default("Not connected to database");
-            return;
-        }
+        let connection = self.connection.clone();
+        let sender = self.ui_action_sender.clone();
+        thread::spawn(move || {
+            let result = {
+                let conn_guard = lock_connection(&connection);
+                if !conn_guard.is_connected() {
+                    Err("Not connected to database".to_string())
+                } else if let Some(db_conn) = conn_guard.get_connection() {
+                    QueryExecutor::get_explain_plan(db_conn.as_ref(), &sql)
+                        .map_err(|err| err.to_string())
+                } else {
+                    Err("Not connected to database".to_string())
+                }
+            };
 
-        if let Some(db_conn) = conn_guard.get_connection() {
-            match QueryExecutor::get_explain_plan(db_conn.as_ref(), &sql) {
-                Ok(plan_lines) => {
-                    let plan_text = if plan_lines.is_empty() {
-                        "No plan output.".to_string()
-                    } else {
-                        plan_lines.join("\n")
-                    };
-                    Self::show_plan_dialog(&plan_text);
-                }
-                Err(err) => {
-                    fltk::dialog::alert_default(&format!("Failed to explain plan: {}", err));
-                }
-            }
-        }
+            let _ = sender.send(UiActionResult::ExplainPlan(result));
+            app::awake();
+        });
     }
 
     fn show_plan_dialog(plan_text: &str) {
@@ -1725,43 +1833,43 @@ impl SqlEditorWidget {
     }
 
     pub fn commit(&self) {
-        let conn_guard = lock_connection(&self.connection);
-        if !conn_guard.is_connected() {
-            fltk::dialog::alert_default("Not connected to database");
-            self.emit_status("Commit failed: not connected");
-            return;
-        }
+        let connection = self.connection.clone();
+        let sender = self.ui_action_sender.clone();
+        thread::spawn(move || {
+            let result = {
+                let conn_guard = lock_connection(&connection);
+                if !conn_guard.is_connected() {
+                    Err("Not connected to database".to_string())
+                } else if let Some(db_conn) = conn_guard.get_connection() {
+                    db_conn.commit().map_err(|err| err.to_string())
+                } else {
+                    Err("Not connected to database".to_string())
+                }
+            };
 
-        if let Some(db_conn) = conn_guard.get_connection() {
-            if let Err(err) = db_conn.commit() {
-                fltk::dialog::alert_default(&format!("Commit failed: {}", err));
-                self.emit_status("Commit failed");
-            } else {
-                self.emit_status("Committed");
-            }
-        } else {
-            self.emit_status("Commit failed");
-        }
+            let _ = sender.send(UiActionResult::Commit(result));
+            app::awake();
+        });
     }
 
     pub fn rollback(&self) {
-        let conn_guard = lock_connection(&self.connection);
-        if !conn_guard.is_connected() {
-            fltk::dialog::alert_default("Not connected to database");
-            self.emit_status("Rollback failed: not connected");
-            return;
-        }
+        let connection = self.connection.clone();
+        let sender = self.ui_action_sender.clone();
+        thread::spawn(move || {
+            let result = {
+                let conn_guard = lock_connection(&connection);
+                if !conn_guard.is_connected() {
+                    Err("Not connected to database".to_string())
+                } else if let Some(db_conn) = conn_guard.get_connection() {
+                    db_conn.rollback().map_err(|err| err.to_string())
+                } else {
+                    Err("Not connected to database".to_string())
+                }
+            };
 
-        if let Some(db_conn) = conn_guard.get_connection() {
-            if let Err(err) = db_conn.rollback() {
-                fltk::dialog::alert_default(&format!("Rollback failed: {}", err));
-                self.emit_status("Rollback failed");
-            } else {
-                self.emit_status("Rolled back");
-            }
-        } else {
-            self.emit_status("Rollback failed");
-        }
+            let _ = sender.send(UiActionResult::Rollback(result));
+            app::awake();
+        });
     }
 
     pub fn cancel_current(&self) {
@@ -1770,17 +1878,23 @@ impl SqlEditorWidget {
             return;
         }
 
-        let conn_guard = lock_connection(&self.connection);
-        if !conn_guard.is_connected() {
-            fltk::dialog::alert_default("Not connected to database");
-            return;
-        }
+        let connection = self.connection.clone();
+        let sender = self.ui_action_sender.clone();
+        thread::spawn(move || {
+            let result = {
+                let conn_guard = lock_connection(&connection);
+                if !conn_guard.is_connected() {
+                    Err("Not connected to database".to_string())
+                } else if let Some(db_conn) = conn_guard.get_connection() {
+                    db_conn.break_execution().map_err(|err| err.to_string())
+                } else {
+                    Err("Not connected to database".to_string())
+                }
+            };
 
-        if let Some(db_conn) = conn_guard.get_connection() {
-            if let Err(err) = db_conn.break_execution() {
-                fltk::dialog::alert_default(&format!("Cancel failed: {}", err));
-            }
-        }
+            let _ = sender.send(UiActionResult::Cancel(result));
+            app::awake();
+        });
     }
 
     pub fn set_execute_callback<F>(&mut self, callback: F)
@@ -1925,14 +2039,27 @@ impl SqlEditorWidget {
             return;
         }
 
-        let conn_guard = lock_connection(&self.connection);
-        if conn_guard.is_connected() {
-            if let Some(db_conn) = conn_guard.get_connection() {
-                Self::show_quick_describe(db_conn.as_ref(), &word);
-            }
-        } else {
-            fltk::dialog::alert_default("Not connected to database");
-        }
+        let connection = self.connection.clone();
+        let sender = self.ui_action_sender.clone();
+        thread::spawn(move || {
+            let result = {
+                let conn_guard = lock_connection(&connection);
+                if !conn_guard.is_connected() {
+                    Err("Not connected to database".to_string())
+                } else if let Some(db_conn) = conn_guard.get_connection() {
+                    ObjectBrowser::get_table_structure(db_conn.as_ref(), &word)
+                        .map_err(|err| err.to_string())
+                } else {
+                    Err("Not connected to database".to_string())
+                }
+            };
+
+            let _ = sender.send(UiActionResult::QuickDescribe {
+                object_name: word,
+                result,
+            });
+            app::awake();
+        });
     }
 
     pub fn execute_sql_text(&self, sql: &str) {

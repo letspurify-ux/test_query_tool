@@ -60,6 +60,22 @@ enum ConnectionResult {
     Failure(String),
 }
 
+enum FileActionResult {
+    Open {
+        path: PathBuf,
+        result: Result<String, String>,
+    },
+    Save {
+        path: PathBuf,
+        result: Result<(), String>,
+    },
+    Export {
+        path: PathBuf,
+        row_count: usize,
+        result: Result<(), String>,
+    },
+}
+
 impl MainWindow {
     pub fn new() -> Self {
         let connection = create_shared_connection();
@@ -139,6 +155,7 @@ impl MainWindow {
             }
             let mut tabs = result_tabs_for_clear.clone();
             tabs.clear();
+            app::redraw();
         });
 
         let state = Rc::new(RefCell::new(AppState {
@@ -346,21 +363,26 @@ impl MainWindow {
         let state = self.state.clone();
         let (schema_sender, schema_receiver) = std::sync::mpsc::channel::<SchemaUpdate>();
         let (conn_sender, conn_receiver) = std::sync::mpsc::channel::<ConnectionResult>();
+        let (file_sender, file_receiver) = std::sync::mpsc::channel::<FileActionResult>();
 
         // Wrap receivers in Rc<RefCell> to share across timeout callbacks
         let schema_receiver: Rc<RefCell<std::sync::mpsc::Receiver<SchemaUpdate>>> =
             Rc::new(RefCell::new(schema_receiver));
         let conn_receiver: Rc<RefCell<std::sync::mpsc::Receiver<ConnectionResult>>> =
             Rc::new(RefCell::new(conn_receiver));
+        let file_receiver: Rc<RefCell<std::sync::mpsc::Receiver<FileActionResult>>> =
+            Rc::new(RefCell::new(file_receiver));
 
         fn schedule_poll(
             schema_receiver: Rc<RefCell<std::sync::mpsc::Receiver<SchemaUpdate>>>,
             conn_receiver: Rc<RefCell<std::sync::mpsc::Receiver<ConnectionResult>>>,
+            file_receiver: Rc<RefCell<std::sync::mpsc::Receiver<FileActionResult>>>,
             state: Rc<RefCell<AppState>>,
             schema_sender: std::sync::mpsc::Sender<SchemaUpdate>,
         ) {
             let mut schema_disconnected = false;
             let mut conn_disconnected = false;
+            let mut file_disconnected = false;
 
             // Check for schema updates
             {
@@ -433,8 +455,84 @@ impl MainWindow {
                 }
             }
 
-            // Stop polling if both channels are disconnected
-            if schema_disconnected && conn_disconnected {
+            // Check for file operations
+            {
+                let r = file_receiver.borrow();
+                loop {
+                    match r.try_recv() {
+                        Ok(result) => {
+                            let mut s = state.borrow_mut();
+                            match result {
+                                FileActionResult::Open { path, result } => match result {
+                                    Ok(content) => {
+                                        s.sql_buffer.set_text(&content);
+                                        *s.current_file.borrow_mut() = Some(path.clone());
+                                        s.window.set_label(&format!(
+                                            "Oracle Query Tool - {}",
+                                            path.file_name().unwrap_or_default().to_string_lossy()
+                                        ));
+                                        s.sql_editor.refresh_highlighting();
+                                        s.sql_editor.focus();
+                                    }
+                                    Err(err) => {
+                                        fltk::dialog::alert_default(&format!(
+                                            "Failed to open SQL file: {}",
+                                            err
+                                        ));
+                                    }
+                                },
+                                FileActionResult::Save { path, result } => match result {
+                                    Ok(()) => {
+                                        *s.current_file.borrow_mut() = Some(path.clone());
+                                        let file_label =
+                                            path.file_name().unwrap_or_default().to_string_lossy();
+                                        s.window.set_label(&format!(
+                                            "Oracle Query Tool - {}",
+                                            file_label
+                                        ));
+                                        s.status_bar
+                                            .set_label(&format!("Saved {}", file_label));
+                                    }
+                                    Err(err) => {
+                                        fltk::dialog::alert_default(&format!(
+                                            "Failed to save SQL file: {}",
+                                            err
+                                        ));
+                                    }
+                                },
+                                FileActionResult::Export {
+                                    path,
+                                    row_count,
+                                    result,
+                                } => match result {
+                                    Ok(()) => {
+                                        let file_label =
+                                            path.file_name().unwrap_or_default().to_string_lossy();
+                                        s.status_bar.set_label(&format!(
+                                            "Exported {} rows to {}",
+                                            row_count, file_label
+                                        ));
+                                    }
+                                    Err(err) => {
+                                        fltk::dialog::alert_default(&format!(
+                                            "Failed to export CSV: {}",
+                                            err
+                                        ));
+                                    }
+                                },
+                            }
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            file_disconnected = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Stop polling if all channels are disconnected
+            if schema_disconnected && conn_disconnected && file_disconnected {
                 return;
             }
 
@@ -443,6 +541,7 @@ impl MainWindow {
                 schedule_poll(
                     Rc::clone(&schema_receiver),
                     Rc::clone(&conn_receiver),
+                    Rc::clone(&file_receiver),
                     Rc::clone(&state),
                     schema_sender.clone(),
                 );
@@ -452,10 +551,17 @@ impl MainWindow {
         // Start polling
         let state_for_poll = state.clone();
         let schema_sender_for_poll = schema_sender.clone();
-        schedule_poll(schema_receiver, conn_receiver, state_for_poll, schema_sender_for_poll);
+        schedule_poll(
+            schema_receiver,
+            conn_receiver,
+            file_receiver,
+            state_for_poll,
+            schema_sender_for_poll,
+        );
 
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
             let state_for_menu = state.clone();
+            let file_sender = file_sender.clone();
             menu.set_callback(move |m| {
                 let menu_path = m.item_pathname(None).ok().or_else(|| m.choice().map(|p| p.to_string()));
                 if let Some(path) = menu_path {
@@ -504,14 +610,16 @@ impl MainWindow {
                             dialog.show();
                             let filename = dialog.filename();
                             if !filename.as_os_str().is_empty() {
-                                if let Ok(content) = fs::read_to_string(&filename) {
-                                    let mut s = state_for_menu.borrow_mut();
-                                    s.sql_buffer.set_text(&content);
-                                    *s.current_file.borrow_mut() = Some(filename.clone());
-                                    s.window.set_label(&format!("Oracle Query Tool - {}", filename.file_name().unwrap_or_default().to_string_lossy()));
-                                    s.sql_editor.refresh_highlighting();
-                                    s.sql_editor.focus();
-                                }
+                                let sender = file_sender.clone();
+                                thread::spawn(move || {
+                                    let result = fs::read_to_string(&filename)
+                                        .map_err(|err| err.to_string());
+                                    let _ = sender.send(FileActionResult::Open {
+                                        path: filename,
+                                        result,
+                                    });
+                                    app::awake();
+                                });
                             }
                         }
                         "File/Save SQL File..." => {
@@ -537,24 +645,13 @@ impl MainWindow {
                             };
 
                             if let Some(path) = target_path {
-                                if let Err(err) = fs::write(&path, sql_text) {
-                                    fltk::dialog::alert_default(&format!(
-                                        "Failed to save SQL file: {}",
-                                        err
-                                    ));
-                                } else {
-                                    let mut s = state_for_menu.borrow_mut();
-                                    *s.current_file.borrow_mut() = Some(path.clone());
-                                    let file_label = path
-                                        .file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy();
-                                    s.window.set_label(&format!(
-                                        "Oracle Query Tool - {}",
-                                        file_label
-                                    ));
-                                    s.status_bar.set_label(&format!("Saved {}", file_label));
-                                }
+                                let sender = file_sender.clone();
+                                thread::spawn(move || {
+                                    let result =
+                                        fs::write(&path, sql_text).map_err(|err| err.to_string());
+                                    let _ = sender.send(FileActionResult::Save { path, result });
+                                    app::awake();
+                                });
                             }
                         }
                         "File/Exit" => app::quit(),
@@ -646,23 +743,18 @@ impl MainWindow {
                             }
 
                             let csv = state_for_menu.borrow().result_tabs.export_to_csv();
-                            if let Err(err) = fs::write(&filename, csv) {
-                                fltk::dialog::alert_default(&format!(
-                                    "Failed to export CSV: {}",
-                                    err
-                                ));
-                            } else {
-                                let row_count = state_for_menu.borrow().result_tabs.row_count();
-                                let mut s = state_for_menu.borrow_mut();
-                                let file_label = filename
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy();
-                                s.status_bar.set_label(&format!(
-                                    "Exported {} rows to {}",
-                                    row_count, file_label
-                                ));
-                            }
+                            let row_count = state_for_menu.borrow().result_tabs.row_count();
+                            let sender = file_sender.clone();
+                            thread::spawn(move || {
+                                let result =
+                                    fs::write(&filename, csv).map_err(|err| err.to_string());
+                                let _ = sender.send(FileActionResult::Export {
+                                    path: filename,
+                                    row_count,
+                                    result,
+                                });
+                                app::awake();
+                            });
                         }
                         "Edit/Find..." => {
                             let (mut editor, mut buffer, popups) = {
@@ -737,10 +829,11 @@ impl MainWindow {
 
     pub fn show(&mut self) {
         let state = self.state.clone();
-        let mut s = state.borrow_mut();
-        let popups = s.popups.clone();
-        let sql_editor = s.sql_editor.clone();
-        s.window.set_callback(move |w| {
+        let (mut window, popups, sql_editor) = {
+            let s = state.borrow();
+            (s.window.clone(), s.popups.clone(), s.sql_editor.clone())
+        };
+        window.set_callback(move |w| {
             let mut popups = popups.borrow_mut();
             for mut popup in popups.drain(..) {
                 popup.hide();
@@ -749,12 +842,15 @@ impl MainWindow {
             w.hide();
             app::quit();
         });
-        s.window.show();
+        window.show();
         app::flush();
         let _ = app::wait();
-        MainWindow::adjust_query_layout(&mut s);
-        s.window.redraw();
-        s.sql_editor.focus();
+        {
+            let mut s = state.borrow_mut();
+            MainWindow::adjust_query_layout(&mut s);
+            s.window.redraw();
+            s.sql_editor.focus();
+        }
     }
 
     pub fn run() {
