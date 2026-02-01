@@ -1,3 +1,5 @@
+Connect system/password@localhost:1521/FREE
+
 Prompt 프로시저 테스트1
 
 /* ============================================================

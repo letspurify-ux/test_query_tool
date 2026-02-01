@@ -201,6 +201,7 @@ impl MainWindow {
     pub fn setup_callbacks(&mut self) {
         let state = self.state.clone();
         let mut state_borrow = state.borrow_mut();
+        let (schema_sender, schema_receiver) = std::sync::mpsc::channel::<SchemaUpdate>();
         
         // Setup SQL editor execute callback
         let state_for_execute = state.clone();
@@ -288,6 +289,7 @@ impl MainWindow {
         });
 
         let state_for_progress = state.clone();
+        let schema_sender_for_progress = schema_sender.clone();
         state_borrow.sql_editor.set_progress_callback(move |progress| {
             let mut s = state_for_progress.borrow_mut();
             match progress {
@@ -340,6 +342,46 @@ impl MainWindow {
                     };
                     s.status_bar.set_label(status);
                 }
+                QueryProgress::ConnectionChanged { info } => {
+                    if let Some(info) = info {
+                        s.status_bar.set_label(&format!(
+                            "Connected: {} | Ctrl+Space for autocomplete",
+                            info.display_string()
+                        ));
+                        s.object_browser.refresh();
+                        s.sql_editor.focus();
+
+                        let schema_sender = schema_sender_for_progress.clone();
+                        let connection = s.connection.clone();
+                        thread::spawn(move || {
+                            let conn_guard = lock_connection(&connection);
+                            if let Some(conn) = conn_guard.get_connection() {
+                                let mut data = IntellisenseData::new();
+                                let mut highlight_data = HighlightData::new();
+                                if let Ok(tables) = ObjectBrowser::get_tables(conn.as_ref()) {
+                                    highlight_data.tables = tables.clone();
+                                    data.tables = tables;
+                                }
+                                if let Ok(views) = ObjectBrowser::get_views(conn.as_ref()) {
+                                    highlight_data.views = views.clone();
+                                    data.views = views;
+                                }
+                                data.rebuild_indices();
+                                let _ = schema_sender.send(SchemaUpdate { data, highlight_data });
+                                app::awake();
+                            }
+                        });
+                    } else {
+                        s.status_bar
+                            .set_label("Disconnected | Ctrl+Space for autocomplete");
+                        *s.sql_editor.get_intellisense_data().borrow_mut() =
+                            IntellisenseData::new();
+                        s.sql_editor
+                            .get_highlighter()
+                            .borrow_mut()
+                            .set_highlight_data(HighlightData::new());
+                    }
+                }
                 QueryProgress::StatementFinished { index, result, .. } => {
                     let tab_index = s.result_tab_offset + index;
                     if result.is_select {
@@ -356,12 +398,15 @@ impl MainWindow {
             }
         });
 
-        self.setup_menu_callbacks();
+        self.setup_menu_callbacks(schema_sender, schema_receiver);
     }
 
-    fn setup_menu_callbacks(&mut self) {
+    fn setup_menu_callbacks(
+        &mut self,
+        schema_sender: std::sync::mpsc::Sender<SchemaUpdate>,
+        schema_receiver: std::sync::mpsc::Receiver<SchemaUpdate>,
+    ) {
         let state = self.state.clone();
-        let (schema_sender, schema_receiver) = std::sync::mpsc::channel::<SchemaUpdate>();
         let (conn_sender, conn_receiver) = std::sync::mpsc::channel::<ConnectionResult>();
         let (file_sender, file_receiver) = std::sync::mpsc::channel::<FileActionResult>();
 

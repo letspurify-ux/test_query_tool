@@ -23,9 +23,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::db::{
-    lock_connection, BindValue, BindVar, ColumnInfo, CursorResult, FormatItem, ObjectBrowser,
-    QueryExecutor, QueryResult, ScriptItem, SessionState, SharedConnection, TableColumnDetail,
-    ToolCommand,
+    lock_connection, BindValue, BindVar, ColumnInfo, ConnectionInfo, CursorResult, FormatItem,
+    ObjectBrowser, QueryExecutor, QueryResult, ScriptItem, SessionState, SharedConnection,
+    TableColumnDetail, ToolCommand,
 };
 use crate::ui::intellisense::{
     detect_sql_context, get_word_at_cursor, IntellisenseData, IntellisensePopup, SqlContext,
@@ -79,6 +79,9 @@ pub enum QueryProgress {
     },
     AutoCommitChanged {
         enabled: bool,
+    },
+    ConnectionChanged {
+        info: Option<ConnectionInfo>,
     },
     StatementFinished {
         index: usize,
@@ -2438,11 +2441,15 @@ impl SqlEditorWidget {
             }
             ToolCommand::Connect {
                 username,
+                password,
                 host,
                 port,
                 service_name,
                 ..
-            } => format!("CONNECT {}@{}:{}/{}", username, host, port, service_name),
+            } => format!(
+                "CONNECT {}/{}@{}:{}/{}",
+                username, password, host, port, service_name
+            ),
             ToolCommand::Disconnect => "DISCONNECT".to_string(),
             ToolCommand::Unsupported { raw, .. } => raw.clone(),
         }
@@ -3605,7 +3612,8 @@ impl SqlEditorWidget {
         let is_connect_command = sql_upper.starts_with("CONNECT")
             || sql_upper.starts_with("CONN ")
             || sql_upper.starts_with("DISCONNECT")
-            || sql_upper.starts_with("DISC");
+            || sql_upper.starts_with("DISC")
+            || sql_upper.starts_with('@');
 
         let conn_guard = lock_connection(&self.connection);
 
@@ -3653,6 +3661,9 @@ impl SqlEditorWidget {
                     base_dir: PathBuf,
                 }
 
+                let mut conn_opt = conn_opt;
+                let mut conn_name = conn_name;
+
                 let items = QueryExecutor::split_script_items(&sql_text);
                 if items.is_empty() {
                     let _ = sender.send(QueryProgress::BatchFinished);
@@ -3664,7 +3675,7 @@ impl SqlEditorWidget {
                 app::awake();
 
                 // Set timeout only if we have a connection
-                let previous_timeout = conn_opt
+                let mut previous_timeout = conn_opt
                     .as_ref()
                     .and_then(|c| c.call_timeout().ok())
                     .flatten();
@@ -3932,7 +3943,6 @@ impl SqlEditorWidget {
                                                 "SET SERVEROUTPUT",
                                                 "Error: Not connected to database",
                                             );
-                                            command_error = true;
                                             continue;
                                         }
                                     };
@@ -4079,7 +4089,6 @@ impl SqlEditorWidget {
                                                 "SHOW ERRORS",
                                                 "Error: Not connected to database",
                                             );
-                                            command_error = true;
                                             continue;
                                         }
                                     };
@@ -4183,7 +4192,6 @@ impl SqlEditorWidget {
                                                 "SHOW USER",
                                                 "Error: Not connected to database",
                                             );
-                                            command_error = true;
                                             continue;
                                         }
                                     };
@@ -4636,7 +4644,6 @@ impl SqlEditorWidget {
                                     port,
                                     service_name,
                                 } => {
-                                    use crate::db::ConnectionInfo;
                                     let conn_info = ConnectionInfo {
                                         name: format!("{}@{}", username, host),
                                         username,
@@ -4655,6 +4662,25 @@ impl SqlEditorWidget {
                                                 "CONNECT",
                                                 &format!("Connected to {}", conn_info.display_string()),
                                             );
+                                            conn_opt = shared_conn_guard.get_connection();
+                                            if shared_conn_guard.is_connected() {
+                                                conn_name =
+                                                    shared_conn_guard.get_info().name.clone();
+                                            } else {
+                                                conn_name.clear();
+                                            }
+                                            drop(shared_conn_guard);
+                                            previous_timeout = conn_opt
+                                                .as_ref()
+                                                .and_then(|c| c.call_timeout().ok())
+                                                .flatten();
+                                            if let Some(conn) = conn_opt.as_ref() {
+                                                let _ = conn.set_call_timeout(query_timeout);
+                                            }
+                                            let _ = sender.send(QueryProgress::ConnectionChanged {
+                                                info: Some(conn_info.clone()),
+                                            });
+                                            app::awake();
                                         }
                                         Err(err) => {
                                             let error_msg = format!("Connection failed: {}", err);
@@ -4678,6 +4704,22 @@ impl SqlEditorWidget {
                                             "DISCONNECT",
                                             "Disconnected from database",
                                         );
+                                        conn_opt = shared_conn_guard.get_connection();
+                                        if shared_conn_guard.is_connected() {
+                                            conn_name =
+                                                shared_conn_guard.get_info().name.clone();
+                                        } else {
+                                            conn_name.clear();
+                                        }
+                                        drop(shared_conn_guard);
+                                        previous_timeout = conn_opt
+                                            .as_ref()
+                                            .and_then(|c| c.call_timeout().ok())
+                                            .flatten();
+                                        let _ = sender.send(QueryProgress::ConnectionChanged {
+                                            info: None,
+                                        });
+                                        app::awake();
                                     } else {
                                         SqlEditorWidget::emit_script_message(
                                             &sender,

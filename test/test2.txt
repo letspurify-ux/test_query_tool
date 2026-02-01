@@ -1,3 +1,5 @@
+Connect system/password@localhost:1521/FREE
+
 prompt 프로시저 테스트 2
 SET SERVEROUTPUT ON SIZE UNLIMITED;
 
