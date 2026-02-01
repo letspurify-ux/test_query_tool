@@ -3599,32 +3599,54 @@ impl SqlEditorWidget {
             return;
         }
 
+        // Check if this is a CONNECT or DISCONNECT command
+        // These commands should work even when not connected
+        let sql_upper = sql.trim().to_uppercase();
+        let is_connect_command = sql_upper.starts_with("CONNECT")
+            || sql_upper.starts_with("CONN ")
+            || sql_upper.starts_with("DISCONNECT")
+            || sql_upper.starts_with("DISC");
+
         let conn_guard = lock_connection(&self.connection);
-        if !conn_guard.is_connected() {
+
+        // Only check connection status if this is not a CONNECT/DISCONNECT command
+        if !is_connect_command && !conn_guard.is_connected() {
             fltk::dialog::alert_default("Not connected to database");
             return;
         }
 
-        let conn_name = conn_guard.get_info().name.clone();
+        let conn_name = if conn_guard.is_connected() {
+            conn_guard.get_info().name.clone()
+        } else {
+            String::new()
+        };
         let auto_commit = conn_guard.auto_commit();
         let shared_connection = self.connection.clone();
         let query_timeout = Self::parse_timeout(&self.timeout_input.value());
 
-        if let Some(db_conn) = conn_guard.get_connection() {
-            let sql_text = sql.to_string();
-            let sender = self.progress_sender.clone();
-            let conn = db_conn.clone();
-            let session = conn_guard.session_state();
-            let shared_connection = shared_connection.clone();
-            let query_running = self.query_running.clone();
-            let script_mode = script_mode;
+        let db_conn_opt = conn_guard.get_connection();
+        let session = conn_guard.session_state();
 
-            *query_running.borrow_mut() = true;
+        // For normal commands (not CONNECT/DISCONNECT), we need a connection
+        if !is_connect_command && db_conn_opt.is_none() {
+            drop(conn_guard);
+            fltk::dialog::alert_default("Not connected to database");
+            return;
+        }
 
-            set_cursor(Cursor::Wait);
-            app::flush();
+        drop(conn_guard); // Release the lock before spawning thread
 
-            thread::spawn(move || {
+        let sql_text = sql.to_string();
+        let sender = self.progress_sender.clone();
+        let conn_opt = db_conn_opt; // Option<Arc<Connection>>
+        let query_running = self.query_running.clone();
+
+        *query_running.borrow_mut() = true;
+
+        set_cursor(Cursor::Wait);
+        app::flush();
+
+        thread::spawn(move || {
                 struct ScriptFrame {
                     items: Vec<ScriptItem>,
                     index: usize,
@@ -3641,31 +3663,38 @@ impl SqlEditorWidget {
                 let _ = sender.send(QueryProgress::BatchStart);
                 app::awake();
 
-                let previous_timeout = conn.call_timeout().unwrap_or(None);
-                if let Err(err) = conn.set_call_timeout(query_timeout) {
-                    if script_mode {
-                        SqlEditorWidget::emit_script_lines(&sender, &session, &err.to_string());
-                        let result = QueryResult::new_error(&sql_text, &err.to_string());
-                        SqlEditorWidget::emit_script_result(
-                            &sender,
-                            &conn_name,
-                            0,
-                            result,
-                            false,
-                        );
-                    } else {
-                        SqlEditorWidget::append_spool_output(&session, &[err.to_string()]);
-                        let _ = sender.send(QueryProgress::StatementFinished {
-                            index: 0,
-                            result: QueryResult::new_error(&sql_text, &err.to_string()),
-                            connection_name: conn_name.clone(),
-                            timed_out: false,
-                        });
+                // Set timeout only if we have a connection
+                let previous_timeout = conn_opt
+                    .as_ref()
+                    .and_then(|c| c.call_timeout().ok())
+                    .flatten();
+
+                if let Some(conn) = conn_opt.as_ref() {
+                    if let Err(err) = conn.set_call_timeout(query_timeout) {
+                        if script_mode {
+                            SqlEditorWidget::emit_script_lines(&sender, &session, &err.to_string());
+                            let result = QueryResult::new_error(&sql_text, &err.to_string());
+                            SqlEditorWidget::emit_script_result(
+                                &sender,
+                                &conn_name,
+                                0,
+                                result,
+                                false,
+                            );
+                        } else {
+                            SqlEditorWidget::append_spool_output(&session, &[err.to_string()]);
+                            let _ = sender.send(QueryProgress::StatementFinished {
+                                index: 0,
+                                result: QueryResult::new_error(&sql_text, &err.to_string()),
+                                connection_name: conn_name.clone(),
+                                timed_out: false,
+                            });
+                        }
+                        let _ = sender.send(QueryProgress::BatchFinished);
+                        app::awake();
+                        let _ = conn.set_call_timeout(previous_timeout);
+                        return;
                     }
-                    let _ = sender.send(QueryProgress::BatchFinished);
-                    app::awake();
-                    let _ = conn.set_call_timeout(previous_timeout);
-                    return;
                 }
 
                 let mut result_index = 0usize;
@@ -3893,6 +3922,21 @@ impl SqlEditorWidget {
                                     size,
                                     unlimited,
                                 } => {
+                                    // This command needs a connection
+                                    let conn = match conn_opt.as_ref() {
+                                        Some(c) => c,
+                                        None => {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "SET SERVEROUTPUT",
+                                                "Error: Not connected to database",
+                                            );
+                                            command_error = true;
+                                            continue;
+                                        }
+                                    };
+
                                     let default_size = 1_000_000u32;
                                     let current_size = match session.lock() {
                                         Ok(guard) => guard.server_output.size,
@@ -4025,6 +4069,21 @@ impl SqlEditorWidget {
                                     object_type,
                                     object_name,
                                 } => {
+                                    // This command needs a connection
+                                    let conn = match conn_opt.as_ref() {
+                                        Some(c) => c,
+                                        None => {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "SHOW ERRORS",
+                                                "Error: Not connected to database",
+                                            );
+                                            command_error = true;
+                                            continue;
+                                        }
+                                    };
+
                                     let mut target = None;
                                     if object_type.is_none() {
                                         target = match session.lock() {
@@ -4114,6 +4173,21 @@ impl SqlEditorWidget {
                                     }
                                 }
                                 ToolCommand::ShowUser => {
+                                    // This command needs a connection
+                                    let conn = match conn_opt.as_ref() {
+                                        Some(c) => c,
+                                        None => {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "SHOW USER",
+                                                "Error: Not connected to database",
+                                            );
+                                            command_error = true;
+                                            continue;
+                                        }
+                                    };
+
                                     let sql = "SELECT USER FROM DUAL";
                                     let user_result: Result<String, OracleError> = (|| {
                                         let mut stmt = conn.statement(sql).build()?;
@@ -4694,6 +4768,31 @@ impl SqlEditorWidget {
                             }
                         }
                         ScriptItem::Statement(statement) => {
+                            // For statements, we need a connection
+                            let conn = match conn_opt.as_ref() {
+                                Some(c) => c,
+                                None => {
+                                    // This shouldn't happen as we checked earlier
+                                    eprintln!("Error: No connection available for statement execution");
+                                    let emitted = SqlEditorWidget::emit_non_select_result(
+                                        &sender,
+                                        &session,
+                                        &conn_name,
+                                        result_index,
+                                        &statement,
+                                        "Error: Not connected to database".to_string(),
+                                        false,
+                                        false,
+                                        script_mode,
+                                    );
+                                    if emitted {
+                                        result_index += 1;
+                                    }
+                                    stop_execution = true;
+                                    continue;
+                                }
+                            };
+
                             let trimmed = statement.trim_start_matches(';').trim();
                             if trimmed.is_empty() {
                                 continue;
@@ -5911,11 +6010,13 @@ impl SqlEditorWidget {
                     }
                 }
 
-                let _ = conn.set_call_timeout(previous_timeout);
+                // Restore previous timeout if we have a connection
+                if let Some(conn) = conn_opt.as_ref() {
+                    let _ = conn.set_call_timeout(previous_timeout);
+                }
                 let _ = sender.send(QueryProgress::BatchFinished);
                 app::awake();
             });
-        }
     }
 
     fn emit_non_select_result(
