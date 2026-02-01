@@ -129,6 +129,14 @@ pub enum ToolCommand {
         path: String,
         relative_to_caller: bool,
     },
+    Connect {
+        username: String,
+        password: String,
+        host: String,
+        port: u16,
+        service_name: String,
+    },
+    Disconnect,
     Unsupported {
         raw: String,
         message: String,
@@ -1072,6 +1080,14 @@ impl QueryExecutor {
             return Some(ToolCommand::Quit);
         }
 
+        if upper.starts_with("CONNECT") || upper.starts_with("CONN ") {
+            return Some(Self::parse_connect_command(trimmed));
+        }
+
+        if upper == "DISCONNECT" || upper == "DISC" {
+            return Some(ToolCommand::Disconnect);
+        }
+
         None
     }
 
@@ -1383,6 +1399,115 @@ impl QueryExecutor {
                 message: "WHENEVER SQLERROR supports EXIT or CONTINUE.".to_string(),
                 is_error: true,
             },
+        }
+    }
+
+    fn parse_connect_command(raw: &str) -> ToolCommand {
+        // CONNECT syntax: CONNECT user/password@host:port/service_name
+        // or: CONNECT user/password@//host:port/service_name
+        let rest = if raw.to_uppercase().starts_with("CONNECT") {
+            raw[7..].trim()
+        } else if raw.to_uppercase().starts_with("CONN") {
+            raw[4..].trim()
+        } else {
+            raw.trim()
+        };
+
+        if rest.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "CONNECT requires connection string: user/password@host:port/service_name".to_string(),
+                is_error: true,
+            };
+        }
+
+        // Split by @ to separate credentials from connection string
+        let parts: Vec<&str> = rest.splitn(2, '@').collect();
+        if parts.len() != 2 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "Invalid CONNECT syntax. Expected: user/password@host:port/service_name".to_string(),
+                is_error: true,
+            };
+        }
+
+        // Parse credentials (user/password)
+        let credentials: Vec<&str> = parts[0].splitn(2, '/').collect();
+        if credentials.len() != 2 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "Invalid credentials. Expected: user/password".to_string(),
+                is_error: true,
+            };
+        }
+
+        let username = credentials[0].trim().to_string();
+        let password = credentials[1].trim().to_string();
+
+        if username.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "Username cannot be empty".to_string(),
+                is_error: true,
+            };
+        }
+
+        // Parse connection string (//host:port/service_name or host:port/service_name)
+        let conn_str = parts[1].trim();
+        let conn_str = conn_str.strip_prefix("//").unwrap_or(conn_str);
+
+        // Split by / to separate host:port from service_name
+        let conn_parts: Vec<&str> = conn_str.splitn(2, '/').collect();
+        if conn_parts.len() != 2 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "Invalid connection string. Expected: host:port/service_name".to_string(),
+                is_error: true,
+            };
+        }
+
+        let service_name = conn_parts[1].trim().to_string();
+
+        // Parse host:port
+        let host_port: Vec<&str> = conn_parts[0].splitn(2, ':').collect();
+        let host = host_port[0].trim().to_string();
+        let port = if host_port.len() == 2 {
+            match host_port[1].trim().parse::<u16>() {
+                Ok(p) => p,
+                Err(_) => {
+                    return ToolCommand::Unsupported {
+                        raw: raw.to_string(),
+                        message: "Invalid port number".to_string(),
+                        is_error: true,
+                    };
+                }
+            }
+        } else {
+            1521 // Default Oracle port
+        };
+
+        if host.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "Host cannot be empty".to_string(),
+                is_error: true,
+            };
+        }
+
+        if service_name.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "Service name cannot be empty".to_string(),
+                is_error: true,
+            };
+        }
+
+        ToolCommand::Connect {
+            username,
+            password,
+            host,
+            port,
+            service_name,
         }
     }
 
