@@ -2128,7 +2128,6 @@ impl QueryExecutor {
 
         let args_list = Self::split_call_args(&args);
         let mut has_named = false;
-        let mut has_positional = false;
 
         for arg in args_list {
             if arg.trim().is_empty() {
@@ -2137,12 +2136,10 @@ impl QueryExecutor {
             if Self::arg_has_named_arrow(&arg) {
                 has_named = true;
             } else {
-                has_positional = true;
+                if has_named {
+                    return Err("Named and positional parameters cannot be mixed.".to_string());
+                }
             }
-        }
-
-        if has_named && has_positional {
-            return Err("Named and positional parameters cannot be mixed.".to_string());
         }
 
         Ok(())

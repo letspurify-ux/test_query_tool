@@ -354,8 +354,11 @@ impl MainWindow {
                         let schema_sender = schema_sender_for_progress.clone();
                         let connection = s.connection.clone();
                         thread::spawn(move || {
-                            let conn_guard = lock_connection(&connection);
-                            if let Some(conn) = conn_guard.get_connection() {
+                            let conn = {
+                                let conn_guard = lock_connection(&connection);
+                                conn_guard.get_connection()
+                            };
+                            if let Some(conn) = conn {
                                 let mut data = IntellisenseData::new();
                                 let mut highlight_data = HighlightData::new();
                                 if let Ok(tables) = ObjectBrowser::get_tables(conn.as_ref()) {
@@ -467,20 +470,27 @@ impl MainWindow {
                                     let schema_sender = schema_sender.clone();
                                     let connection = s.connection.clone();
                                     thread::spawn(move || {
-                                        let conn_guard = lock_connection(&connection);
-                                        if let Some(conn) = conn_guard.get_connection() {
+                                        let conn = {
+                                            let conn_guard = lock_connection(&connection);
+                                            conn_guard.get_connection()
+                                        };
+                                        if let Some(conn) = conn {
                                             let mut data = IntellisenseData::new();
                                             let mut highlight_data = HighlightData::new();
-                                            if let Ok(tables) = ObjectBrowser::get_tables(conn.as_ref()) {
+                                            if let Ok(tables) =
+                                                ObjectBrowser::get_tables(conn.as_ref())
+                                            {
                                                 highlight_data.tables = tables.clone();
                                                 data.tables = tables;
                                             }
-                                            if let Ok(views) = ObjectBrowser::get_views(conn.as_ref()) {
+                                            if let Ok(views) = ObjectBrowser::get_views(conn.as_ref())
+                                            {
                                                 highlight_data.views = views.clone();
                                                 data.views = views;
                                             }
                                             data.rebuild_indices();
-                                            let _ = schema_sender.send(SchemaUpdate { data, highlight_data });
+                                            let _ =
+                                                schema_sender.send(SchemaUpdate { data, highlight_data });
                                             app::awake();
                                         }
                                     });

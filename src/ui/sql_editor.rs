@@ -1755,16 +1755,18 @@ impl SqlEditorWidget {
         let connection = self.connection.clone();
         let sender = self.ui_action_sender.clone();
         thread::spawn(move || {
-            let result = {
+            let conn = {
                 let conn_guard = lock_connection(&connection);
                 if !conn_guard.is_connected() {
-                    Err("Not connected to database".to_string())
-                } else if let Some(db_conn) = conn_guard.get_connection() {
-                    QueryExecutor::get_explain_plan(db_conn.as_ref(), &sql)
-                        .map_err(|err| err.to_string())
+                    None
                 } else {
-                    Err("Not connected to database".to_string())
+                    conn_guard.get_connection()
                 }
+            };
+            let result = if let Some(db_conn) = conn {
+                QueryExecutor::get_explain_plan(db_conn.as_ref(), &sql).map_err(|err| err.to_string())
+            } else {
+                Err("Not connected to database".to_string())
             };
 
             let _ = sender.send(UiActionResult::ExplainPlan(result));
@@ -1839,15 +1841,18 @@ impl SqlEditorWidget {
         let connection = self.connection.clone();
         let sender = self.ui_action_sender.clone();
         thread::spawn(move || {
-            let result = {
+            let conn = {
                 let conn_guard = lock_connection(&connection);
                 if !conn_guard.is_connected() {
-                    Err("Not connected to database".to_string())
-                } else if let Some(db_conn) = conn_guard.get_connection() {
-                    db_conn.commit().map_err(|err| err.to_string())
+                    None
                 } else {
-                    Err("Not connected to database".to_string())
+                    conn_guard.get_connection()
                 }
+            };
+            let result = if let Some(db_conn) = conn {
+                db_conn.commit().map_err(|err| err.to_string())
+            } else {
+                Err("Not connected to database".to_string())
             };
 
             let _ = sender.send(UiActionResult::Commit(result));
@@ -1859,15 +1864,18 @@ impl SqlEditorWidget {
         let connection = self.connection.clone();
         let sender = self.ui_action_sender.clone();
         thread::spawn(move || {
-            let result = {
+            let conn = {
                 let conn_guard = lock_connection(&connection);
                 if !conn_guard.is_connected() {
-                    Err("Not connected to database".to_string())
-                } else if let Some(db_conn) = conn_guard.get_connection() {
-                    db_conn.rollback().map_err(|err| err.to_string())
+                    None
                 } else {
-                    Err("Not connected to database".to_string())
+                    conn_guard.get_connection()
                 }
+            };
+            let result = if let Some(db_conn) = conn {
+                db_conn.rollback().map_err(|err| err.to_string())
+            } else {
+                Err("Not connected to database".to_string())
             };
 
             let _ = sender.send(UiActionResult::Rollback(result));
@@ -1884,15 +1892,18 @@ impl SqlEditorWidget {
         let connection = self.connection.clone();
         let sender = self.ui_action_sender.clone();
         thread::spawn(move || {
-            let result = {
+            let conn = {
                 let conn_guard = lock_connection(&connection);
                 if !conn_guard.is_connected() {
-                    Err("Not connected to database".to_string())
-                } else if let Some(db_conn) = conn_guard.get_connection() {
-                    db_conn.break_execution().map_err(|err| err.to_string())
+                    None
                 } else {
-                    Err("Not connected to database".to_string())
+                    conn_guard.get_connection()
                 }
+            };
+            let result = if let Some(db_conn) = conn {
+                db_conn.break_execution().map_err(|err| err.to_string())
+            } else {
+                Err("Not connected to database".to_string())
             };
 
             let _ = sender.send(UiActionResult::Cancel(result));
@@ -2045,16 +2056,19 @@ impl SqlEditorWidget {
         let connection = self.connection.clone();
         let sender = self.ui_action_sender.clone();
         thread::spawn(move || {
-            let result = {
+            let conn = {
                 let conn_guard = lock_connection(&connection);
                 if !conn_guard.is_connected() {
-                    Err("Not connected to database".to_string())
-                } else if let Some(db_conn) = conn_guard.get_connection() {
-                    ObjectBrowser::get_table_structure(db_conn.as_ref(), &word)
-                        .map_err(|err| err.to_string())
+                    None
                 } else {
-                    Err("Not connected to database".to_string())
+                    conn_guard.get_connection()
                 }
+            };
+            let result = if let Some(db_conn) = conn {
+                ObjectBrowser::get_table_structure(db_conn.as_ref(), &word)
+                    .map_err(|err| err.to_string())
+            } else {
+                Err("Not connected to database".to_string())
             };
 
             let _ = sender.send(UiActionResult::QuickDescribe {

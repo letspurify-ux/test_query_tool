@@ -936,25 +936,28 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let object_name = object_name.clone();
                         thread::spawn(move || {
-                            let result = {
+                            let conn = {
                                 let conn_guard = lock_connection(&connection);
                                 if !conn_guard.is_connected() {
-                                    Err("Not connected to database".to_string())
-                                } else if let Some(db_conn) = conn_guard.get_connection() {
-                                    ObjectBrowser::get_procedure_arguments(
-                                        db_conn.as_ref(),
-                                        &object_name,
-                                    )
-                                    .map(|arguments| {
-                                        ObjectBrowserWidget::build_procedure_script(
-                                            &object_name,
-                                            &arguments,
-                                        )
-                                    })
-                                    .map_err(|err| err.to_string())
+                                    None
                                 } else {
-                                    Err("Not connected to database".to_string())
+                                    conn_guard.get_connection()
                                 }
+                            };
+                            let result = if let Some(db_conn) = conn {
+                                ObjectBrowser::get_procedure_arguments(
+                                    db_conn.as_ref(),
+                                    &object_name,
+                                )
+                                .map(|arguments| {
+                                    ObjectBrowserWidget::build_procedure_script(
+                                        &object_name,
+                                        &arguments,
+                                    )
+                                })
+                                .map_err(|err| err.to_string())
+                            } else {
+                                Err("Not connected to database".to_string())
                             };
 
                             let _ = sender.send(ObjectActionResult::ProcedureScript {
@@ -977,26 +980,29 @@ impl ObjectBrowserWidget {
                         let package_name = package_name.clone();
                         let procedure_name = procedure_name.clone();
                         thread::spawn(move || {
-                            let result = {
+                            let conn = {
                                 let conn_guard = lock_connection(&connection);
                                 if !conn_guard.is_connected() {
-                                    Err("Not connected to database".to_string())
-                                } else if let Some(db_conn) = conn_guard.get_connection() {
-                                    ObjectBrowser::get_package_procedure_arguments(
-                                        db_conn.as_ref(),
-                                        &package_name,
-                                        &procedure_name,
-                                    )
-                                    .map(|arguments| {
-                                        ObjectBrowserWidget::build_procedure_script(
-                                            &qualified_name,
-                                            &arguments,
-                                        )
-                                    })
-                                    .map_err(|err| err.to_string())
+                                    None
                                 } else {
-                                    Err("Not connected to database".to_string())
+                                    conn_guard.get_connection()
                                 }
+                            };
+                            let result = if let Some(db_conn) = conn {
+                                ObjectBrowser::get_package_procedure_arguments(
+                                    db_conn.as_ref(),
+                                    &package_name,
+                                    &procedure_name,
+                                )
+                                .map(|arguments| {
+                                    ObjectBrowserWidget::build_procedure_script(
+                                        &qualified_name,
+                                        &arguments,
+                                    )
+                                })
+                                .map_err(|err| err.to_string())
+                            } else {
+                                Err("Not connected to database".to_string())
                             };
 
                             let _ = sender.send(ObjectActionResult::ProcedureScript {
@@ -1011,19 +1017,22 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let table_name = object_name.clone();
                         thread::spawn(move || {
-                            let result = {
+                            let conn = {
                                 let conn_guard = lock_connection(&connection);
                                 if !conn_guard.is_connected() {
-                                    Err("Not connected to database".to_string())
-                                } else if let Some(db_conn) = conn_guard.get_connection() {
-                                    ObjectBrowser::get_table_structure(
-                                        db_conn.as_ref(),
-                                        &table_name,
-                                    )
-                                    .map_err(|err| err.to_string())
+                                    None
                                 } else {
-                                    Err("Not connected to database".to_string())
+                                    conn_guard.get_connection()
                                 }
+                            };
+                            let result = if let Some(db_conn) = conn {
+                                ObjectBrowser::get_table_structure(
+                                    db_conn.as_ref(),
+                                    &table_name,
+                                )
+                                .map_err(|err| err.to_string())
+                            } else {
+                                Err("Not connected to database".to_string())
                             };
                             let _ = sender.send(ObjectActionResult::TableStructure {
                                 table_name,
@@ -1037,19 +1046,22 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let table_name = object_name.clone();
                         thread::spawn(move || {
-                            let result = {
+                            let conn = {
                                 let conn_guard = lock_connection(&connection);
                                 if !conn_guard.is_connected() {
-                                    Err("Not connected to database".to_string())
-                                } else if let Some(db_conn) = conn_guard.get_connection() {
-                                    ObjectBrowser::get_table_indexes(
-                                        db_conn.as_ref(),
-                                        &table_name,
-                                    )
-                                    .map_err(|err| err.to_string())
+                                    None
                                 } else {
-                                    Err("Not connected to database".to_string())
+                                    conn_guard.get_connection()
                                 }
+                            };
+                            let result = if let Some(db_conn) = conn {
+                                ObjectBrowser::get_table_indexes(
+                                    db_conn.as_ref(),
+                                    &table_name,
+                                )
+                                .map_err(|err| err.to_string())
+                            } else {
+                                Err("Not connected to database".to_string())
                             };
                             let _ = sender.send(ObjectActionResult::TableIndexes {
                                 table_name,
@@ -1063,19 +1075,22 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let table_name = object_name.clone();
                         thread::spawn(move || {
-                            let result = {
+                            let conn = {
                                 let conn_guard = lock_connection(&connection);
                                 if !conn_guard.is_connected() {
-                                    Err("Not connected to database".to_string())
-                                } else if let Some(db_conn) = conn_guard.get_connection() {
-                                    ObjectBrowser::get_table_constraints(
-                                        db_conn.as_ref(),
-                                        &table_name,
-                                    )
-                                    .map_err(|err| err.to_string())
+                                    None
                                 } else {
-                                    Err("Not connected to database".to_string())
+                                    conn_guard.get_connection()
                                 }
+                            };
+                            let result = if let Some(db_conn) = conn {
+                                ObjectBrowser::get_table_constraints(
+                                    db_conn.as_ref(),
+                                    &table_name,
+                                )
+                                .map_err(|err| err.to_string())
+                            } else {
+                                Err("Not connected to database".to_string())
                             };
                             let _ = sender.send(ObjectActionResult::TableConstraints {
                                 table_name,
@@ -1089,19 +1104,22 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let sequence_name = object_name.clone();
                         thread::spawn(move || {
-                            let result = {
+                            let conn = {
                                 let conn_guard = lock_connection(&connection);
                                 if !conn_guard.is_connected() {
-                                    Err("Not connected to database".to_string())
-                                } else if let Some(db_conn) = conn_guard.get_connection() {
-                                    ObjectBrowser::get_sequence_info(
-                                        db_conn.as_ref(),
-                                        &sequence_name,
-                                    )
-                                    .map_err(|err| err.to_string())
+                                    None
                                 } else {
-                                    Err("Not connected to database".to_string())
+                                    conn_guard.get_connection()
                                 }
+                            };
+                            let result = if let Some(db_conn) = conn {
+                                ObjectBrowser::get_sequence_info(
+                                    db_conn.as_ref(),
+                                    &sequence_name,
+                                )
+                                .map_err(|err| err.to_string())
+                            } else {
+                                Err("Not connected to database".to_string())
                             };
                             let _ = sender.send(ObjectActionResult::SequenceInfo(result));
                             app::awake();
@@ -1128,38 +1146,41 @@ impl ObjectBrowserWidget {
                             let object_type = obj_type.to_string();
                             let object_name = object_name.clone();
                             thread::spawn(move || {
-                                let result = {
+                                let conn = {
                                     let conn_guard = lock_connection(&connection);
                                     if !conn_guard.is_connected() {
-                                        Err("Not connected to database".to_string())
-                                    } else if let Some(db_conn) = conn_guard.get_connection() {
-                                        match object_type.as_str() {
-                                            "TABLE" => ObjectBrowser::get_table_ddl(
-                                                db_conn.as_ref(),
-                                                &object_name,
-                                            ),
-                                            "VIEW" => ObjectBrowser::get_view_ddl(
-                                                db_conn.as_ref(),
-                                                &object_name,
-                                            ),
-                                            "PROCEDURE" => ObjectBrowser::get_procedure_ddl(
-                                                db_conn.as_ref(),
-                                                &object_name,
-                                            ),
-                                            "FUNCTION" => ObjectBrowser::get_function_ddl(
-                                                db_conn.as_ref(),
-                                                &object_name,
-                                            ),
-                                            "SEQUENCE" => ObjectBrowser::get_sequence_ddl(
-                                                db_conn.as_ref(),
-                                                &object_name,
-                                            ),
-                                            _ => return,
-                                        }
-                                        .map_err(|err| err.to_string())
+                                        None
                                     } else {
-                                        Err("Not connected to database".to_string())
+                                        conn_guard.get_connection()
                                     }
+                                };
+                                let result = if let Some(db_conn) = conn {
+                                    match object_type.as_str() {
+                                        "TABLE" => ObjectBrowser::get_table_ddl(
+                                            db_conn.as_ref(),
+                                            &object_name,
+                                        ),
+                                        "VIEW" => ObjectBrowser::get_view_ddl(
+                                            db_conn.as_ref(),
+                                            &object_name,
+                                        ),
+                                        "PROCEDURE" => ObjectBrowser::get_procedure_ddl(
+                                            db_conn.as_ref(),
+                                            &object_name,
+                                        ),
+                                        "FUNCTION" => ObjectBrowser::get_function_ddl(
+                                            db_conn.as_ref(),
+                                            &object_name,
+                                        ),
+                                        "SEQUENCE" => ObjectBrowser::get_sequence_ddl(
+                                            db_conn.as_ref(),
+                                            &object_name,
+                                        ),
+                                        _ => return,
+                                    }
+                                    .map_err(|err| err.to_string())
+                                } else {
+                                    Err("Not connected to database".to_string())
                                 };
                                 let _ = sender.send(ObjectActionResult::Ddl(result));
                                 app::awake();
