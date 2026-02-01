@@ -2436,6 +2436,14 @@ impl SqlEditorWidget {
                     format!("@{}", path)
                 }
             }
+            ToolCommand::Connect {
+                username,
+                host,
+                port,
+                service_name,
+                ..
+            } => format!("CONNECT {}@{}:{}/{}", username, host, port, service_name),
+            ToolCommand::Disconnect => "DISCONNECT".to_string(),
             ToolCommand::Unsupported { raw, .. } => raw.clone(),
         }
     }
@@ -4546,6 +4554,64 @@ impl SqlEditorWidget {
                                         "Execution stopped.",
                                     );
                                     stop_execution = true;
+                                }
+                                ToolCommand::Connect {
+                                    username,
+                                    password,
+                                    host,
+                                    port,
+                                    service_name,
+                                } => {
+                                    use crate::db::ConnectionInfo;
+                                    let conn_info = ConnectionInfo {
+                                        name: format!("{}@{}", username, host),
+                                        username,
+                                        password,
+                                        host,
+                                        port,
+                                        service_name,
+                                    };
+
+                                    let mut shared_conn_guard = lock_connection(&shared_connection);
+                                    match shared_conn_guard.connect(conn_info.clone()) {
+                                        Ok(_) => {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "CONNECT",
+                                                &format!("Connected to {}", conn_info.display_string()),
+                                            );
+                                        }
+                                        Err(err) => {
+                                            let error_msg = format!("Connection failed: {}", err);
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "CONNECT",
+                                                &error_msg,
+                                            );
+                                            command_error = true;
+                                        }
+                                    }
+                                }
+                                ToolCommand::Disconnect => {
+                                    let mut shared_conn_guard = lock_connection(&shared_connection);
+                                    if shared_conn_guard.is_connected() {
+                                        shared_conn_guard.disconnect();
+                                        SqlEditorWidget::emit_script_message(
+                                            &sender,
+                                            &session,
+                                            "DISCONNECT",
+                                            "Disconnected from database",
+                                        );
+                                    } else {
+                                        SqlEditorWidget::emit_script_message(
+                                            &sender,
+                                            &session,
+                                            "DISCONNECT",
+                                            "Not connected to any database",
+                                        );
+                                    }
                                 }
                                 ToolCommand::RunScript {
                                     path,
