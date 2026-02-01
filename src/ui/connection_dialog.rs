@@ -11,6 +11,7 @@ use fltk::{
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc;
+use std::thread;
 
 use crate::db::{ConnectionInfo, DatabaseConnection};
 use crate::utils::AppConfig;
@@ -23,6 +24,7 @@ impl ConnectionDialog {
         enum DialogMessage {
             DeleteSelected,
             Test(ConnectionInfo),
+            TestResult(Result<(), String>),
             Connect(ConnectionInfo, bool),
             Cancel,
         }
@@ -353,14 +355,25 @@ impl ConnectionDialog {
                             );
                         }
                     }
-                    DialogMessage::Test(info) => match DatabaseConnection::test_connection(&info) {
-                        Ok(_) => {
-                            fltk::dialog::message_default("Connection successful!");
+                    DialogMessage::Test(info) => {
+                        let sender = sender.clone();
+                        thread::spawn(move || {
+                            let result = DatabaseConnection::test_connection(&info)
+                                .map_err(|e| e.to_string());
+                            let _ = sender.send(DialogMessage::TestResult(result));
+                            app::awake();
+                        });
+                    }
+                    DialogMessage::TestResult(result) => {
+                        match result {
+                            Ok(_) => {
+                                fltk::dialog::message_default("Connection successful!");
+                            }
+                            Err(e) => {
+                                fltk::dialog::alert_default(&format!("Connection failed: {}", e));
+                            }
                         }
-                        Err(e) => {
-                            fltk::dialog::alert_default(&format!("Connection failed: {}", e));
-                        }
-                    },
+                    }
                     DialogMessage::Connect(info, save_connection) => {
                         if save_connection {
                             let mut cfg = config.borrow_mut();
