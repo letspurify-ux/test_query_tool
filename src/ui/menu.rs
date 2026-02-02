@@ -317,18 +317,6 @@ impl MenuBarBuilder {
             forward_menu_callback,
         );
         menu.add(
-            "&Tools/&Feature Catalog...\t",
-            Shortcut::None,
-            MenuFlag::Normal,
-            forward_menu_callback,
-        );
-        menu.add(
-            "&Tools/",
-            Shortcut::None,
-            MenuFlag::MenuDivider,
-            forward_menu_callback,
-        );
-        menu.add(
             "&Tools/&Auto-Commit\t",
             Shortcut::None,
             MenuFlag::Toggle,
