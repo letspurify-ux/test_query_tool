@@ -255,6 +255,26 @@ impl MainWindow {
                     editor.set_insert_position(insert_pos + text.len() as i32);
                     s.sql_editor.refresh_highlighting();
                 }
+                SqlAction::Append(text) => {
+                    let mut editor = s.sql_editor.get_editor();
+                    let buffer_length = s.sql_buffer.length();
+
+                    // Add newline prefix if buffer is not empty
+                    let text_to_insert = if buffer_length > 0 {
+                        format!("\n{}", text)
+                    } else {
+                        text
+                    };
+
+                    // Insert at the end of the buffer
+                    s.sql_buffer.insert(buffer_length, &text_to_insert);
+
+                    // Move cursor to the end
+                    let new_length = s.sql_buffer.length();
+                    editor.set_insert_position(new_length);
+
+                    s.sql_editor.refresh_highlighting();
+                }
                 SqlAction::Execute(sql) => {
                     s.sql_editor.execute_sql_text(&sql);
                 }

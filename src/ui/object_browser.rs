@@ -22,6 +22,7 @@ use crate::ui::{sql_editor::SqlEditorWidget, theme};
 pub enum SqlAction {
     Set(String),
     Insert(String),
+    Append(String),
     Execute(String),
 }
 
@@ -391,7 +392,7 @@ impl ObjectBrowserWidget {
                                 };
                                 let cb_opt = sql_callback.borrow_mut().take();
                                 if let Some(mut cb) = cb_opt {
-                                    cb(SqlAction::Set(ddl));
+                                    cb(SqlAction::Append(ddl));
                                     *sql_callback.borrow_mut() = Some(cb);
                                 }
                             }
@@ -420,7 +421,7 @@ impl ObjectBrowserWidget {
                             };
                             let cb_opt = sql_callback.borrow_mut().take();
                             if let Some(mut cb) = cb_opt {
-                                cb(SqlAction::Insert(sql));
+                                cb(SqlAction::Append(sql));
                                 *sql_callback.borrow_mut() = Some(cb);
                             }
                         }
