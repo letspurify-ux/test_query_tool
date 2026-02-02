@@ -175,10 +175,15 @@ impl MainWindow {
         let mut sql_group_for_resize = sql_group.clone();
         let mut bottom_flex_for_resize = bottom_flex.clone();
         right_tile_with_handle.handle(move |t, ev| {
-            if ev == Event::Resize {
+            if matches!(ev, Event::Resize | Event::Drag) {
                 let x = t.x();
                 let w = t.w();
-                sql_group_for_resize.resize(x, sql_group_for_resize.y(), w, sql_group_for_resize.h());
+                sql_group_for_resize.resize(
+                    x,
+                    sql_group_for_resize.y(),
+                    w,
+                    sql_group_for_resize.h(),
+                );
                 bottom_flex_for_resize.resize(
                     x,
                     bottom_flex_for_resize.y(),
@@ -187,6 +192,8 @@ impl MainWindow {
                 );
                 sql_group_for_resize.layout();
                 bottom_flex_for_resize.layout();
+                sql_group_for_resize.redraw();
+                bottom_flex_for_resize.redraw();
             }
             false
         });
