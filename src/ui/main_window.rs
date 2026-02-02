@@ -4,7 +4,7 @@ use fltk::{
     dialog::{FileDialog, FileDialogType},
     enums::FrameType,
     frame::Frame,
-    group::{Flex, FlexType},
+    group::{Flex, FlexType, Tile},
     menu::MenuBar,
     prelude::*,
     text::TextBuffer,
@@ -94,14 +94,23 @@ impl MainWindow {
         let menu_bar = MenuBarBuilder::build();
         main_flex.fixed(&menu_bar, 30);
 
-        let mut content_flex = Flex::default();
-        content_flex.set_type(FlexType::Row);
+        // Use Tile for resizable split between object browser and right pane
+        // Tile allows users to drag the border between children to resize them
+        let tile_y = 30; // After menu bar
+        let tile_h = 800 - 30 - 25; // Window height - menu - status bar
+        let content_tile = Tile::default()
+            .with_pos(0, tile_y)
+            .with_size(1200, tile_h);
 
-        let object_browser = ObjectBrowserWidget::new(0, 0, 250, 600, connection.clone());
-        let obj_browser_widget = object_browser.get_widget();
-        content_flex.fixed(&obj_browser_widget, 250);
+        // Object browser on the left (initial width 250px)
+        // Position at (0, tile_y) with width 250
+        let object_browser = ObjectBrowserWidget::new(0, tile_y, 250, tile_h, connection.clone());
 
-        let mut right_flex = Flex::default();
+        // Right pane contains SQL editor and results
+        // Position at x=250 (right edge of object browser), takes remaining width
+        let mut right_flex = Flex::default()
+            .with_pos(250, tile_y)
+            .with_size(1200 - 250, tile_h);
         right_flex.set_type(FlexType::Column);
 
         let sql_editor = SqlEditorWidget::new(connection.clone());
@@ -132,9 +141,10 @@ impl MainWindow {
         right_flex.resizable(&result_widget);
         right_flex.end();
 
-        content_flex.resizable(&right_flex);
-        content_flex.end();
-        main_flex.resizable(&content_flex);
+        // Make right_flex the resizable child of tile - it will absorb size changes
+        content_tile.resizable(&right_flex);
+        content_tile.end();
+        main_flex.resizable(&content_tile);
 
         let mut status_bar = Frame::default().with_label("Not connected | Ctrl+Space for autocomplete");
         status_bar.set_frame(FrameType::FlatBox);
