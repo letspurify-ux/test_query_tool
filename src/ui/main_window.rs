@@ -325,6 +325,7 @@ impl MainWindow {
                     s.result_tabs
                         .start_statement(tab_index, &format!("Result {}", tab_index + 1));
                     s.fetch_row_counts.remove(&index);
+                    s.status_bar.set_label("Executing query...");
                 }
                 QueryProgress::SelectStart { index, columns } => {
                     let tab_index = s.result_tab_offset + index;
