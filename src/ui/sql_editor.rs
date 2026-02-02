@@ -5745,7 +5745,11 @@ impl SqlEditorWidget {
                                             } else {
                                                 err.to_string()
                                             };
-                                            QueryResult::new_error(&sql_text, &message)
+                                            let mut error_result =
+                                                QueryResult::new_error(&sql_text, &message);
+                                            // Preserve is_select flag so existing streamed data is kept
+                                            error_result.is_select = true;
+                                            error_result
                                         }
                                     };
 
