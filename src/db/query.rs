@@ -3651,13 +3651,13 @@ pub struct ObjectBrowser;
 #[derive(Debug, Clone)]
 pub struct SequenceInfo {
     pub name: String,
-    pub min_value: i64,
-    pub max_value: i64,
-    pub increment_by: i64,
+    pub min_value: String,
+    pub max_value: String,
+    pub increment_by: String,
     pub cycle_flag: String,
     pub order_flag: String,
-    pub cache_size: i64,
-    pub last_number: i64,
+    pub cache_size: String,
+    pub last_number: String,
 }
 
 impl ObjectBrowser {
@@ -3690,13 +3690,13 @@ impl ObjectBrowser {
         let sql = r#"
             SELECT
                 sequence_name,
-                min_value,
-                max_value,
-                increment_by,
+                TO_CHAR(min_value),
+                TO_CHAR(max_value),
+                TO_CHAR(increment_by),
                 cycle_flag,
                 order_flag,
-                cache_size,
-                last_number
+                TO_CHAR(cache_size),
+                TO_CHAR(last_number)
             FROM user_sequences
             WHERE sequence_name = :1
         "#;
@@ -3716,13 +3716,13 @@ impl ObjectBrowser {
         };
 
         let name: String = row.get(0)?;
-        let min_value: i64 = row.get(1)?;
-        let max_value: i64 = row.get(2)?;
-        let increment_by: i64 = row.get(3)?;
+        let min_value: String = row.get(1)?;
+        let max_value: String = row.get(2)?;
+        let increment_by: String = row.get(3)?;
         let cycle_flag: String = row.get(4)?;
         let order_flag: String = row.get(5)?;
-        let cache_size: i64 = row.get(6)?;
-        let last_number: i64 = row.get(7)?;
+        let cache_size: String = row.get(6)?;
+        let last_number: String = row.get(7)?;
 
         Ok(SequenceInfo {
             name,
