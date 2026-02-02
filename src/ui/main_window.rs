@@ -118,6 +118,16 @@ impl MainWindow {
         let mut sql_group = sql_editor.get_group().clone();
         sql_group.resize(250, tile_y, right_w, sql_h);
 
+        // Add resize handler to sql_group so it updates layout when Tile resizes it
+        let mut sql_group_with_handle = sql_group.clone();
+        sql_group_with_handle.handle(move |g, ev| {
+            if ev == Event::Resize {
+                g.layout();
+                g.redraw();
+            }
+            false
+        });
+
         // Bottom pane contains result toolbar and result tabs
         let bottom_y = tile_y + sql_h;
         let bottom_h = tile_h - sql_h;
@@ -150,70 +160,33 @@ impl MainWindow {
         bottom_flex.resizable(&result_widget);
         bottom_flex.end();
 
-        // Make bottom_flex the resizable child of right_tile
-        right_tile.resizable(&bottom_flex);
-
-        // Add handle to update layouts when tile is resized by dragging
-        let mut sql_group_for_resize = sql_group.clone();
-        let mut bottom_flex_for_resize = bottom_flex.clone();
-        let mut right_tile_with_handle = right_tile.clone();
-        right_tile_with_handle.handle(move |tile, ev| {
-            if ev == Event::Drag || ev == Event::Released {
-                // Update the layouts of child Flex containers
-                sql_group_for_resize.resize(
-                    sql_group_for_resize.x(),
-                    sql_group_for_resize.y(),
-                    tile.w(),
-                    sql_group_for_resize.h(),
-                );
-                sql_group_for_resize.layout();
-                bottom_flex_for_resize.resize(
-                    bottom_flex_for_resize.x(),
-                    bottom_flex_for_resize.y(),
-                    tile.w(),
-                    bottom_flex_for_resize.h(),
-                );
-                bottom_flex_for_resize.layout();
-                app::redraw();
+        // Add resize handler to bottom_flex so it updates layout when Tile resizes it
+        let mut bottom_flex_with_handle = bottom_flex.clone();
+        bottom_flex_with_handle.handle(move |g, ev| {
+            if ev == Event::Resize {
+                g.layout();
+                g.redraw();
             }
             false
         });
+
+        // Make bottom_flex the resizable child of right_tile
+        right_tile.resizable(&bottom_flex);
         right_tile.end();
 
         // Make right_tile the resizable child of content_tile
         content_tile.resizable(&right_tile);
 
-        // Add handle for content_tile to update layouts when horizontal split is dragged
-        let obj_browser_widget = object_browser.get_widget();
-        let right_tile_for_resize = right_tile.clone();
-        let mut sql_group_for_h_resize = sql_group.clone();
-        let mut bottom_flex_for_h_resize = bottom_flex.clone();
-        let mut content_tile_with_handle = content_tile.clone();
-        content_tile_with_handle.handle(move |_tile, ev| {
-            if ev == Event::Drag || ev == Event::Released {
-                // Update object browser layout
-                obj_browser_widget.layout();
-
-                // Update right tile children with new width
-                let new_right_w = right_tile_for_resize.w();
-                sql_group_for_h_resize.resize(
-                    sql_group_for_h_resize.x(),
-                    sql_group_for_h_resize.y(),
-                    new_right_w,
-                    sql_group_for_h_resize.h(),
-                );
-                sql_group_for_h_resize.layout();
-                bottom_flex_for_h_resize.resize(
-                    bottom_flex_for_h_resize.x(),
-                    bottom_flex_for_h_resize.y(),
-                    new_right_w,
-                    bottom_flex_for_h_resize.h(),
-                );
-                bottom_flex_for_h_resize.layout();
-                app::redraw();
+        // Add resize handler to object browser widget
+        let mut obj_browser_widget = object_browser.get_widget();
+        obj_browser_widget.handle(move |g, ev| {
+            if ev == Event::Resize {
+                g.layout();
+                g.redraw();
             }
             false
         });
+
         content_tile.end();
         main_flex.resizable(&content_tile);
 
