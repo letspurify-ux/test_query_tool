@@ -4,7 +4,7 @@ use fltk::{
     dialog::{FileDialog, FileDialogType},
     enums::FrameType,
     frame::Frame,
-    group::{Flex, FlexType},
+    group::{Flex, FlexType, Tile},
     menu::MenuBar,
     prelude::*,
     text::TextBuffer,
@@ -47,7 +47,6 @@ pub struct AppState {
     pub last_result: Rc<RefCell<Option<QueryResult>>>,
     pub popups: Rc<RefCell<Vec<Window>>>,
     pub window: Window,
-    pub right_flex: Flex,
 }
 
 pub struct MainWindow {
@@ -94,19 +93,38 @@ impl MainWindow {
         let menu_bar = MenuBarBuilder::build();
         main_flex.fixed(&menu_bar, 30);
 
-        let mut content_flex = Flex::default();
-        content_flex.set_type(FlexType::Row);
+        // Use Tile for resizable split between object browser and right pane
+        // Tile allows users to drag the border between children to resize them
+        let tile_y = 30; // After menu bar
+        let tile_h = 800 - 30 - 25; // Window height - menu - status bar
+        let content_tile = Tile::default()
+            .with_pos(0, tile_y)
+            .with_size(1200, tile_h);
 
-        let object_browser = ObjectBrowserWidget::new(0, 0, 250, 600, connection.clone());
-        let obj_browser_widget = object_browser.get_widget();
-        content_flex.fixed(&obj_browser_widget, 250);
+        // Object browser on the left (initial width 250px)
+        // Position at (0, tile_y) with width 250
+        let object_browser = ObjectBrowserWidget::new(0, tile_y, 250, tile_h, connection.clone());
 
-        let mut right_flex = Flex::default();
-        right_flex.set_type(FlexType::Column);
+        // Right pane uses Tile for resizable split between SQL editor and results
+        // Position at x=250 (right edge of object browser), takes remaining width
+        let right_w = 1200 - 250;
+        let right_tile = Tile::default()
+            .with_pos(250, tile_y)
+            .with_size(right_w, tile_h);
 
+        // SQL editor at top (initial height ~40% of right pane)
+        let sql_h = (tile_h as f32 * 0.4) as i32;
         let sql_editor = SqlEditorWidget::new(connection.clone());
-        let sql_group = sql_editor.get_group().clone();
-        right_flex.fixed(&sql_group, 250);
+        let mut sql_group = sql_editor.get_group().clone();
+        sql_group.resize(250, tile_y, right_w, sql_h);
+
+        // Bottom pane contains result toolbar and result tabs
+        let bottom_y = tile_y + sql_h;
+        let bottom_h = tile_h - sql_h;
+        let mut bottom_flex = Flex::default()
+            .with_pos(250, bottom_y)
+            .with_size(right_w, bottom_h);
+        bottom_flex.set_type(FlexType::Column);
 
         let mut result_toolbar = Flex::default();
         result_toolbar.set_type(FlexType::Row);
@@ -124,17 +142,22 @@ impl MainWindow {
         result_toolbar.fixed(&clear_tabs_btn, 110);
 
         result_toolbar.end();
-        right_flex.fixed(&result_toolbar, 34);
+        bottom_flex.fixed(&result_toolbar, 34);
 
         let result_tabs = ResultTabsWidget::new(0, 0, 900, 400);
         let result_widget = result_tabs.get_widget();
-        right_flex.add(&result_widget);
-        right_flex.resizable(&result_widget);
-        right_flex.end();
+        bottom_flex.add(&result_widget);
+        bottom_flex.resizable(&result_widget);
+        bottom_flex.end();
 
-        content_flex.resizable(&right_flex);
-        content_flex.end();
-        main_flex.resizable(&content_flex);
+        // Make bottom_flex the resizable child of right_tile
+        right_tile.resizable(&bottom_flex);
+        right_tile.end();
+
+        // Make right_tile the resizable child of content_tile
+        content_tile.resizable(&right_tile);
+        content_tile.end();
+        main_flex.resizable(&content_tile);
 
         let mut status_bar = Frame::default().with_label("Not connected | Ctrl+Space for autocomplete");
         status_bar.set_frame(FrameType::FlatBox);
@@ -171,31 +194,9 @@ impl MainWindow {
             last_result: Rc::new(RefCell::new(None)),
             popups: Rc::new(RefCell::new(Vec::new())),
             window,
-            right_flex: right_flex.clone(),
         }));
 
-        {
-            let mut state_borrow = state.borrow_mut();
-            Self::adjust_query_layout(&mut state_borrow);
-        }
-
         Self { state }
-    }
-
-    fn adjust_query_layout(state: &mut AppState) {
-        let mut right_flex = state.right_flex.clone();
-        let sql_group = state.sql_editor.get_group();
-        Self::adjust_query_layout_with(&mut right_flex, &sql_group);
-    }
-
-    fn adjust_query_layout_with(right_flex: &mut fltk::group::Flex, sql_group: &fltk::group::Flex) {
-        let right_height = right_flex.h();
-        if right_height <= 0 {
-            return;
-        }
-        let desired_height = ((right_height as f32) * 0.4).round() as i32;
-        right_flex.fixed(sql_group, desired_height);
-        right_flex.layout();
     }
 
     pub fn setup_callbacks(&mut self) {
@@ -298,14 +299,6 @@ impl MainWindow {
                     s.sql_editor.clone()
                 };
                 sql_editor.hide_intellisense_if_outside(app::event_x_root(), app::event_y_root());
-                false
-            }
-            fltk::enums::Event::Resize => {
-                if let Ok(s) = state_for_window.try_borrow() {
-                    let mut right_flex = s.right_flex.clone();
-                    let sql_group = s.sql_editor.get_group().clone();
-                    MainWindow::adjust_query_layout_with(&mut right_flex, &sql_group);
-                }
                 false
             }
             _ => false,
@@ -944,7 +937,6 @@ impl MainWindow {
         let _ = app::wait();
         {
             let mut s = state.borrow_mut();
-            MainWindow::adjust_query_layout(&mut s);
             s.window.redraw();
             s.sql_editor.focus();
         }
