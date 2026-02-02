@@ -2,7 +2,8 @@ use fltk::{
     app,
     button::Button,
     dialog::{FileDialog, FileDialogType},
-    enums::FrameType,
+    draw::set_cursor,
+    enums::{Cursor, FrameType},
     frame::Frame,
     group::{Flex, FlexType},
     menu::MenuBar,
@@ -10,7 +11,7 @@ use fltk::{
     text::TextBuffer,
     window::Window,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -48,6 +49,7 @@ pub struct AppState {
     pub popups: Rc<RefCell<Vec<Window>>>,
     pub window: Window,
     pub right_flex: Flex,
+    pub query_split_adjusted: Rc<Cell<bool>>,
 }
 
 pub struct MainWindow {
@@ -76,6 +78,13 @@ enum FileActionResult {
     },
 }
 
+const MAIN_SPLITTER_WIDTH: i32 = 6;
+const QUERY_SPLITTER_HEIGHT: i32 = 6;
+const RESULT_TOOLBAR_HEIGHT: i32 = 34;
+const MIN_QUERY_HEIGHT: i32 = 160;
+const MIN_RESULTS_BODY_HEIGHT: i32 = 160;
+const MIN_RESULTS_HEIGHT: i32 = RESULT_TOOLBAR_HEIGHT + MIN_RESULTS_BODY_HEIGHT;
+
 impl MainWindow {
     pub fn new() -> Self {
         let connection = create_shared_connection();
@@ -96,10 +105,63 @@ impl MainWindow {
 
         let mut content_flex = Flex::default();
         content_flex.set_type(FlexType::Row);
+        content_flex.set_spacing(0);
 
         let object_browser = ObjectBrowserWidget::new(0, 0, 250, 600, connection.clone());
         let obj_browser_widget = object_browser.get_widget();
         content_flex.fixed(&obj_browser_widget, 250);
+
+        let splitter_width = MAIN_SPLITTER_WIDTH;
+        let mut split_bar = Frame::default().with_size(splitter_width, 0);
+        split_bar.set_frame(FrameType::FlatBox);
+        split_bar.set_color(theme::border());
+        split_bar.set_tooltip("Drag to resize panels");
+
+        let drag_state = Rc::new(RefCell::new(None::<(i32, i32)>));
+        let mut content_flex_for_split = content_flex.clone();
+        let obj_browser_for_split = obj_browser_widget.clone();
+        let drag_state_for_split = drag_state.clone();
+        split_bar.handle(move |_bar, ev| match ev {
+            fltk::enums::Event::Enter | fltk::enums::Event::Move => {
+                set_cursor(Cursor::WE);
+                true
+            }
+            fltk::enums::Event::Push => {
+                *drag_state_for_split.borrow_mut() =
+                    Some((app::event_x(), obj_browser_for_split.w()));
+                true
+            }
+            fltk::enums::Event::Drag => {
+                if let Some((start_x, start_w)) = *drag_state_for_split.borrow() {
+                    let delta = app::event_x() - start_x;
+                    let min_left = 180;
+                    let min_right = 320;
+                    let max_left =
+                        (content_flex_for_split.w() - splitter_width - min_right).max(min_left);
+                    let mut new_width = start_w + delta;
+                    if new_width < min_left {
+                        new_width = min_left;
+                    } else if new_width > max_left {
+                        new_width = max_left;
+                    }
+                    content_flex_for_split.fixed(&obj_browser_for_split, new_width);
+                    content_flex_for_split.layout();
+                    app::redraw();
+                }
+                true
+            }
+            fltk::enums::Event::Released => {
+                *drag_state_for_split.borrow_mut() = None;
+                set_cursor(Cursor::WE);
+                true
+            }
+            fltk::enums::Event::Leave => {
+                set_cursor(Cursor::Default);
+                true
+            }
+            _ => false,
+        });
+        content_flex.fixed(&split_bar, splitter_width);
 
         let mut right_flex = Flex::default();
         right_flex.set_type(FlexType::Column);
@@ -107,6 +169,63 @@ impl MainWindow {
         let sql_editor = SqlEditorWidget::new(connection.clone());
         let sql_group = sql_editor.get_group().clone();
         right_flex.fixed(&sql_group, 250);
+
+        let query_split_adjusted = Rc::new(Cell::new(false));
+        let mut query_split_bar = Frame::default().with_size(0, QUERY_SPLITTER_HEIGHT);
+        query_split_bar.set_frame(FrameType::FlatBox);
+        query_split_bar.set_color(theme::border());
+        query_split_bar.set_tooltip("Drag to resize query/results");
+
+        let query_drag_state = Rc::new(RefCell::new(None::<(i32, i32)>));
+        let mut right_flex_for_query_split = right_flex.clone();
+        let sql_group_for_split = sql_group.clone();
+        let query_drag_state_for_split = query_drag_state.clone();
+        let query_split_adjusted_for_split = query_split_adjusted.clone();
+        query_split_bar.handle(move |_bar, ev| match ev {
+            fltk::enums::Event::Enter | fltk::enums::Event::Move => {
+                set_cursor(Cursor::NS);
+                true
+            }
+            fltk::enums::Event::Push => {
+                *query_drag_state_for_split.borrow_mut() =
+                    Some((app::event_y(), sql_group_for_split.h()));
+                true
+            }
+            fltk::enums::Event::Drag => {
+                if let Some((start_y, start_h)) = *query_drag_state_for_split.borrow() {
+                    let total_height = right_flex_for_query_split.h();
+                    if total_height <= 0 {
+                        return true;
+                    }
+                    let delta = app::event_y() - start_y;
+                    let max_top =
+                        (total_height - QUERY_SPLITTER_HEIGHT - MIN_RESULTS_HEIGHT)
+                            .max(MIN_QUERY_HEIGHT);
+                    let mut new_height = start_h + delta;
+                    if new_height < MIN_QUERY_HEIGHT {
+                        new_height = MIN_QUERY_HEIGHT;
+                    } else if new_height > max_top {
+                        new_height = max_top;
+                    }
+                    right_flex_for_query_split.fixed(&sql_group_for_split, new_height);
+                    right_flex_for_query_split.layout();
+                    query_split_adjusted_for_split.set(true);
+                    app::redraw();
+                }
+                true
+            }
+            fltk::enums::Event::Released => {
+                *query_drag_state_for_split.borrow_mut() = None;
+                set_cursor(Cursor::NS);
+                true
+            }
+            fltk::enums::Event::Leave => {
+                set_cursor(Cursor::Default);
+                true
+            }
+            _ => false,
+        });
+        right_flex.fixed(&query_split_bar, QUERY_SPLITTER_HEIGHT);
 
         let mut result_toolbar = Flex::default();
         result_toolbar.set_type(FlexType::Row);
@@ -124,7 +243,7 @@ impl MainWindow {
         result_toolbar.fixed(&clear_tabs_btn, 110);
 
         result_toolbar.end();
-        right_flex.fixed(&result_toolbar, 34);
+        right_flex.fixed(&result_toolbar, RESULT_TOOLBAR_HEIGHT);
 
         let result_tabs = ResultTabsWidget::new(0, 0, 900, 400);
         let result_widget = result_tabs.get_widget();
@@ -172,6 +291,7 @@ impl MainWindow {
             popups: Rc::new(RefCell::new(Vec::new())),
             window,
             right_flex: right_flex.clone(),
+            query_split_adjusted: query_split_adjusted.clone(),
         }));
 
         {
@@ -185,7 +305,11 @@ impl MainWindow {
     fn adjust_query_layout(state: &mut AppState) {
         let mut right_flex = state.right_flex.clone();
         let sql_group = state.sql_editor.get_group();
-        Self::adjust_query_layout_with(&mut right_flex, &sql_group);
+        if state.query_split_adjusted.get() {
+            right_flex.layout();
+        } else {
+            Self::adjust_query_layout_with(&mut right_flex, &sql_group);
+        }
     }
 
     fn adjust_query_layout_with(right_flex: &mut fltk::group::Flex, sql_group: &fltk::group::Flex) {
@@ -193,9 +317,26 @@ impl MainWindow {
         if right_height <= 0 {
             return;
         }
-        let desired_height = ((right_height as f32) * 0.4).round() as i32;
+        let max_height =
+            (right_height - QUERY_SPLITTER_HEIGHT - MIN_RESULTS_HEIGHT).max(MIN_QUERY_HEIGHT);
+        let mut desired_height = ((right_height as f32) * 0.4).round() as i32;
+        if desired_height < MIN_QUERY_HEIGHT {
+            desired_height = MIN_QUERY_HEIGHT;
+        } else if desired_height > max_height {
+            desired_height = max_height;
+        }
         right_flex.fixed(sql_group, desired_height);
         right_flex.layout();
+    }
+
+    fn adjust_query_layout_on_resize(state: &AppState) {
+        let mut right_flex = state.right_flex.clone();
+        let sql_group = state.sql_editor.get_group();
+        if state.query_split_adjusted.get() {
+            right_flex.layout();
+        } else {
+            Self::adjust_query_layout_with(&mut right_flex, sql_group);
+        }
     }
 
     pub fn setup_callbacks(&mut self) {
@@ -302,9 +443,7 @@ impl MainWindow {
             }
             fltk::enums::Event::Resize => {
                 if let Ok(s) = state_for_window.try_borrow() {
-                    let mut right_flex = s.right_flex.clone();
-                    let sql_group = s.sql_editor.get_group().clone();
-                    MainWindow::adjust_query_layout_with(&mut right_flex, &sql_group);
+                    MainWindow::adjust_query_layout_on_resize(&s);
                 }
                 false
             }
