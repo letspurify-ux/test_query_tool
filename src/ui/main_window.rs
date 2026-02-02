@@ -273,6 +273,9 @@ impl MainWindow {
                     let new_length = s.sql_buffer.length();
                     editor.set_insert_position(new_length);
 
+                    // Scroll to the bottom to show the inserted text
+                    editor.show_insert_position();
+
                     s.sql_editor.refresh_highlighting();
                 }
                 SqlAction::Execute(sql) => {
@@ -867,12 +870,33 @@ impl MainWindow {
                             state_for_menu.borrow().sql_editor.show_intellisense();
                         }
                         "Tools/Query History..." => {
-                            let (mut buffer, popups) = {
+                            let (mut buffer, mut editor, popups) = {
                                 let s = state_for_menu.borrow_mut();
-                                (s.sql_buffer.clone(), s.popups.clone())
+                                (s.sql_buffer.clone(), s.sql_editor.get_editor(), s.popups.clone())
                             };
                             if let Some(sql) = QueryHistoryDialog::show_with_registry(popups) {
-                                buffer.set_text(&sql);
+                                // Use append logic same as SqlAction::Append
+                                let buffer_length = buffer.length();
+
+                                // Add newline prefix if buffer is not empty
+                                let text_to_insert = if buffer_length > 0 {
+                                    format!("\n{}", sql)
+                                } else {
+                                    sql
+                                };
+
+                                // Insert at the end of the buffer
+                                buffer.insert(buffer_length, &text_to_insert);
+
+                                // Move cursor to the end
+                                let new_length = buffer.length();
+                                editor.set_insert_position(new_length);
+
+                                // Scroll to the bottom to show the inserted text
+                                editor.show_insert_position();
+
+                                // Refresh highlighting
+                                state_for_menu.borrow().sql_editor.refresh_highlighting();
                             }
                         }
                         "Tools/Feature Catalog..." => {
