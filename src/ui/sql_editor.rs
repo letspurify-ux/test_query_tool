@@ -2089,27 +2089,43 @@ impl SqlEditorWidget {
     }
 
     pub fn execute_current(&self) {
-        let sql = self.buffer.text();
-        self.execute_sql(&sql, true);
+        // Check if there's a selection
+        let selected_text = self.buffer.selection_text();
+        if !selected_text.is_empty() {
+            // Execute selected text
+            self.execute_sql(&selected_text, false);
+        } else {
+            // Execute all text
+            let sql = self.buffer.text();
+            self.execute_sql(&sql, true);
+        }
     }
 
     pub fn execute_statement_at_cursor(&self) {
-        let sql = self.buffer.text();
-        let cursor_pos = self.editor.insert_position() as usize;
-        if let Some(statement) = QueryExecutor::statement_at_cursor(&sql, cursor_pos) {
-            let items = QueryExecutor::split_script_items(&statement);
-            if items.len() > 1 {
-                if let Some(ScriptItem::Statement(stmt)) = items
-                    .iter()
-                    .find(|item| matches!(item, ScriptItem::Statement(_)))
-                {
-                    self.execute_sql(stmt, false);
-                    return;
-                }
-            }
-            self.execute_sql(&statement, false);
+        // Check if there's a selection
+        let selected_text = self.buffer.selection_text();
+        if !selected_text.is_empty() {
+            // Execute selected text
+            self.execute_sql(&selected_text, false);
         } else {
-            fltk::dialog::alert_default("No SQL at cursor");
+            // Execute statement at cursor position
+            let sql = self.buffer.text();
+            let cursor_pos = self.editor.insert_position() as usize;
+            if let Some(statement) = QueryExecutor::statement_at_cursor(&sql, cursor_pos) {
+                let items = QueryExecutor::split_script_items(&statement);
+                if items.len() > 1 {
+                    if let Some(ScriptItem::Statement(stmt)) = items
+                        .iter()
+                        .find(|item| matches!(item, ScriptItem::Statement(_)))
+                    {
+                        self.execute_sql(stmt, false);
+                        return;
+                    }
+                }
+                self.execute_sql(&statement, false);
+            } else {
+                fltk::dialog::alert_default("No SQL at cursor");
+            }
         }
     }
 
