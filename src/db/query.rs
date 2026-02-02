@@ -237,6 +237,15 @@ struct SplitState {
     create_or_seen: bool,
     after_declare: bool, // Track if we're inside DECLARE block waiting for BEGIN
     after_as_is: bool,   // Track if we've seen AS/IS in CREATE PL/SQL (for BEGIN handling)
+    nested_subprogram: bool, // Track nested PROCEDURE/FUNCTION inside DECLARE block
+    /// Count of nested subprogram declarations awaiting their BEGIN.
+    /// In package bodies, nested PROCEDURE/FUNCTION IS increments this,
+    /// and BEGIN decrements it. This allows the outer procedure's BEGIN
+    /// to still be recognized even after nested procedure's END.
+    pending_subprogram_begins: usize,
+    /// True when we're creating a PACKAGE (spec or body), not PROCEDURE/FUNCTION/TRIGGER/TYPE
+    /// Packages don't have a BEGIN at the AS level, only their contained procedures do.
+    is_package: bool,
 }
 
 impl SplitState {
@@ -265,17 +274,77 @@ impl SplitState {
             self.pending_end = false;
         }
 
-        if self.after_as_is == true && matches!(upper.as_str(), "OBJECT" | "VARRAY" | "TABLE") {
+        // Handle TYPE declarations that don't create a block:
+        // TYPE ... AS OBJECT/VARRAY/TABLE - these are type definitions, not blocks
+        // TYPE ... IS REF CURSOR - this is a REF CURSOR type definition in package spec
+        if self.after_as_is == true
+            && matches!(
+                upper.as_str(),
+                "OBJECT" | "VARRAY" | "TABLE" | "REF" | "RECORD"
+            )
+        {
             self.block_depth -= 1;
             self.after_as_is = false;
         }
 
+        // Track nested PROCEDURE/FUNCTION inside DECLARE blocks (anonymous blocks)
+        // These need IS to start their body block
+        // Only track when NOT in CREATE PL/SQL (packages already handle nested subprograms via in_create_plsql)
+        if !self.in_create_plsql
+            && self.block_depth > 0
+            && matches!(upper.as_str(), "PROCEDURE" | "FUNCTION")
+        {
+            self.nested_subprogram = true;
+        }
+
         // For CREATE PL/SQL (PACKAGE, PROCEDURE, FUNCTION, TYPE, TRIGGER),
         // AS or IS starts the body/specification block
-        // For nested procedures/functions inside packages, IS also increments block_depth
-        if self.in_create_plsql && matches!(upper.as_str(), "AS" | "IS") {
+        // For nested procedures/functions inside DECLARE blocks (anonymous blocks),
+        // IS also increments block_depth
+        //
+        // IMPORTANT: Distinguish between:
+        // - "name IS" (starts a block): nested_subprogram=true, or first AS/IS in CREATE
+        // - "value IS NULL" (expression): just a comparison, don't start block
+        //
+        // We use nested_subprogram to track when IS should start a block.
+        // For the first AS/IS in CREATE, we use block_depth==0 as indicator.
+        let is_block_starting_as_is = if matches!(upper.as_str(), "AS" | "IS") {
+            if self.nested_subprogram {
+                true // Nested PROCEDURE/FUNCTION inside DECLARE
+            } else if self.in_create_plsql && self.block_depth == 0 {
+                true // First AS/IS in CREATE statement
+            } else {
+                false // Expression like "IS NULL" - not a block start
+            }
+        } else {
+            false
+        };
+
+        if is_block_starting_as_is {
             self.block_depth += 1;
-            self.after_as_is = true;
+            // Only set after_as_is for TYPE declarations (CREATE TYPE or TYPE inside package)
+            // Don't set for package AS (which doesn't need REF/OBJECT/etc handling)
+            // Don't set for procedure/function IS (which has BEGIN instead)
+            // We leave after_as_is = false for packages to avoid incorrect depth decrements
+            // when encountering REF CURSOR type declarations inside the package
+            if !self.is_package && !self.nested_subprogram {
+                // This might be CREATE TYPE ... AS/IS OBJECT/VARRAY/etc
+                self.after_as_is = true;
+            }
+            self.nested_subprogram = false; // Reset after seeing IS
+            // Track that we're waiting for a BEGIN for this subprogram
+            // Use counter to handle nested PROCEDURE/FUNCTION declarations
+            // For packages: depth=1 is the package AS level (no BEGIN expected)
+            //              depth>1 means we're inside a procedure/function that expects BEGIN
+            // For procedures/functions: any depth needs BEGIN tracking
+            let needs_begin_tracking = if self.is_package {
+                self.block_depth > 1 // Inside package, nested proc/func
+            } else {
+                true // Standalone procedure/function/trigger
+            };
+            if needs_begin_tracking {
+                self.pending_subprogram_begins += 1;
+            }
         } else if upper == "DECLARE" {
             // Standalone DECLARE block
             self.block_depth += 1;
@@ -284,16 +353,19 @@ impl SplitState {
             if self.after_declare {
                 // DECLARE ... BEGIN - same block, don't increase depth
                 self.after_declare = false;
-            } else if self.after_as_is {
+            } else if self.pending_subprogram_begins > 0 {
                 // AS/IS ... BEGIN - same block for CREATE PL/SQL, don't increase depth
-                self.after_as_is = false;
+                // Decrement the pending counter - this BEGIN matches one of the pending subprograms
+                self.pending_subprogram_begins -= 1;
             } else {
                 // Standalone BEGIN block
                 self.block_depth += 1;
             }
         } else if upper == "END" {
             self.pending_end = true;
-            self.reset_create_state();
+            // Only reset create state when we're at the outermost level (depth will become 0)
+            // Don't reset for nested procedures/functions inside packages
+            // We'll reset in resolve_pending_end_on_terminator if depth becomes 0
         }
 
         self.token.clear();
@@ -304,6 +376,10 @@ impl SplitState {
             if self.block_depth > 0 {
                 self.block_depth -= 1;
             }
+            // Reset create state when we reach depth 0 (end of CREATE statement)
+            if self.block_depth == 0 {
+                self.reset_create_state();
+            }
             self.pending_end = false;
         }
     }
@@ -312,6 +388,10 @@ impl SplitState {
         if self.pending_end {
             if self.block_depth > 0 {
                 self.block_depth -= 1;
+            }
+            // Reset create state when we reach depth 0 (end of CREATE statement)
+            if self.block_depth == 0 {
+                self.reset_create_state();
             }
             self.pending_end = false;
         }
@@ -322,6 +402,9 @@ impl SplitState {
         self.create_pending = false;
         self.create_or_seen = false;
         self.after_as_is = false;
+        self.nested_subprogram = false;
+        self.pending_subprogram_begins = 0;
+        self.is_package = false;
     }
 
     fn track_create_plsql(&mut self, upper: &str) {
@@ -343,6 +426,7 @@ impl SplitState {
                 }
                 "PROCEDURE" | "FUNCTION" | "PACKAGE" | "TYPE" | "TRIGGER" => {
                     self.in_create_plsql = true;
+                    self.is_package = upper == "PACKAGE"; // Track if it's a package
                     self.create_pending = false;
                     self.create_or_seen = false;
                     return;
@@ -5080,6 +5164,667 @@ SHOW ERRORS PACKAGE BODY oqt_pkg;"#;
         assert!(
             stmts[1].contains("END oqt_pkg"),
             "Package body should end with END oqt_pkg"
+        );
+    }
+
+    #[test]
+    fn test_show_errors_without_slash() {
+        // Test case: SHOW ERRORS without preceding slash (/) separator
+        // This simulates the user's issue where SHOW ERRORS is not separated
+        // from the CREATE PACKAGE BODY when there's no slash terminator
+        let sql = r#"CREATE OR REPLACE PACKAGE BODY oqt_deep_pkg AS
+
+  PROCEDURE log_msg(p_tag IN VARCHAR2, p_msg IN VARCHAR2, p_depth IN NUMBER) IS
+  BEGIN
+    INSERT INTO oqt_t_log(log_id, tag, msg, depth)
+    VALUES (oqt_seq_log.NEXTVAL, SUBSTR(p_tag,1,30), SUBSTR(p_msg,1,4000), p_depth);
+    DBMS_OUTPUT.PUT_LINE('[LOG]['||p_tag||'][depth='||p_depth||'] '||p_msg);
+  END;
+
+END oqt_deep_pkg;
+
+SHOW ERRORS"#;
+
+        let items = QueryExecutor::split_script_items(sql);
+
+        let stmts: Vec<_> = items
+            .iter()
+            .filter_map(|item| {
+                if let ScriptItem::Statement(s) = item {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let tool_cmds: Vec<_> = items
+            .iter()
+            .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+            .collect();
+
+        // Debug output
+        println!("\n=== Test: SHOW ERRORS without slash ===");
+        println!("Total items: {}", items.len());
+        println!("Statements: {}", stmts.len());
+        println!("Tool commands: {}", tool_cmds.len());
+
+        for (i, item) in items.iter().enumerate() {
+            match item {
+                ScriptItem::Statement(s) => {
+                    let preview = if s.len() > 80 {
+                        format!("{}...", &s[..80])
+                    } else {
+                        s.clone()
+                    };
+                    println!("\n[{}] Statement: {}", i, preview);
+                }
+                ScriptItem::ToolCommand(cmd) => {
+                    println!("\n[{}] ToolCommand: {:?}", i, cmd);
+                }
+            }
+        }
+
+        // Should have 1 statement (CREATE PACKAGE BODY) and 1 tool command (SHOW ERRORS)
+        assert_eq!(
+            stmts.len(),
+            1,
+            "Should have 1 statement (package body), got {}",
+            stmts.len()
+        );
+        assert_eq!(
+            tool_cmds.len(),
+            1,
+            "Should have 1 tool command (SHOW ERRORS), got {}",
+            tool_cmds.len()
+        );
+
+        // Verify package body doesn't contain SHOW ERRORS
+        assert!(
+            !stmts[0].contains("SHOW ERRORS"),
+            "Package body should NOT contain SHOW ERRORS"
+        );
+    }
+
+    #[test]
+    fn test_show_errors_complex_package_without_slash() {
+        // Test case from user: complex package body with nested procedures,
+        // CASE, LOOP, DECLARE blocks, followed by SHOW ERRORS without slash
+        let sql = r#"CREATE OR REPLACE PACKAGE BODY oqt_deep_pkg AS
+
+  PROCEDURE log_msg(p_tag IN VARCHAR2, p_msg IN VARCHAR2, p_depth IN NUMBER) IS
+  BEGIN
+    INSERT INTO oqt_t_log(log_id, tag, msg, depth)
+    VALUES (oqt_seq_log.NEXTVAL, SUBSTR(p_tag,1,30), SUBSTR(p_msg,1,4000), p_depth);
+    DBMS_OUTPUT.PUT_LINE('[LOG]['||p_tag||'][depth='||p_depth||'] '||p_msg);
+  END;
+
+  FUNCTION f_calc(p_n IN NUMBER) RETURN NUMBER IS
+    v NUMBER := 0;
+  BEGIN
+    -- Nested IF + CASE + inner block
+    IF p_n IS NULL THEN
+      v := -1;
+    ELSE
+      CASE
+        WHEN p_n < 0 THEN
+          v := p_n * p_n;
+        WHEN p_n BETWEEN 0 AND 10 THEN
+          DECLARE
+            x NUMBER := p_n + 100;
+          BEGIN
+            v := x - 50;
+          END;
+        ELSE
+          v := p_n + 999;
+      END CASE;
+    END IF;
+
+    RETURN v;
+  EXCEPTION
+    WHEN OTHERS THEN
+      log_msg('F_CALC', 'error='||SQLERRM, 999);
+      RETURN NULL;
+  END;
+
+  PROCEDURE p_deep_run(p_limit IN NUMBER DEFAULT 7) IS
+    v_depth NUMBER := 0;
+
+    PROCEDURE p_inner(p_i NUMBER, p_j NUMBER) IS
+      v_local NUMBER := 0;
+    BEGIN
+      v_depth := v_depth + 1;
+      v_local := f_calc(p_i - p_j);
+
+      <<outer_loop>>
+      FOR k IN 1..3 LOOP
+        v_depth := v_depth + 1;
+
+        CASE MOD(k + p_i + p_j, 4)
+          WHEN 0 THEN
+            log_msg('INNER', 'case0 k='||k||' local='||v_local, v_depth);
+          WHEN 1 THEN
+            DECLARE
+              z NUMBER := 10;
+            BEGIN
+              IF z = 10 THEN
+                log_msg('INNER', 'case1 -> raise user error', v_depth);
+                RAISE_APPLICATION_ERROR(-20001, 'forced error in inner block');
+              END IF;
+            EXCEPTION
+              WHEN OTHERS THEN
+                log_msg('INNER', 'handled inner exception: '||SQLERRM, v_depth);
+            END;
+          WHEN 2 THEN
+            log_msg('INNER', 'case2 -> continue outer_loop', v_depth);
+            CONTINUE outer_loop;
+          ELSE
+            log_msg('INNER', 'case3 -> exit outer_loop', v_depth);
+            EXIT outer_loop;
+        END CASE;
+
+        DECLARE
+          w NUMBER := 0;
+        BEGIN
+          WHILE w < 2 LOOP
+            w := w + 1;
+            log_msg('INNER', 'while w='||w, v_depth+1);
+          END LOOP;
+        END;
+
+      END LOOP outer_loop;
+
+      v_depth := v_depth - 1;
+    END p_inner;
+
+  BEGIN
+    log_msg('P_DEEP_RUN', 'start limit='||p_limit, v_depth);
+
+    FOR r IN (SELECT id, grp, name FROM oqt_t_depth WHERE id <= p_limit ORDER BY id) LOOP
+      v_depth := v_depth + 1;
+
+      BEGIN
+        IF r.grp = 0 THEN
+          log_msg('RUN', 'grp=0 id='||r.id||' name='||r.name, v_depth);
+
+          CASE
+            WHEN r.id IN (1,2) THEN
+              p_inner(r.id, 1);
+            WHEN r.id BETWEEN 3 AND 5 THEN
+              p_inner(r.id, 2);
+            ELSE
+              p_inner(r.id, 3);
+          END CASE;
+
+        ELSIF r.grp = 1 THEN
+          log_msg('RUN', 'grp=1 id='||r.id||' (dynamic insert)', v_depth);
+
+          EXECUTE IMMEDIATE
+            'INSERT INTO oqt_t_log(log_id, tag, msg, depth)
+             VALUES (oqt_seq_log.NEXTVAL, :t, :m, :d)'
+          USING 'DYN', 'insert from dyn sql id='||r.id, v_depth;
+
+        ELSE
+          log_msg('RUN', 'grp=2 id='||r.id||' (raise & catch)', v_depth);
+          BEGIN
+            IF r.id = 6 THEN
+              log_msg('RUN', 'string contains tokens: "BEGIN END; / CASE WHEN"', v_depth);
+            END IF;
+
+            IF r.id = 7 THEN
+              RAISE NO_DATA_FOUND;
+            END IF;
+
+          EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+              log_msg('RUN', 'caught NO_DATA_FOUND for id='||r.id, v_depth);
+          END;
+        END IF;
+
+      EXCEPTION
+        WHEN OTHERS THEN
+          log_msg('RUN', 'outer exception caught: '||SQLERRM, v_depth);
+      END;
+
+      v_depth := v_depth - 1;
+    END LOOP;
+
+    DECLARE
+      t oqt_deep_tab := oqt_deep_tab();
+    BEGIN
+      t.EXTEND(3);
+      t(1) := oqt_deep_obj(1, 'A');
+      t(2) := oqt_deep_obj(2, 'B');
+      t(3) := oqt_deep_obj(3, 'C');
+
+      FOR i IN 1..t.COUNT LOOP
+        log_msg('COLL', 't('||i||')='||t(i).k||','||t(i).v, 77);
+      END LOOP;
+    END;
+
+    log_msg('P_DEEP_RUN', 'done', v_depth);
+  END p_deep_run;
+
+END oqt_deep_pkg;
+
+SHOW ERRORS
+
+--------------------------------------------------------------------------------
+PROMPT [5] REFCURSOR test (VARIABLE/PRINT + OUT refcursor)
+--------------------------------------------------------------------------------
+
+VAR v_rc REFCURSOR"#;
+
+        let items = QueryExecutor::split_script_items(sql);
+
+        let stmts: Vec<_> = items
+            .iter()
+            .filter_map(|item| {
+                if let ScriptItem::Statement(s) = item {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let tool_cmds: Vec<_> = items
+            .iter()
+            .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+            .collect();
+
+        // Debug output
+        println!("\n=== Test: Complex package body with SHOW ERRORS (no slash) ===");
+        println!("Total items: {}", items.len());
+        println!("Statements: {}", stmts.len());
+        println!("Tool commands: {}", tool_cmds.len());
+
+        for (i, item) in items.iter().enumerate() {
+            match item {
+                ScriptItem::Statement(s) => {
+                    let preview = if s.len() > 120 {
+                        format!("{}...", &s[..120])
+                    } else {
+                        s.clone()
+                    };
+                    println!("\n[{}] Statement (len={}): {}", i, s.len(), preview);
+                }
+                ScriptItem::ToolCommand(cmd) => {
+                    println!("\n[{}] ToolCommand: {:?}", i, cmd);
+                }
+            }
+        }
+
+        // Should have 1 statement (CREATE PACKAGE BODY)
+        // Tool commands: SHOW ERRORS, PROMPT, VAR
+        assert_eq!(
+            stmts.len(),
+            1,
+            "Should have 1 statement (package body), got {}",
+            stmts.len()
+        );
+
+        // Verify package body doesn't contain SHOW ERRORS
+        assert!(
+            !stmts[0].contains("SHOW ERRORS"),
+            "Package body should NOT contain SHOW ERRORS - it was not separated!"
+        );
+
+        // Should have at least SHOW ERRORS and VAR commands
+        assert!(
+            tool_cmds.len() >= 2,
+            "Should have at least 2 tool commands (SHOW ERRORS, VAR), got {}",
+            tool_cmds.len()
+        );
+    }
+
+    #[test]
+    fn test_show_errors_with_ref_cursor_procedure() {
+        // Additional test: package body with REF CURSOR procedure
+        let sql = r#"CREATE OR REPLACE PACKAGE BODY oqt_deep_pkg AS
+
+  PROCEDURE log_msg(p_tag IN VARCHAR2, p_msg IN VARCHAR2, p_depth IN NUMBER) IS
+  BEGIN
+    INSERT INTO oqt_t_log(log_id, tag, msg, depth)
+    VALUES (oqt_seq_log.NEXTVAL, SUBSTR(p_tag,1,30), SUBSTR(p_msg,1,4000), p_depth);
+  END;
+
+  PROCEDURE p_open_rc(p_grp IN NUMBER, p_rc OUT t_rc) IS
+    v_sql VARCHAR2(32767);
+  BEGIN
+    -- Dynamic SQL + bind
+    v_sql := 'SELECT id, grp, name, created_at
+              FROM oqt_t_depth
+              WHERE grp = :b1
+              ORDER BY id';
+
+    OPEN p_rc FOR v_sql USING p_grp;
+    log_msg('P_OPEN_RC', 'opened rc for grp='||p_grp, 1);
+  END;
+
+END oqt_deep_pkg;
+
+SHOW ERRORS"#;
+
+        let items = QueryExecutor::split_script_items(sql);
+
+        let stmts: Vec<_> = items
+            .iter()
+            .filter_map(|item| {
+                if let ScriptItem::Statement(s) = item {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let tool_cmds: Vec<_> = items
+            .iter()
+            .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+            .collect();
+
+        println!("\n=== Test: Package with REF CURSOR procedure ===");
+        println!("Total items: {}", items.len());
+        println!("Statements: {}", stmts.len());
+        println!("Tool commands: {}", tool_cmds.len());
+
+        for (i, item) in items.iter().enumerate() {
+            match item {
+                ScriptItem::Statement(s) => {
+                    println!("\n[{}] Statement (len={}):\n{}", i, s.len(), s);
+                }
+                ScriptItem::ToolCommand(cmd) => {
+                    println!("\n[{}] ToolCommand: {:?}", i, cmd);
+                }
+            }
+        }
+
+        // Should have 1 statement and 1 tool command
+        assert_eq!(stmts.len(), 1, "Should have 1 statement");
+        assert_eq!(tool_cmds.len(), 1, "Should have 1 tool command");
+        assert!(
+            !stmts[0].contains("SHOW ERRORS"),
+            "Package body should NOT contain SHOW ERRORS"
+        );
+    }
+
+    #[test]
+    fn test_package_body_show_errors_without_slash_newline_only() {
+        // Test case matching user's exact issue:
+        // Package body ends with "END package_name;" and newlines,
+        // then SHOW ERRORS without a preceding slash
+        //
+        // Full test with IF, CASE, DECLARE block, and IS NULL expression
+        let sql = "CREATE OR REPLACE PACKAGE BODY oqt_deep_pkg AS
+
+  PROCEDURE log_msg(p_tag IN VARCHAR2, p_msg IN VARCHAR2, p_depth IN NUMBER) IS
+  BEGIN
+    DBMS_OUTPUT.PUT_LINE('[LOG]['||p_tag||'][depth='||p_depth||'] '||p_msg);
+  END;
+
+  FUNCTION f_calc(p_n IN NUMBER) RETURN NUMBER IS
+    v NUMBER := 0;
+  BEGIN
+    IF p_n IS NULL THEN
+      v := -1;
+    ELSE
+      CASE
+        WHEN p_n < 0 THEN
+          v := p_n * p_n;
+        WHEN p_n BETWEEN 0 AND 10 THEN
+          DECLARE
+            x NUMBER := p_n + 100;
+          BEGIN
+            v := x - 50;
+          END;
+        ELSE
+          v := p_n + 999;
+      END CASE;
+    END IF;
+    RETURN v;
+  EXCEPTION
+    WHEN OTHERS THEN
+      log_msg('F_CALC', 'error='||SQLERRM, 999);
+      RETURN NULL;
+  END;
+
+END oqt_deep_pkg;
+
+SHOW ERRORS";
+
+        let items = QueryExecutor::split_script_items(sql);
+
+        let stmts: Vec<_> = items
+            .iter()
+            .filter_map(|item| {
+                if let ScriptItem::Statement(s) = item {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let tool_cmds: Vec<_> = items
+            .iter()
+            .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+            .collect();
+
+        println!("\n=== Test: Package body + SHOW ERRORS without slash (newline only) ===");
+        println!("Total items: {}", items.len());
+        println!("Statements: {}", stmts.len());
+        println!("Tool commands: {}", tool_cmds.len());
+
+        for (i, item) in items.iter().enumerate() {
+            match item {
+                ScriptItem::Statement(s) => {
+                    let lines: Vec<&str> = s.lines().collect();
+                    let last_lines = if lines.len() > 5 {
+                        lines[lines.len() - 5..].join("\n")
+                    } else {
+                        s.clone()
+                    };
+                    println!("\n[{}] Statement (len={}, lines={}):\n...last lines:\n{}", i, s.len(), lines.len(), last_lines);
+                }
+                ScriptItem::ToolCommand(cmd) => {
+                    println!("\n[{}] ToolCommand: {:?}", i, cmd);
+                }
+            }
+        }
+
+        // Should have 1 statement and 1 tool command
+        assert_eq!(stmts.len(), 1, "Should have 1 statement (package body), got {}", stmts.len());
+        assert_eq!(tool_cmds.len(), 1, "Should have 1 tool command (SHOW ERRORS), got {}", tool_cmds.len());
+
+        // Verify package body doesn't contain SHOW ERRORS
+        assert!(
+            !stmts[0].contains("SHOW ERRORS"),
+            "Package body should NOT contain SHOW ERRORS - statement was not properly separated!"
+        );
+    }
+
+    #[test]
+    fn test_package_spec_ends_with_depth_zero() {
+        // Test case: Package SPEC (not BODY) should end with depth 0
+        // Package spec has AS/IS but no BEGIN, ends with END package_name;
+        let sql = r#"CREATE OR REPLACE PACKAGE oqt_deep_pkg AS
+  -- REFCURSOR type
+  TYPE t_rc IS REF CURSOR;
+
+  -- simple log
+  PROCEDURE log_msg(p_tag IN VARCHAR2, p_msg IN VARCHAR2, p_depth IN NUMBER);
+
+  -- returns scalar with nested control flows
+  FUNCTION f_calc(p_n IN NUMBER) RETURN NUMBER;
+
+  -- opens refcursor with dynamic SQL and returns it via OUT
+  PROCEDURE p_open_rc(p_grp IN NUMBER, p_rc OUT t_rc);
+
+  -- heavy nested block for depth/parsing test
+  PROCEDURE p_deep_run(p_limit IN NUMBER DEFAULT 7);
+END oqt_deep_pkg;
+
+SHOW ERRORS"#;
+
+        let items = QueryExecutor::split_script_items(sql);
+
+        let stmts: Vec<_> = items
+            .iter()
+            .filter_map(|item| {
+                if let ScriptItem::Statement(s) = item {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let tool_cmds: Vec<_> = items
+            .iter()
+            .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+            .collect();
+
+        println!("\n=== Test: Package SPEC ends with depth 0 ===");
+        println!("Total items: {}", items.len());
+        println!("Statements: {}", stmts.len());
+        println!("Tool commands: {}", tool_cmds.len());
+
+        for (i, item) in items.iter().enumerate() {
+            match item {
+                ScriptItem::Statement(s) => {
+                    println!("\n[{}] Statement (len={}):\n{}", i, s.len(), s);
+                }
+                ScriptItem::ToolCommand(cmd) => {
+                    println!("\n[{}] ToolCommand: {:?}", i, cmd);
+                }
+            }
+        }
+
+        // Should have 1 statement (package spec) and 1 tool command (SHOW ERRORS)
+        assert_eq!(stmts.len(), 1, "Should have 1 statement (package spec), got {}", stmts.len());
+        assert_eq!(tool_cmds.len(), 1, "Should have 1 tool command (SHOW ERRORS), got {}", tool_cmds.len());
+
+        // Verify package spec doesn't contain SHOW ERRORS
+        assert!(
+            !stmts[0].contains("SHOW ERRORS"),
+            "Package spec should NOT contain SHOW ERRORS - depth did not return to 0!"
+        );
+    }
+
+    #[test]
+    fn test_package_body_with_declare_blocks() {
+        // Test case: Package body with nested procedure
+        // This is the minimal case that fails
+        let sql = r#"CREATE OR REPLACE PACKAGE BODY test_pkg AS
+  PROCEDURE p_outer IS
+    PROCEDURE p_inner IS
+    BEGIN
+      NULL;
+    END p_inner;
+  BEGIN
+    NULL;
+  END p_outer;
+END test_pkg;
+
+SHOW ERRORS"#;
+
+        let items = QueryExecutor::split_script_items(sql);
+
+        let stmts: Vec<_> = items
+            .iter()
+            .filter_map(|item| {
+                if let ScriptItem::Statement(s) = item {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let tool_cmds: Vec<_> = items
+            .iter()
+            .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+            .collect();
+
+        println!("\n=== Test: Package body with DECLARE blocks ===");
+        println!("Total items: {}", items.len());
+        println!("Statements: {}", stmts.len());
+        println!("Tool commands: {}", tool_cmds.len());
+
+        for (i, stmt) in stmts.iter().enumerate() {
+            println!("\n[{}] Statement:\n{}", i, stmt);
+        }
+
+        assert_eq!(stmts.len(), 1, "Should have 1 statement");
+        assert_eq!(tool_cmds.len(), 1, "Should have 1 tool command");
+        assert!(
+            !stmts[0].contains("SHOW ERRORS"),
+            "Package body should NOT contain SHOW ERRORS"
+        );
+    }
+
+    #[test]
+    fn test_anonymous_block_with_nested_procedure() {
+        // Test case: Anonymous block with nested procedure declaration
+        // The nested DECLARE inside labeled block should not split the statement
+        let sql = r#"DECLARE
+  v NUMBER := 0;
+  PROCEDURE bump(p IN OUT NUMBER) IS
+  BEGIN
+    p := p + 1;
+  END;
+BEGIN
+  <<blk1>>
+  DECLARE
+    a NUMBER := 0;
+  BEGIN
+    FOR i IN 1..3 LOOP
+      bump(a);
+    END LOOP;
+  END blk1;
+EXCEPTION
+  WHEN OTHERS THEN
+    DBMS_OUTPUT.PUT_LINE('[ANON] top exception handled: '||SQLERRM);
+END;"#;
+
+        let items = QueryExecutor::split_script_items(sql);
+
+        let stmts: Vec<_> = items
+            .iter()
+            .filter_map(|item| {
+                if let ScriptItem::Statement(s) = item {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        println!("\n=== Test: Anonymous block with nested procedure ===");
+        println!("Total items: {}", items.len());
+        println!("Statements: {}", stmts.len());
+
+        for (i, stmt) in stmts.iter().enumerate() {
+            println!("\n[{}] Statement (len={}):\n{}", i, stmt.len(), stmt);
+        }
+
+        // Should be exactly 1 statement (the entire anonymous block)
+        assert_eq!(
+            stmts.len(),
+            1,
+            "Should have exactly 1 statement (anonymous block), got {}. Block was incorrectly split!",
+            stmts.len()
+        );
+
+        // Verify the statement contains both the procedure and the call
+        assert!(
+            stmts[0].contains("PROCEDURE bump"),
+            "Statement should contain PROCEDURE bump declaration"
+        );
+        assert!(
+            stmts[0].contains("bump(a)"),
+            "Statement should contain bump(a) call"
         );
     }
 }
