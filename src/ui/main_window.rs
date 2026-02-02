@@ -170,6 +170,27 @@ impl MainWindow {
             false
         });
 
+        // Ensure right_tile resizes both panes when the outer split bar changes width
+        let mut right_tile_with_handle = right_tile.clone();
+        let mut sql_group_for_resize = sql_group.clone();
+        let mut bottom_flex_for_resize = bottom_flex.clone();
+        right_tile_with_handle.handle(move |t, ev| {
+            if ev == Event::Resize {
+                let x = t.x();
+                let w = t.w();
+                sql_group_for_resize.resize(x, sql_group_for_resize.y(), w, sql_group_for_resize.h());
+                bottom_flex_for_resize.resize(
+                    x,
+                    bottom_flex_for_resize.y(),
+                    w,
+                    bottom_flex_for_resize.h(),
+                );
+                sql_group_for_resize.layout();
+                bottom_flex_for_resize.layout();
+            }
+            false
+        });
+
         // Make bottom_flex the resizable child of right_tile
         right_tile.resizable(&bottom_flex);
         right_tile.end();
