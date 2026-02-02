@@ -1,5 +1,4 @@
 pub mod connection_dialog;
-pub mod feature_catalog;
 pub mod find_replace;
 pub mod intellisense;
 pub mod main_window;
@@ -13,7 +12,6 @@ pub mod syntax_highlight;
 pub mod theme;
 
 pub use connection_dialog::*;
-pub use feature_catalog::*;
 pub use find_replace::*;
 pub use intellisense::*;
 pub use main_window::*;

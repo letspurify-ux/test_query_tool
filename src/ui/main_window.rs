@@ -21,7 +21,7 @@ use crate::db::{
     create_shared_connection, lock_connection, ObjectBrowser, QueryResult, SharedConnection,
 };
 use crate::ui::{
-    ConnectionDialog, FeatureCatalogDialog, FindReplaceDialog, HighlightData, IntellisenseData,
+    ConnectionDialog, FindReplaceDialog, HighlightData, IntellisenseData,
     MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, QueryProgress, ResultTabsWidget,
     SqlAction, SqlEditorWidget,
 };
@@ -898,9 +898,6 @@ impl MainWindow {
                                 // Refresh highlighting
                                 state_for_menu.borrow().sql_editor.refresh_highlighting();
                             }
-                        }
-                        "Tools/Feature Catalog..." => {
-                            FeatureCatalogDialog::show();
                         }
                         "Tools/Auto-Commit" => {
                             let enabled = m
