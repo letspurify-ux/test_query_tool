@@ -250,6 +250,13 @@ impl MainWindow {
                 }
                 SqlAction::Insert(text) => {
                     let mut editor = s.sql_editor.get_editor();
+                    let insert_pos = editor.insert_position();
+                    s.sql_buffer.insert(insert_pos, &text);
+                    editor.set_insert_position(insert_pos + text.len() as i32);
+                    s.sql_editor.refresh_highlighting();
+                }
+                SqlAction::Append(text) => {
+                    let mut editor = s.sql_editor.get_editor();
                     let buffer_length = s.sql_buffer.length();
 
                     // Add newline prefix if buffer is not empty
