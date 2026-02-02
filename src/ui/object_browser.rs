@@ -391,7 +391,7 @@ impl ObjectBrowserWidget {
                                 };
                                 let cb_opt = sql_callback.borrow_mut().take();
                                 if let Some(mut cb) = cb_opt {
-                                    cb(SqlAction::Set(ddl));
+                                    cb(SqlAction::Insert(ddl));
                                     *sql_callback.borrow_mut() = Some(cb);
                                 }
                             }
