@@ -2,7 +2,7 @@ use fltk::{
     app,
     button::Button,
     dialog::{FileDialog, FileDialogType},
-    enums::{Event, FrameType},
+    enums::FrameType,
     frame::Frame,
     group::{Flex, FlexType, Tile},
     menu::MenuBar,
@@ -97,39 +97,31 @@ impl MainWindow {
         // Tile allows users to drag the border between children to resize them
         let tile_y = 30; // After menu bar
         let tile_h = 800 - 30 - 25; // Window height - menu - status bar
-        let content_tile = Tile::default()
+        let mut content_frame = Frame::default()
             .with_pos(0, tile_y)
             .with_size(1200, tile_h);
+        let content_tile = Tile::default_fill();
+        content_frame.end();
 
         // Object browser on the left (initial width 250px)
-        // Position at (0, tile_y) with width 250
-        let object_browser = ObjectBrowserWidget::new(0, tile_y, 250, tile_h, connection.clone());
+        // Position at (0, 0) with width 250
+        let object_browser = ObjectBrowserWidget::new(0, 0, 250, tile_h, connection.clone());
 
         // Right pane uses Tile for resizable split between SQL editor and results
         // Position at x=250 (right edge of object browser), takes remaining width
         let right_w = 1200 - 250;
         let right_tile = Tile::default()
-            .with_pos(250, tile_y)
+            .with_pos(250, 0)
             .with_size(right_w, tile_h);
 
         // SQL editor at top (initial height ~40% of right pane)
         let sql_h = (tile_h as f32 * 0.4) as i32;
         let sql_editor = SqlEditorWidget::new(connection.clone());
         let mut sql_group = sql_editor.get_group().clone();
-        sql_group.resize(250, tile_y, right_w, sql_h);
-
-        // Add resize handler to sql_group so it updates layout when Tile resizes it
-        let mut sql_group_with_handle = sql_group.clone();
-        sql_group_with_handle.handle(move |g, ev| {
-            if ev == Event::Resize {
-                g.layout();
-                g.redraw();
-            }
-            false
-        });
+        sql_group.resize(250, 0, right_w, sql_h);
 
         // Bottom pane contains result toolbar and result tabs
-        let bottom_y = tile_y + sql_h;
+        let bottom_y = sql_h;
         let bottom_h = tile_h - sql_h;
         let mut bottom_flex = Flex::default()
             .with_pos(250, bottom_y)
@@ -160,44 +152,6 @@ impl MainWindow {
         bottom_flex.resizable(&result_widget);
         bottom_flex.end();
 
-        // Add resize handler to bottom_flex so it updates layout when Tile resizes it
-        let mut bottom_flex_with_handle = bottom_flex.clone();
-        bottom_flex_with_handle.handle(move |g, ev| {
-            if ev == Event::Resize {
-                g.layout();
-                g.redraw();
-            }
-            false
-        });
-
-        // Ensure right_tile resizes both panes when the outer split bar changes width
-        let mut right_tile_with_handle = right_tile.clone();
-        let mut sql_group_for_resize = sql_group.clone();
-        let mut bottom_flex_for_resize = bottom_flex.clone();
-        right_tile_with_handle.handle(move |t, ev| {
-            if matches!(ev, Event::Resize | Event::Drag) {
-                let x = t.x();
-                let w = t.w();
-                sql_group_for_resize.resize(
-                    x,
-                    sql_group_for_resize.y(),
-                    w,
-                    sql_group_for_resize.h(),
-                );
-                bottom_flex_for_resize.resize(
-                    x,
-                    bottom_flex_for_resize.y(),
-                    w,
-                    bottom_flex_for_resize.h(),
-                );
-                sql_group_for_resize.layout();
-                bottom_flex_for_resize.layout();
-                sql_group_for_resize.redraw();
-                bottom_flex_for_resize.redraw();
-            }
-            false
-        });
-
         // Make bottom_flex the resizable child of right_tile
         right_tile.resizable(&bottom_flex);
         right_tile.end();
@@ -205,18 +159,8 @@ impl MainWindow {
         // Make right_tile the resizable child of content_tile
         content_tile.resizable(&right_tile);
 
-        // Add resize handler to object browser widget
-        let mut obj_browser_widget = object_browser.get_widget();
-        obj_browser_widget.handle(move |g, ev| {
-            if ev == Event::Resize {
-                g.layout();
-                g.redraw();
-            }
-            false
-        });
-
         content_tile.end();
-        main_flex.resizable(&content_tile);
+        main_flex.resizable(&content_frame);
 
         let mut status_bar = Frame::default().with_label("Not connected | Ctrl+Space for autocomplete");
         status_bar.set_frame(FrameType::FlatBox);
