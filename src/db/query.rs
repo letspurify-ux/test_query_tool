@@ -269,12 +269,25 @@ impl SplitState {
 
         self.track_create_plsql(&upper);
 
+        // Check if this is "END CASE" before processing pending_end
+        let is_end_case = self.pending_end && upper == "CASE";
+
         if self.pending_end {
-            // END CASE closes a PL/SQL CASE statement, not a block
-            // END IF closes an IF block, END LOOP closes a LOOP block
-            // These don't decrement block_depth
-            if !matches!(upper.as_str(), "IF" | "LOOP" | "CASE") {
-                if self.block_depth > 0 {
+            if upper == "CASE" {
+                // END CASE - PL/SQL CASE statement 종료
+                // case_depth가 있으면 감소 (처음 CASE에서 증가시킨 것)
+                if self.case_depth > 0 {
+                    self.case_depth -= 1;
+                }
+            } else if matches!(upper.as_str(), "IF" | "LOOP") {
+                // END IF, END LOOP - 이들은 별도 depth 관리 없음
+            } else {
+                // 일반 END - CASE expression이거나 PL/SQL block
+                if self.case_depth > 0 {
+                    // CASE expression 종료
+                    self.case_depth -= 1;
+                } else if self.block_depth > 0 {
+                    // PL/SQL block 종료
                     self.block_depth -= 1;
                 }
             }
@@ -282,12 +295,9 @@ impl SplitState {
         }
 
         // Track CASE expressions (in SELECT, expressions, etc.)
-        // CASE starts a CASE expression, END closes it (without "CASE" following)
-        // This prevents CASE expression's END from being treated as a PL/SQL block END
-        if upper == "CASE" && !self.pending_end {
-            // Starting a new CASE expression
-            // Note: PL/SQL CASE statements also start with CASE, but they end with "END CASE"
-            // which is handled above (pending_end + CASE = don't decrement block_depth)
+        // CASE starts a CASE expression/statement
+        // END CASE의 CASE는 제외 (is_end_case로 체크)
+        if upper == "CASE" && !is_end_case {
             self.case_depth += 1;
         }
 
@@ -379,17 +389,11 @@ impl SplitState {
                 self.block_depth += 1;
             }
         } else if upper == "END" {
-            // If we're inside a CASE expression, this END closes the CASE expression
-            // Don't treat it as a PL/SQL block END
-            if self.case_depth > 0 {
-                self.case_depth -= 1;
-                // Don't set pending_end - this is just closing a CASE expression
-            } else {
-                self.pending_end = true;
-                // Only reset create state when we're at the outermost level (depth will become 0)
-                // Don't reset for nested procedures/functions inside packages
-                // We'll reset in resolve_pending_end_on_terminator if depth becomes 0
-            }
+            // Set pending_end and determine in next token whether this is:
+            // - END CASE (PL/SQL CASE statement)
+            // - END IF / END LOOP
+            // - END (CASE expression or PL/SQL block)
+            self.pending_end = true;
         }
 
         self.token.clear();
@@ -397,7 +401,12 @@ impl SplitState {
 
     fn resolve_pending_end_on_terminator(&mut self) {
         if self.pending_end {
-            if self.block_depth > 0 {
+            // END followed by terminator (;) - determine what it closes
+            if self.case_depth > 0 {
+                // CASE expression 종료
+                self.case_depth -= 1;
+            } else if self.block_depth > 0 {
+                // PL/SQL block 종료
                 self.block_depth -= 1;
             }
             // Reset create state when we reach depth 0 (end of CREATE statement)
@@ -410,7 +419,12 @@ impl SplitState {
 
     fn resolve_pending_end_on_eof(&mut self) {
         if self.pending_end {
-            if self.block_depth > 0 {
+            // END at EOF - determine what it closes
+            if self.case_depth > 0 {
+                // CASE expression 종료
+                self.case_depth -= 1;
+            } else if self.block_depth > 0 {
+                // PL/SQL block 종료
                 self.block_depth -= 1;
             }
             // Reset create state when we reach depth 0 (end of CREATE statement)
