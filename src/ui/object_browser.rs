@@ -464,8 +464,8 @@ impl ObjectBrowserWidget {
                             .or_else(|| t.find_clicked(true))
                             .or_else(|| Self::item_at_mouse(t));
 
-                        if let Some(mut item) = clicked_item {
-                            item.select(1);
+                        if let Some(item) = clicked_item {
+                            let _ = t.select_only(&item, false);
                             t.set_item_focus(&item);
                             Self::show_context_menu(
                                 &connection,
