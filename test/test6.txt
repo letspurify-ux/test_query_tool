@@ -1,0 +1,477 @@
+/* ============================================================
+   OQT "NIGHTMARE MODE" - splitter/depth annihilator
+   - DDL(no END): TYPE/VIEW
+   - DDL(body END; + /): TRIGGER/PACKAGE/PROC/FUNC
+   - Dynamic DDL inside package body: CREATE FUNCTION/PROC/PACKAGE
+   - Intentional compile error -> caught -> recompile fixed version
+   - q-quote + strings + comments containing END; / ; BEGIN etc.
+   - Deep nesting: DECLARE/BEGIN/IF/CASE/LOOP/EXCEPTION labels
+   - Parentheses depth bomb: inline views + multiset + cast
+   ============================================================ */
+
+PROMPT [0] CLEANUP (ignore errors)
+
+BEGIN
+    FOR r IN (
+        SELECT object_name,
+            object_type
+        FROM user_objects
+        WHERE object_name IN ('OQT_NM_T', 'OQT_NM_SEQ', 'OQT_NM_V', 'OQT_NM_OBJ', 'OQT_NM_TAB', 'OQT_NM_TRG', 'OQT_NM_PKG', 'OQT_NM_CHILD_PKG', 'OQT_NM_DYN_F', 'OQT_NM_DYN_P')
+        ORDER BY DECODE (object_type, 'VIEW', 1, 'TRIGGER', 2, 'PACKAGE', 3, 'FUNCTION', 4, 'PROCEDURE', 5, 'TABLE', 6, 'TYPE', 7, 99)
+    ) LOOP
+        BEGIN
+            EXECUTE IMMEDIATE 'DROP ' || r.object_type || ' ' || r.object_name ||
+            CASE
+                    WHEN r.object_type = 'TABLE' THEN ' PURGE'
+                    ELSE ''
+            END;
+            EXCEPTION
+                WHEN OTHERS THEN NULL;
+        END;
+    END LOOP;
+END;
+/
+
+PROMPT [0] cleanup done
+
+/* ------------------------------------------------------------
+   [1] DDL without END: TYPE + VIEW
+   ------------------------------------------------------------ */
+
+PROMPT [1] CREATE TYPES (no END)
+
+CREATE OR REPLACE TYPE oqt_nm_obj AS
+    OBJECT (id NUMBER, grp VARCHAR2 (30), txt VARCHAR2 (200), note VARCHAR2 (2000));
+/
+
+CREATE OR REPLACE TYPE oqt_nm_tab AS
+    TABLE OF oqt_nm_obj;
+/
+
+PROMPT [1] TABLE/SEQ
+
+CREATE TABLE oqt_nm_t (
+    id         NUMBER       PRIMARY KEY,
+    grp        VARCHAR2(30),
+    payload    CLOB,
+    created_at DATE         DEFAULT SYSDATE
+);
+
+CREATE SEQUENCE oqt_nm_seq START
+WITH 1 INCREMENT BY 1;
+
+PROMPT [1] SEED DATA (strings/q-quote with fake tokens)
+
+INSERT INTO oqt_nm_t (id, grp, payload)
+SELECT
+  oqt_nm_seq.NEXTVAL,
+  'G' || TO_CHAR(MOD(level, 7)),
+  TO_CLOB(
+      'seed#' || level || ' '
+   || 'plain:''END;'' ''/'' '';'' '
+   || q'[q-quote has: BEGIN END; END IF; END CASE; END LOOP; / ; /* */ -- ]'
+   || ' | tricky: it''s ok '
+   || ' | parens: ( ( (1) ) )'
+  )
+FROM dual
+CONNECT BY level <= 20;
+
+COMMIT;
+
+PROMPT [1] VIEW (no END) with inline subqueries and SQL CASE(expression)
+
+CREATE OR REPLACE VIEW oqt_nm_v AS
+SELECT t.id,
+    t.grp,
+    CASE
+        WHEN t.id IN (
+        SELECT id
+        FROM oqt_nm_t
+        WHERE id <= 9
+    ) THEN 'IN'
+        ELSE 'OUT'
+END AS flag,
+(
+    SELECT COUNT (*)
+    FROM oqt_nm_t x
+    WHERE x.grp = t.grp
+        AND (x.payload LIKE '%;%'
+        OR x.payload LIKE '%END;%'
+        OR x.payload LIKE '%/ %')
+) AS cnt_like
+FROM oqt_nm_t t
+WHERE (t.id BETWEEN 1
+    AND 999999)
+    AND ((t.grp IN ('G0', 'G1', 'G2'))
+    OR (t.grp IN ('G3', 'G4', 'G5', 'G6')));
+/
+
+/* ------------------------------------------------------------
+   [2] TRIGGER (DDL body) + / execution pattern
+   ------------------------------------------------------------ */
+
+PROMPT [2] TRIGGER
+
+CREATE OR REPLACE TRIGGER oqt_nm_trg BEFORE
+INSERT
+    ON oqt_nm_t
+FOR EACH ROW
+DECLARE
+    v VARCHAR2 (2000);
+BEGIN
+    v := q '[TRG: fake tokens END; / ; BEGIN CASE LOOP IF THEN ELSE]' || ' + '' ; ''';
+    :new.payload := NVL (:new.payload, TO_CLOB ('')) || CHR (10) || v;
+END;
+/
+
+SHOW ERRORS
+
+/* ------------------------------------------------------------
+   [3] PARENT PACKAGE SPEC (declaration storm)
+   ------------------------------------------------------------ */
+
+PROMPT [3] PACKAGE SPEC (declaration-only drift trap)
+
+CREATE OR REPLACE PACKAGE oqt_nm_pkg AS
+    c_tag CONSTANT VARCHAR2 (30) := 'NIGHTMARE';
+    TYPE rc IS REF CURSOR;
+    PROCEDURE bootstrap;
+    -- will create child package + dyn func/proc
+    PROCEDURE run_all (p_rounds IN NUMBER DEFAULT 5);
+    -- declaration storm with nasty defaults
+    PROCEDURE p_decl_1 (p IN VARCHAR2 DEFAULT q '[spec default: END; / ; /* */ -- ]');
+    PROCEDURE p_decl_2 (p IN VARCHAR2 DEFAULT 'A;B;C');
+    PROCEDURE p_decl_3 (p IN VARCHAR2 DEFAULT q '{ { ; END; / } }');
+    FUNCTION f_tag (p IN NUMBER) RETURN VARCHAR2;
+END oqt_nm_pkg;
+/
+
+SHOW ERRORS
+
+/* ------------------------------------------------------------
+   [4] PARENT PACKAGE BODY
+   - Dynamic creation of:
+     * a child package (spec+body)
+     * a function (first invalid, then fixed)
+     * a procedure using autonomous transaction
+   ------------------------------------------------------------ */
+
+PROMPT [4] PACKAGE BODY
+
+CREATE OR REPLACE PACKAGE BODY oqt_nm_pkg AS
+    PROCEDURE log (p IN VARCHAR2) IS
+    BEGIN
+        DBMS_OUTPUT.PUT_LINE ('[NM] ' || p);
+    END;
+    PROCEDURE p_decl_1 (p IN VARCHAR2 DEFAULT q '[spec default: END; / ; /* */ -- ]') IS
+    BEGIN
+        log ('p_decl_1=' || SUBSTR (p, 1, 80));
+    END;
+    PROCEDURE p_decl_2 (p IN VARCHAR2 DEFAULT 'A;B;C') IS
+    BEGIN
+        log ('p_decl_2=' || p);
+    END;
+    PROCEDURE p_decl_3 (p IN VARCHAR2 DEFAULT q '{ { ; END; / } }') IS
+    BEGIN
+        log ('p_decl_3=' || SUBSTR (p, 1, 80));
+    END;
+    FUNCTION f_tag (p IN NUMBER) RETURN VARCHAR2 IS
+        v VARCHAR2 (30);
+    BEGIN
+        SELECT
+        CASE
+                WHEN p IS NULL THEN 'N'
+                WHEN p < 0 THEN 'NEG'
+                WHEN p BETWEEN 0
+                AND 9 THEN 'S'
+                ELSE 'L'
+        END
+        INTO v
+        FROM DUAL;
+        RETURN v;
+    END;
+    PROCEDURE bootstrap IS ddl CLOB;
+    BEGIN
+        log ('bootstrap start');
+        /* 1) Create child package (spec) dynamically */ ddl := q '[
+      CREATE OR REPLACE PACKAGE oqt_nm_child_pkg AS
+        PROCEDURE child_ping(p IN VARCHAR2);
+        FUNCTION  child_calc(p IN NUMBER) RETURN NUMBER;
+      END oqt_nm_child_pkg;
+    ]';
+        EXECUTE IMMEDIATE ddl;
+        /* 2) Create child package body dynamically (contains deep nesting) */ ddl := q '[
+      CREATE OR REPLACE PACKAGE BODY oqt_nm_child_pkg AS
+
+        PROCEDURE child_ping(p IN VARCHAR2) IS
+        BEGIN
+          DBMS_OUTPUT.PUT_LINE('         [ CHILD ] '||SUBSTR(p,1,120));
+        END;
+
+        FUNCTION child_calc(p IN NUMBER) RETURN NUMBER IS
+          v NUMBER := 0;
+        BEGIN
+          <<child_block>>
+          DECLARE
+            x NUMBER := NVL(p,0);
+          BEGIN
+            IF x < 0 THEN
+              v := x*x;
+            ELSE
+              CASE
+                WHEN x BETWEEN 0 AND 2 THEN
+                  v := x + 10;
+                WHEN x BETWEEN 3 AND 6 THEN
+                  v := 0;
+                  FOR i IN 1..x LOOP
+                    v := v + i;
+                    IF MOD(i,2)=0 THEN
+                      NULL;
+                    ELSE
+                      NULL;
+                    END IF;
+                  END LOOP;
+                ELSE
+                  v := x + 100;
+              END CASE;
+            END IF;
+
+            -- fake tokens in comment: END; / ; BEGIN CASE LOOP
+            -- fake tokens in string:
+            DBMS_OUTPUT.PUT_LINE('         child_calc says :
+    END;
+    /;
+;
+;
+    ');
+
+          EXCEPTION
+            WHEN OTHERS THEN
+              DBMS_OUTPUT.PUT_LINE('     child_calc caught : '||SQLERRM);
+              v := -999;
+          END child_block;
+
+          RETURN v;
+        END;
+
+      END oqt_nm_child_pkg;
+    ]';
+    EXECUTE IMMEDIATE ddl;
+    /* 3) Create a dynamic function - first intentionally INVALID */
+    BEGIN
+        ddl := q '[
+        CREATE OR REPLACE FUNCTION oqt_nm_dyn_f(p IN NUMBER) RETURN NUMBER IS
+        BEGIN
+          -- INTENTIONAL ERROR: misspelled keyword "RETURNN"
+          RETURNN p + 1;
+        END;
+      ]';
+        EXECUTE IMMEDIATE ddl;
+        log ('unexpected: invalid function compiled? (should not happen)');
+        EXCEPTION
+            WHEN OTHERS THEN log ('as expected, invalid function compile failed: ' || SQLERRM);
+        -- Fix version
+        ddl := q '[
+          CREATE OR REPLACE FUNCTION oqt_nm_dyn_f(p IN NUMBER) RETURN NUMBER IS
+            v NUMBER := 0;
+          BEGIN
+            -- tokens in q-quote to test mask:
+            v := p + 1; /* END; / ; BEGIN */
+            RETURN v;
+          END;
+        ]';
+        EXECUTE IMMEDIATE ddl;
+        log ('fixed oqt_nm_dyn_f compiled');
+    END;
+    /* 4) Create a dynamic procedure with autonomous transaction (DML + commit) */ ddl := q '[
+      CREATE OR REPLACE PROCEDURE oqt_nm_dyn_p(p_txt IN VARCHAR2) IS
+        PRAGMA AUTONOMOUS_TRANSACTION;
+      BEGIN
+        INSERT INTO oqt_nm_t(id, grp, payload)
+        VALUES (oqt_nm_seq.NEXTVAL,
+                '     GDYN ',
+                TO_CLOB('     dyn_p : '||p_txt||' | has tokens
+END;
+
+/;
+
+'));
+        COMMIT;
+      END;
+    ]';
+
+EXECUTE IMMEDIATE ddl;
+
+log ('bootstrap done');
+
+END bootstrap;
+
+PROCEDURE run_all (p_rounds IN NUMBER DEFAULT 5) IS v_rounds NUMBER := NVL (p_rounds, 5);
+
+v_sum NUMBER := 0;
+
+v_id NUMBER;
+
+v_grp VARCHAR2 (30);
+
+v_flag VARCHAR2 (30);
+
+v_rc rc;
+
+BEGIN
+    log ('run_all start rounds=' || v_rounds || ' tag=' || f_tag (v_rounds));
+    -- ensure child + dyn objects exist
+    bootstrap;
+    -- call child + dyn proc
+    oqt_nm_child_pkg.child_ping (q '[call child_ping: END; / ; CASE WHEN THEN END]');
+    oqt_nm_dyn_p ('hello;world; END; / ;');
+    < < OUTER > >
+    DECLARE
+        a NUMBER := (((1 + 2) * (3 + 4)) + (5 * 6));
+        s VARCHAR2 (2000) := q '[outer declare string: END; / ; /* */ -- ]';
+    BEGIN
+        log ('outer a=' || a || ' s=' || SUBSTR (s, 1, 60));
+        -- PL/SQL CASE(statement) + nested loops + nested exceptions
+        CASE
+                WHEN v_rounds BETWEEN 1
+                AND 3 THEN log ('case 1-3');
+                WHEN v_rounds BETWEEN 4
+                AND 7 THEN log ('case 4-7 start loop');
+            FOR i IN 1..v_rounds LOOP
+                BEGIN
+                    v_sum := v_sum + oqt_nm_dyn_f (i) + oqt_nm_child_pkg.child_calc (i);
+                    IF MOD (i, 2) = 0 THEN log (' loop even i=' || i || ' sqlcase=' || (
+                        CASE
+                                WHEN i = 2 THEN 'TWO'
+                        ELSE 'EVEN'
+                        END) -- SQL CASE(expression)
+);
+                            ELSE log (' loop odd i=' || i || ' ; msg has ;');
+                    END IF;
+                    -- nested block with named END
+                    < < inner_named > >
+                    DECLARE
+                        k NUMBER := i * 100;
+                    BEGIN
+                        IF k > 250 THEN log (' inner_named k=' || k);
+                        END IF;
+                    END inner_named;
+                    -- force an error occasionally to test exception depth
+                    IF i = 3 THEN RAISE_APPLICATION_ERROR (- 20111, 'forced err at i=3 END; / ;');
+                    END IF;
+                    EXCEPTION
+                        WHEN OTHERS THEN log (' caught in loop i=' || i || ' err=' || SQLERRM);
+                    BEGIN
+                        -- exception inside exception (cascade)
+                        IF i = 3 THEN RAISE_APPLICATION_ERROR (- 20112, 'forced2 in handler ; END; /');
+                        END IF;
+                        EXCEPTION
+                            WHEN OTHERS THEN log ('  cascade caught i=' || i || ' err=' || SQLERRM);
+                    END;
+                END;
+            END LOOP;
+            log ('case 4-7 loop done sum=' || v_sum);
+                ELSE log ('case else');
+        END CASE;
+        -- Ref cursor with parentheses/multiset/cast bomb
+        OPEN v_rc
+        FOR
+        SELECT id,
+            grp,
+            flag
+        FROM (
+            SELECT t.id,
+                t.grp,
+            CASE
+                    WHEN t.id <= 5 THEN 'S'
+                    ELSE 'L'
+            END AS flag,
+                CAST (MULTISET (
+                SELECT oqt_nm_obj (x.id, x.grp, SUBSTR (x.payload, 1, 30), SUBSTR (x.payload, 31, 60))
+                FROM oqt_nm_t x
+                WHERE x.grp = t.grp
+                    AND x.id <= t.id
+            ) AS oqt_nm_tab) AS obj_list
+            FROM oqt_nm_v t
+            WHERE t.id IN (1, 2, 3, 4, 5, 6, 7, 8, 9)
+        )
+        ORDER BY id;
+        LOOP FETCH v_rc
+            INTO v_id,
+                v_grp,
+                v_flag;
+            EXIT
+                WHEN v_rc % NOTFOUND;
+            log ('rc row id=' || v_id || ' grp=' || v_grp || ' flag=' || v_flag);
+        END LOOP;
+        CLOSE v_rc;
+        EXCEPTION
+            WHEN OTHERS THEN log ('outer exception: ' || SQLERRM);
+    END OUTER;
+    -- DML to trigger trigger
+    INSERT
+    INTO oqt_nm_t (id, grp, payload)
+    VALUES (oqt_nm_seq.NEXTVAL, 'GTRG', TO_CLOB (q '[insert payload: END; / ; ; ;]'));
+    COMMIT;
+    log ('run_all done');
+END run_all;
+
+END oqt_nm_pkg;
+/
+
+SHOW ERRORS
+
+/* ------------------------------------------------------------
+   [5] Execute blocks using SQL*Plus / buffer trigger
+   ------------------------------------------------------------ */
+
+PROMPT [5] RUN (blocks + /)
+
+SET SERVEROUTPUT ON
+
+SET FEEDBACK ON
+
+SET DEFINE OFF
+
+DECLARE
+    v NUMBER := 6;
+BEGIN
+    DBMS_OUTPUT.PUT_LINE ('anon A start ; ; ;');
+    oqt_nm_pkg.run_all (v);
+    DBMS_OUTPUT.PUT_LINE ('anon A end');
+END;
+/
+
+BEGIN
+    -- This line contains / but is NOT a single-line slash command:
+    DBMS_OUTPUT.PUT_LINE ('this is NOT slash command: / inside text');
+END;
+/
+
+/* ------------------------------------------------------------
+   [6] Final SQL (must be exactly 1 statement)
+   ------------------------------------------------------------ */
+
+PROMPT [6] FINAL SELECT (one statement)
+
+SELECT t.id,
+    t.grp,
+    CASE
+        WHEN INSTR (t.payload, 'END;') > 0 THEN 'HAS_END'
+        WHEN INSTR (t.payload, '/ ;') > 0 THEN 'HAS_SLASH_SEMI'
+        ELSE 'OK'
+END AS info,
+(
+    SELECT COUNT (*)
+    FROM oqt_nm_t x
+    WHERE x.grp = t.grp
+        AND (x.payload LIKE '%;%'
+        OR x.payload LIKE '%END;%'
+        OR x.payload LIKE '%/ %')
+) AS cnt_like
+FROM oqt_nm_t t
+WHERE t.id IN (1, 2, 3, 4, 5, 6, 7, 8, 9)
+    AND (t.grp LIKE 'G%')
+ORDER BY t.id;
+
+PROMPT [DONE] If this ran end-to-end, your splitter/depth logic is monstrous.
