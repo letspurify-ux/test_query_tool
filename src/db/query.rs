@@ -246,6 +246,10 @@ struct SplitState {
     /// True when we're creating a PACKAGE (spec or body), not PROCEDURE/FUNCTION/TRIGGER/TYPE
     /// Packages don't have a BEGIN at the AS level, only their contained procedures do.
     is_package: bool,
+    /// Track CASE expression depth to distinguish CASE expressions (in SELECT/expressions)
+    /// from PL/SQL CASE statements. CASE expressions end with just END,
+    /// while PL/SQL CASE statements end with END CASE.
+    case_depth: usize,
 }
 
 impl SplitState {
@@ -265,13 +269,36 @@ impl SplitState {
 
         self.track_create_plsql(&upper);
 
+        // Check if this is "END CASE" before processing pending_end
+        let is_end_case = self.pending_end && upper == "CASE";
+
         if self.pending_end {
-            if !matches!(upper.as_str(), "IF" | "LOOP" | "CASE") {
-                if self.block_depth > 0 {
+            if upper == "CASE" {
+                // END CASE - PL/SQL CASE statement 종료
+                // case_depth가 있으면 감소 (처음 CASE에서 증가시킨 것)
+                if self.case_depth > 0 {
+                    self.case_depth -= 1;
+                }
+            } else if matches!(upper.as_str(), "IF" | "LOOP") {
+                // END IF, END LOOP - 이들은 별도 depth 관리 없음
+            } else {
+                // 일반 END - CASE expression이거나 PL/SQL block
+                if self.case_depth > 0 {
+                    // CASE expression 종료
+                    self.case_depth -= 1;
+                } else if self.block_depth > 0 {
+                    // PL/SQL block 종료
                     self.block_depth -= 1;
                 }
             }
             self.pending_end = false;
+        }
+
+        // Track CASE expressions (in SELECT, expressions, etc.)
+        // CASE starts a CASE expression/statement
+        // END CASE의 CASE는 제외 (is_end_case로 체크)
+        if upper == "CASE" && !is_end_case {
+            self.case_depth += 1;
         }
 
         // Handle TYPE declarations that don't create a block:
@@ -362,10 +389,11 @@ impl SplitState {
                 self.block_depth += 1;
             }
         } else if upper == "END" {
+            // Set pending_end and determine in next token whether this is:
+            // - END CASE (PL/SQL CASE statement)
+            // - END IF / END LOOP
+            // - END (CASE expression or PL/SQL block)
             self.pending_end = true;
-            // Only reset create state when we're at the outermost level (depth will become 0)
-            // Don't reset for nested procedures/functions inside packages
-            // We'll reset in resolve_pending_end_on_terminator if depth becomes 0
         }
 
         self.token.clear();
@@ -373,7 +401,12 @@ impl SplitState {
 
     fn resolve_pending_end_on_terminator(&mut self) {
         if self.pending_end {
-            if self.block_depth > 0 {
+            // END followed by terminator (;) - determine what it closes
+            if self.case_depth > 0 {
+                // CASE expression 종료
+                self.case_depth -= 1;
+            } else if self.block_depth > 0 {
+                // PL/SQL block 종료
                 self.block_depth -= 1;
             }
             // Reset create state when we reach depth 0 (end of CREATE statement)
@@ -386,7 +419,12 @@ impl SplitState {
 
     fn resolve_pending_end_on_eof(&mut self) {
         if self.pending_end {
-            if self.block_depth > 0 {
+            // END at EOF - determine what it closes
+            if self.case_depth > 0 {
+                // CASE expression 종료
+                self.case_depth -= 1;
+            } else if self.block_depth > 0 {
+                // PL/SQL block 종료
                 self.block_depth -= 1;
             }
             // Reset create state when we reach depth 0 (end of CREATE statement)
@@ -5826,5 +5864,88 @@ END;"#;
             stmts[0].contains("bump(a)"),
             "Statement should contain bump(a) call"
         );
+    }
+
+    #[test]
+    fn test_select_with_case_when_expression() {
+        // Test case: SELECT with CASE WHEN ... END expression
+        // The CASE expression END should NOT be treated as a PL/SQL block END
+        let sql = "SELECT CASE WHEN 1=1 THEN 'Y' ELSE 'N' END FROM dual;";
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+        assert!(stmts[0].contains("CASE WHEN"), "Statement should contain CASE WHEN");
+    }
+
+    #[test]
+    fn test_select_with_case_when_as_alias() {
+        // Test case: SELECT with CASE WHEN ... END AS alias
+        let sql = "SELECT CASE WHEN 1=1 THEN 'Y' ELSE 'N' END AS result FROM dual;";
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_select_with_multiple_case_expressions() {
+        // Test case: SELECT with multiple CASE expressions
+        let sql = "SELECT CASE WHEN a=1 THEN 'one' END, CASE WHEN b=2 THEN 'two' END FROM dual;";
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_plsql_block_with_case_expression_select() {
+        // Test case: PL/SQL block containing SELECT with CASE expression
+        // This is the critical case where block_depth could be incorrectly decremented
+        let sql = r#"BEGIN
+  SELECT CASE WHEN 1=1 THEN 'Y' ELSE 'N' END INTO v_result FROM dual;
+  NULL;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement (entire PL/SQL block), got: {:?}", stmts);
+        assert!(stmts[0].contains("NULL"), "Statement should contain NULL (proving block wasn't split)");
+    }
+
+    #[test]
+    fn test_procedure_with_case_expression_in_select() {
+        // Test case: CREATE PROCEDURE with SELECT containing CASE expression
+        let sql = r#"CREATE PROCEDURE test_proc AS
+  v_result VARCHAR2(1);
+BEGIN
+  SELECT CASE WHEN 1=1 THEN 'Y' ELSE 'N' END INTO v_result FROM dual;
+  DBMS_OUTPUT.PUT_LINE(v_result);
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_nested_case_expressions() {
+        // Test case: Nested CASE expressions
+        let sql = "SELECT CASE WHEN a=1 THEN CASE WHEN b=2 THEN 'A' ELSE 'B' END ELSE 'C' END FROM dual;";
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_case_statement_vs_case_expression() {
+        // Test case: PL/SQL CASE statement (with END CASE) vs CASE expression (with just END)
+        let sql = r#"BEGIN
+  -- CASE expression in SELECT
+  SELECT CASE WHEN 1=1 THEN 'Y' END INTO v_val FROM dual;
+  -- CASE statement (PL/SQL control flow)
+  CASE v_val
+    WHEN 'Y' THEN DBMS_OUTPUT.PUT_LINE('Yes');
+    ELSE DBMS_OUTPUT.PUT_LINE('No');
+  END CASE;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
     }
 }
