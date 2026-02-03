@@ -412,8 +412,12 @@ impl SplitState {
             // - END (CASE expression or PL/SQL block)
             self.pending_end = true;
         } else if upper == "COMPOUND" && self.in_create_plsql {
-            // COMPOUND TRIGGER - set flag to track timing points
+            // COMPOUND TRIGGER - set flag to track timing points.
+            // block_depth를 1 증가시켜 COMPOUND TRIGGER 본문의 외부 블록을 추적한다.
+            // 타이밍 포인트(BEFORE/AFTER ... IS)는 depth+1에서 열리고, END <timing> 시 depth로 돌아오며,
+            // 최종 END trigger_name이 depth 1→0으로 내려서 문장을 종료한다.
             self.in_compound_trigger = true;
+            self.block_depth += 1;
         } else if matches!(upper.as_str(), "BEFORE" | "AFTER") && self.in_compound_trigger {
             // BEFORE/AFTER in COMPOUND TRIGGER context - prepare for timing point IS
             self.pending_timing_point_is = true;
@@ -697,6 +701,10 @@ impl StatementBuilder {
                         self.statements.push(trimmed.to_string());
                     }
                     self.current.clear();
+                    // "END name;" 패턴에서 pending_end는 flush_token 내부에서 이미 해제되어
+                    // resolve_pending_end_on_terminator가 reset을 호출하지 못한다.
+                    // 여기서 명시적으로 초기화하여 다음 문장 파싱이 깨끗하게 시작된다.
+                    self.state.reset_create_state();
                 } else {
                     self.current.push(c);
                 }
