@@ -3713,7 +3713,6 @@ impl SqlEditorWidget {
                 if let Some(conn) = conn_opt.as_ref() {
                     if let Err(err) = conn.set_call_timeout(query_timeout) {
                         if script_mode {
-                            SqlEditorWidget::emit_script_lines(&sender, &session, &err.to_string());
                             let result = QueryResult::new_error(&sql_text, &err.to_string());
                             SqlEditorWidget::emit_script_result(
                                 &sender,
@@ -4933,11 +4932,13 @@ impl SqlEditorWidget {
                                 };
                                 let result_success = result.success;
                                 if script_mode {
-                                    SqlEditorWidget::emit_script_lines(
-                                        &sender,
-                                        &session,
-                                        &result.message,
-                                    );
+                                    if result_success {
+                                        SqlEditorWidget::emit_script_lines(
+                                            &sender,
+                                            &session,
+                                            &result.message,
+                                        );
+                                    }
                                     SqlEditorWidget::emit_script_result(
                                         &sender,
                                         &conn_name,
@@ -4992,11 +4993,13 @@ impl SqlEditorWidget {
                                 };
                                 let result_success = result.success;
                                 if script_mode {
-                                    SqlEditorWidget::emit_script_lines(
-                                        &sender,
-                                        &session,
-                                        &result.message,
-                                    );
+                                    if result_success {
+                                        SqlEditorWidget::emit_script_lines(
+                                            &sender,
+                                            &session,
+                                            &result.message,
+                                        );
+                                    }
                                     SqlEditorWidget::emit_script_result(
                                         &sender,
                                         &conn_name,
@@ -5141,11 +5144,6 @@ impl SqlEditorWidget {
                                             err.to_string()
                                         };
                                         if script_mode {
-                                            SqlEditorWidget::emit_script_lines(
-                                                &sender,
-                                                &session,
-                                                &message,
-                                            );
                                             let result =
                                                 QueryResult::new_error(&sql_text, &message);
                                             SqlEditorWidget::emit_script_result(
@@ -5239,11 +5237,13 @@ impl SqlEditorWidget {
                                 }
 
                                 if script_mode {
-                                    SqlEditorWidget::emit_script_lines(
-                                        &sender,
-                                        &session,
-                                        &result.message,
-                                    );
+                                    if result.success {
+                                        SqlEditorWidget::emit_script_lines(
+                                            &sender,
+                                            &session,
+                                            &result.message,
+                                        );
+                                    }
                                     SqlEditorWidget::emit_script_result(
                                         &sender,
                                         &conn_name,
@@ -5852,11 +5852,6 @@ impl SqlEditorWidget {
                                             err.to_string()
                                         };
                                         if script_mode {
-                                            SqlEditorWidget::emit_script_lines(
-                                                &sender,
-                                                &session,
-                                                &message,
-                                            );
                                             let result =
                                                 QueryResult::new_error(&sql_text, &message);
                                             SqlEditorWidget::emit_script_result(
@@ -6012,11 +6007,13 @@ impl SqlEditorWidget {
                                 }
 
                                 if script_mode {
-                                    SqlEditorWidget::emit_script_lines(
-                                        &sender,
-                                        &session,
-                                        &result.message,
-                                    );
+                                    if result.success {
+                                        SqlEditorWidget::emit_script_lines(
+                                            &sender,
+                                            &session,
+                                            &result.message,
+                                        );
+                                    }
                                     SqlEditorWidget::emit_script_result(
                                         &sender,
                                         &conn_name,
@@ -6107,7 +6104,9 @@ impl SqlEditorWidget {
         script_mode: bool,
     ) -> bool {
         if script_mode {
-            SqlEditorWidget::emit_script_lines(sender, session, &message);
+            if success {
+                SqlEditorWidget::emit_script_lines(sender, session, &message);
+            }
             let result = QueryResult {
                 sql: sql.to_string(),
                 columns: vec![],
