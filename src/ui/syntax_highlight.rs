@@ -251,6 +251,73 @@ impl SqlHighlighter {
                 continue;
             }
 
+            // Check for nq-quoted strings: nq'[...]', nq'{...}', etc. (National Character Set)
+            if (byte == b'n' || byte == b'N')
+                && (bytes.get(idx + 1) == Some(&b'q') || bytes.get(idx + 1) == Some(&b'Q'))
+                && bytes.get(idx + 2) == Some(&b'\'')
+            {
+                if let Some(&delimiter) = bytes.get(idx + 3) {
+                    let closing = match delimiter {
+                        b'[' => b']',
+                        b'(' => b')',
+                        b'{' => b'}',
+                        b'<' => b'>',
+                        _ => delimiter,
+                    };
+                    let start = idx;
+                    idx += 4; // Skip nq'[
+                    // Find closing delimiter followed by '
+                    while idx < bytes.len() {
+                        if bytes.get(idx) == Some(&closing)
+                            && bytes.get(idx + 1) == Some(&b'\'')
+                        {
+                            idx += 2; // Include ]'
+                            break;
+                        }
+                        idx += 1;
+                    }
+                    for b in start..idx {
+                        if let Some(style) = styles.get_mut(b) {
+                            *style = STYLE_STRING;
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            // Check for q-quoted strings: q'[...]', q'{...}', etc.
+            if (byte == b'q' || byte == b'Q')
+                && bytes.get(idx + 1) == Some(&b'\'')
+            {
+                if let Some(&delimiter) = bytes.get(idx + 2) {
+                    let closing = match delimiter {
+                        b'[' => b']',
+                        b'(' => b')',
+                        b'{' => b'}',
+                        b'<' => b'>',
+                        _ => delimiter,
+                    };
+                    let start = idx;
+                    idx += 3; // Skip q'[
+                    // Find closing delimiter followed by '
+                    while idx < bytes.len() {
+                        if bytes.get(idx) == Some(&closing)
+                            && bytes.get(idx + 1) == Some(&b'\'')
+                        {
+                            idx += 2; // Include ]'
+                            break;
+                        }
+                        idx += 1;
+                    }
+                    for b in start..idx {
+                        if let Some(style) = styles.get_mut(b) {
+                            *style = STYLE_STRING;
+                        }
+                    }
+                    continue;
+                }
+            }
+
             // Check for string literals ('...')
             if byte == b'\'' {
                 let start = idx;
@@ -489,5 +556,126 @@ mod tests {
         assert!(styles[inside_select_pos..inside_select_pos + 6]
             .chars()
             .all(|c| c == STYLE_KEYWORD));
+    }
+
+    #[test]
+    fn test_q_quote_highlighting() {
+        let highlighter = SqlHighlighter::new();
+        let text = "SELECT q'[test string]' FROM dual";
+        let styles = highlighter.generate_styles(text);
+
+        // "SELECT" (0-5) should be keyword (B)
+        assert!(
+            styles[0..6].chars().all(|c| c == STYLE_KEYWORD),
+            "SELECT should be keyword, got: {}",
+            &styles[0..6]
+        );
+
+        // "q'[test string]'" (7-22) should be string (D)
+        // Find the position of q'[
+        let q_start = text.find("q'[").unwrap();
+        let q_end = text.find("]'").unwrap() + 2;
+        assert!(
+            styles[q_start..q_end].chars().all(|c| c == STYLE_STRING),
+            "q'[...]' should be string style, got: {}",
+            &styles[q_start..q_end]
+        );
+    }
+
+    #[test]
+    fn test_nq_quote_highlighting() {
+        let highlighter = SqlHighlighter::new();
+        let text = "SELECT nq'[national string]' FROM dual";
+        let styles = highlighter.generate_styles(text);
+
+        // "SELECT" should be keyword (B)
+        assert!(
+            styles[0..6].chars().all(|c| c == STYLE_KEYWORD),
+            "SELECT should be keyword"
+        );
+
+        // "nq'[national string]'" should be string (D)
+        let nq_start = text.find("nq'[").unwrap();
+        let nq_end = text.find("]'").unwrap() + 2;
+        assert!(
+            styles[nq_start..nq_end].chars().all(|c| c == STYLE_STRING),
+            "nq'[...]' should be string style, got: {}",
+            &styles[nq_start..nq_end]
+        );
+    }
+
+    #[test]
+    fn test_nq_quote_case_insensitive_highlighting() {
+        let highlighter = SqlHighlighter::new();
+
+        // Test NQ (uppercase)
+        let text1 = "SELECT NQ'[test]' FROM dual";
+        let styles1 = highlighter.generate_styles(text1);
+        let nq_start1 = text1.find("NQ'[").unwrap();
+        let nq_end1 = text1.find("]'").unwrap() + 2;
+        assert!(
+            styles1[nq_start1..nq_end1].chars().all(|c| c == STYLE_STRING),
+            "NQ'[...]' should be string style"
+        );
+
+        // Test Nq (mixed case)
+        let text2 = "SELECT Nq'[test]' FROM dual";
+        let styles2 = highlighter.generate_styles(text2);
+        let nq_start2 = text2.find("Nq'[").unwrap();
+        let nq_end2 = text2.find("]'").unwrap() + 2;
+        assert!(
+            styles2[nq_start2..nq_end2].chars().all(|c| c == STYLE_STRING),
+            "Nq'[...]' should be string style"
+        );
+    }
+
+    #[test]
+    fn test_q_quote_different_delimiters() {
+        let highlighter = SqlHighlighter::new();
+
+        // Test q'(...)'
+        let text1 = "SELECT q'(parentheses)' FROM dual";
+        let styles1 = highlighter.generate_styles(text1);
+        let q_start1 = text1.find("q'(").unwrap();
+        let q_end1 = text1.find(")'").unwrap() + 2;
+        assert!(
+            styles1[q_start1..q_end1].chars().all(|c| c == STYLE_STRING),
+            "q'(...)' should be string style"
+        );
+
+        // Test q'{...}'
+        let text2 = "SELECT q'{braces}' FROM dual";
+        let styles2 = highlighter.generate_styles(text2);
+        let q_start2 = text2.find("q'{").unwrap();
+        let q_end2 = text2.find("}'").unwrap() + 2;
+        assert!(
+            styles2[q_start2..q_end2].chars().all(|c| c == STYLE_STRING),
+            "q'{{...}}' should be string style"
+        );
+
+        // Test q'<...>'
+        let text3 = "SELECT q'<angle>' FROM dual";
+        let styles3 = highlighter.generate_styles(text3);
+        let q_start3 = text3.find("q'<").unwrap();
+        let q_end3 = text3.find(">'").unwrap() + 2;
+        assert!(
+            styles3[q_start3..q_end3].chars().all(|c| c == STYLE_STRING),
+            "q'<...>' should be string style"
+        );
+    }
+
+    #[test]
+    fn test_q_quote_with_embedded_quotes() {
+        let highlighter = SqlHighlighter::new();
+        // q-quoted strings can contain single quotes without escaping
+        let text = "SELECT q'[It's a test]' FROM dual";
+        let styles = highlighter.generate_styles(text);
+
+        let q_start = text.find("q'[").unwrap();
+        let q_end = text.find("]'").unwrap() + 2;
+        assert!(
+            styles[q_start..q_end].chars().all(|c| c == STYLE_STRING),
+            "q'[...]' with embedded quote should be string style"
+        );
     }
 }
