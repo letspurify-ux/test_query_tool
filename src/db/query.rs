@@ -1959,9 +1959,43 @@ impl QueryExecutor {
         value[start + 1..end].trim().parse::<u8>().ok()
     }
 
+    /// Check if the SQL is a CREATE [OR REPLACE] TRIGGER statement.
+    /// Used to skip :NEW and :OLD pseudo-records from bind scanning.
+    fn is_create_trigger(sql: &str) -> bool {
+        let cleaned = Self::strip_leading_comments(sql);
+        let upper = cleaned.to_uppercase();
+        let tokens: Vec<&str> = upper.split_whitespace().collect();
+
+        // Match patterns:
+        // CREATE TRIGGER ...
+        // CREATE OR REPLACE TRIGGER ...
+        // CREATE OR REPLACE EDITIONABLE TRIGGER ...
+        // CREATE OR REPLACE NONEDITIONABLE TRIGGER ...
+        // CREATE EDITIONABLE TRIGGER ...
+        // CREATE NONEDITIONABLE TRIGGER ...
+        if tokens.is_empty() {
+            return false;
+        }
+        if tokens[0] != "CREATE" {
+            return false;
+        }
+
+        for token in tokens.iter().skip(1) {
+            match *token {
+                "OR" | "REPLACE" | "EDITIONABLE" | "NONEDITIONABLE" => continue,
+                "TRIGGER" => return true,
+                _ => return false,
+            }
+        }
+        false
+    }
+
     fn extract_bind_names(sql: &str) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
+
+        // In CREATE TRIGGER statements, :NEW and :OLD are pseudo-records, not bind variables
+        let is_trigger = Self::is_create_trigger(sql);
 
         let mut in_single_quote = false;
         let mut in_double_quote = false;
@@ -2113,6 +2147,16 @@ impl QueryExecutor {
                         }
                         let name = chars[i + 1..j].iter().collect::<String>();
                         let normalized = SessionState::normalize_name(&name);
+
+                        // In CREATE TRIGGER, skip :NEW and :OLD pseudo-records
+                        if is_trigger {
+                            let upper_name = normalized.to_uppercase();
+                            if upper_name == "NEW" || upper_name == "OLD" {
+                                i = j;
+                                continue;
+                            }
+                        }
+
                         if seen.insert(normalized.clone()) {
                             names.push(normalized);
                         }
@@ -6250,5 +6294,228 @@ END test_compound_trg;"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_create_view_with_subqueries_and_like_patterns() {
+        // CREATE VIEW with:
+        // - Subqueries in CASE WHEN (SELECT ... IN (subquery))
+        // - Scalar subquery with COUNT(*)
+        // - LIKE patterns containing ';', 'END;', '/ ' (could be misinterpreted)
+        // - Multiple nested parentheses and IN clauses
+        let sql = r#"CREATE OR REPLACE VIEW oqt_nm_v AS
+SELECT
+  t.id,
+  t.grp,
+  CASE
+    WHEN t.id IN (SELECT id FROM oqt_nm_t WHERE id <= 9) THEN 'IN'
+    ELSE 'OUT'
+  END AS flag,
+  (SELECT COUNT(*)
+     FROM oqt_nm_t x
+    WHERE x.grp=t.grp
+      AND (x.payload LIKE '%;%' OR x.payload LIKE '%END;%' OR x.payload LIKE '%/ %')
+  ) AS cnt_like
+FROM oqt_nm_t t
+WHERE (t.id BETWEEN 1 AND 999999)
+  AND ( (t.grp IN ('G0','G1','G2')) OR (t.grp IN ('G3','G4','G5','G6')) );"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+        assert!(stmts[0].starts_with("CREATE OR REPLACE VIEW"));
+        assert!(stmts[0].contains("cnt_like"));
+    }
+
+    #[test]
+    fn test_create_view_without_trailing_semicolon() {
+        // Same CREATE VIEW but without trailing semicolon
+        let sql = r#"CREATE OR REPLACE VIEW oqt_nm_v AS
+SELECT
+  t.id,
+  t.grp,
+  CASE
+    WHEN t.id IN (SELECT id FROM oqt_nm_t WHERE id <= 9) THEN 'IN'
+    ELSE 'OUT'
+  END AS flag,
+  (SELECT COUNT(*)
+     FROM oqt_nm_t x
+    WHERE x.grp=t.grp
+      AND (x.payload LIKE '%;%' OR x.payload LIKE '%END;%' OR x.payload LIKE '%/ %')
+  ) AS cnt_like
+FROM oqt_nm_t t
+WHERE (t.id BETWEEN 1 AND 999999)
+  AND ( (t.grp IN ('G0','G1','G2')) OR (t.grp IN ('G3','G4','G5','G6')) )"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+        assert!(stmts[0].starts_with("CREATE OR REPLACE VIEW"));
+        assert!(stmts[0].contains("cnt_like"));
+    }
+
+    #[test]
+    fn test_create_view_followed_by_another_statement() {
+        // CREATE VIEW followed by another statement
+        let sql = r#"CREATE OR REPLACE VIEW oqt_nm_v AS
+SELECT
+  t.id,
+  t.grp,
+  CASE
+    WHEN t.id IN (SELECT id FROM oqt_nm_t WHERE id <= 9) THEN 'IN'
+    ELSE 'OUT'
+  END AS flag,
+  (SELECT COUNT(*)
+     FROM oqt_nm_t x
+    WHERE x.grp=t.grp
+      AND (x.payload LIKE '%;%' OR x.payload LIKE '%END;%' OR x.payload LIKE '%/ %')
+  ) AS cnt_like
+FROM oqt_nm_t t
+WHERE (t.id BETWEEN 1 AND 999999)
+  AND ( (t.grp IN ('G0','G1','G2')) OR (t.grp IN ('G3','G4','G5','G6')) );
+
+SELECT * FROM oqt_nm_v;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 2, "Should have 2 statements, got: {:?}", stmts);
+        assert!(stmts[0].starts_with("CREATE OR REPLACE VIEW"));
+        assert!(stmts[0].contains("cnt_like"));
+        assert!(stmts[1].contains("SELECT * FROM oqt_nm_v"));
+    }
+
+    #[test]
+    fn test_create_view_with_slash_terminator() {
+        // CREATE VIEW terminated by "/" instead of ";"
+        let sql = r#"CREATE OR REPLACE VIEW oqt_nm_v AS
+SELECT
+  t.id,
+  t.grp,
+  CASE
+    WHEN t.id IN (SELECT id FROM oqt_nm_t WHERE id <= 9) THEN 'IN'
+    ELSE 'OUT'
+  END AS flag,
+  (SELECT COUNT(*)
+     FROM oqt_nm_t x
+    WHERE x.grp=t.grp
+      AND (x.payload LIKE '%;%' OR x.payload LIKE '%END;%' OR x.payload LIKE '%/ %')
+  ) AS cnt_like
+FROM oqt_nm_t t
+WHERE (t.id BETWEEN 1 AND 999999)
+  AND ( (t.grp IN ('G0','G1','G2')) OR (t.grp IN ('G3','G4','G5','G6')) )
+/
+
+SELECT * FROM oqt_nm_v;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 2, "Should have 2 statements, got: {:?}", stmts);
+        assert!(stmts[0].starts_with("CREATE OR REPLACE VIEW"));
+        assert!(stmts[0].contains("cnt_like"));
+        assert!(stmts[1].contains("SELECT * FROM oqt_nm_v"));
+    }
+
+    #[test]
+    fn test_extract_bind_names_skips_new_old_in_trigger() {
+        // CREATE TRIGGER should NOT extract :NEW and :OLD as bind variables
+        let sql = r#"CREATE OR REPLACE TRIGGER test_trg
+BEFORE INSERT ON test_table
+FOR EACH ROW
+BEGIN
+  :NEW.created_at := SYSDATE;
+  :NEW.created_by := :user_id;
+  IF :OLD.status IS NOT NULL THEN
+    :NEW.modified_at := SYSDATE;
+  END IF;
+END;"#;
+        let names = QueryExecutor::extract_bind_names(sql);
+        // :NEW and :OLD should be skipped, only :user_id should be extracted
+        assert_eq!(names.len(), 1, "Should have 1 bind variable, got: {:?}", names);
+        assert!(
+            names.iter().any(|n| n.to_uppercase() == "USER_ID"),
+            "Should contain USER_ID, got: {:?}",
+            names
+        );
+        assert!(
+            !names.iter().any(|n| n.to_uppercase() == "NEW"),
+            "Should NOT contain NEW, got: {:?}",
+            names
+        );
+        assert!(
+            !names.iter().any(|n| n.to_uppercase() == "OLD"),
+            "Should NOT contain OLD, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_extract_bind_names_normal_plsql_includes_new_old() {
+        // Regular PL/SQL block (not CREATE TRIGGER) should extract :NEW and :OLD as bind variables
+        let sql = r#"BEGIN
+  :NEW := 'test';
+  :OLD := 'old_value';
+END;"#;
+        let names = QueryExecutor::extract_bind_names(sql);
+        // Both :NEW and :OLD should be extracted as they are regular bind variables here
+        assert_eq!(names.len(), 2, "Should have 2 bind variables, got: {:?}", names);
+        assert!(
+            names.iter().any(|n| n.to_uppercase() == "NEW"),
+            "Should contain NEW, got: {:?}",
+            names
+        );
+        assert!(
+            names.iter().any(|n| n.to_uppercase() == "OLD"),
+            "Should contain OLD, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_is_create_trigger() {
+        // Positive cases
+        assert!(QueryExecutor::is_create_trigger("CREATE TRIGGER trg_test BEFORE INSERT"));
+        assert!(QueryExecutor::is_create_trigger("CREATE OR REPLACE TRIGGER trg_test"));
+        assert!(QueryExecutor::is_create_trigger("create or replace trigger trg_test"));
+        assert!(QueryExecutor::is_create_trigger("CREATE EDITIONABLE TRIGGER trg_test"));
+        assert!(QueryExecutor::is_create_trigger("CREATE OR REPLACE EDITIONABLE TRIGGER trg_test"));
+        assert!(QueryExecutor::is_create_trigger("CREATE NONEDITIONABLE TRIGGER trg_test"));
+        assert!(QueryExecutor::is_create_trigger(
+            "  -- comment\n  CREATE OR REPLACE TRIGGER trg_test"
+        ));
+        assert!(QueryExecutor::is_create_trigger(
+            "/* block comment */ CREATE TRIGGER trg_test"
+        ));
+
+        // Negative cases
+        assert!(!QueryExecutor::is_create_trigger("CREATE PROCEDURE proc_test"));
+        assert!(!QueryExecutor::is_create_trigger("CREATE FUNCTION func_test"));
+        assert!(!QueryExecutor::is_create_trigger("CREATE PACKAGE pkg_test"));
+        assert!(!QueryExecutor::is_create_trigger("CREATE TABLE tbl_test"));
+        assert!(!QueryExecutor::is_create_trigger("SELECT * FROM dual"));
+        assert!(!QueryExecutor::is_create_trigger("BEGIN :NEW := 1; END;"));
+    }
+
+    #[test]
+    fn test_compound_trigger_skips_new_old() {
+        // COMPOUND TRIGGER should also skip :NEW and :OLD
+        let sql = r#"CREATE OR REPLACE TRIGGER test_compound_trg
+FOR UPDATE ON test_table
+COMPOUND TRIGGER
+  AFTER EACH ROW IS
+  BEGIN
+    IF :NEW.status = 'ACTIVE' THEN
+      INSERT INTO audit_table VALUES (:NEW.id, :audit_user, SYSDATE);
+    END IF;
+  END AFTER EACH ROW;
+END test_compound_trg;"#;
+        let names = QueryExecutor::extract_bind_names(sql);
+        // Only :audit_user should be extracted
+        assert_eq!(names.len(), 1, "Should have 1 bind variable, got: {:?}", names);
+        assert!(
+            names.iter().any(|n| n.to_uppercase() == "AUDIT_USER"),
+            "Should contain AUDIT_USER, got: {:?}",
+            names
+        );
+        assert!(
+            !names.iter().any(|n| n.to_uppercase() == "NEW"),
+            "Should NOT contain NEW, got: {:?}",
+            names
+        );
     }
 }
