@@ -554,6 +554,7 @@ impl MainWindow {
                         let lines: Vec<String> =
                             result.message.lines().map(|l| l.to_string()).collect();
                         s.result_tabs.append_script_output_lines(&lines);
+                        s.result_tabs.select_script_output();
                     }
                     if result.is_select {
                         s.result_tabs.finish_streaming(tab_index);
