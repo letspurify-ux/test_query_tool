@@ -50,6 +50,15 @@ pub struct AppState {
     pub window: Window,
     pub right_flex: Flex,
     pub query_split_adjusted: Rc<Cell<bool>>,
+    pub connection_info: Rc<RefCell<Option<crate::db::ConnectionInfo>>>,
+}
+
+/// 접속 정보를 상태 표시줄 메시지 끝에 붙는 헬퍼
+fn format_status(msg: &str, conn_info: &Option<crate::db::ConnectionInfo>) -> String {
+    match conn_info {
+        Some(info) => format!("{} | {}", msg, info.display_string()),
+        None => msg.to_string(),
+    }
 }
 
 pub struct MainWindow {
@@ -255,7 +264,7 @@ impl MainWindow {
         content_flex.end();
         main_flex.resizable(&content_flex);
 
-        let mut status_bar = Frame::default().with_label("Not connected | Ctrl+Space for autocomplete");
+        let mut status_bar = Frame::default().with_label("Not connected");
         status_bar.set_frame(FrameType::FlatBox);
         status_bar.set_color(theme::accent());
         status_bar.set_label_color(theme::text_primary());
@@ -292,6 +301,7 @@ impl MainWindow {
             window,
             right_flex: right_flex.clone(),
             query_split_adjusted: query_split_adjusted.clone(),
+            connection_info: Rc::new(RefCell::new(None)),
         }));
 
         {
@@ -349,17 +359,27 @@ impl MainWindow {
         state_borrow.sql_editor.set_execute_callback(move |query_result| {
             let mut s = state_for_execute.borrow_mut();
             *s.last_result.borrow_mut() = Some(query_result.clone());
-            let status_text = format!(
-                "{} | Time: {:.3}s",
-                query_result.message,
-                query_result.execution_time.as_secs_f64()
-            );
-            s.status_bar.set_label(&status_text);
+            let conn_info = s.connection_info.borrow().clone();
+            let base_msg = if query_result.success {
+                format!(
+                    "{} | Time: {:.3}s",
+                    query_result.message,
+                    query_result.execution_time.as_secs_f64()
+                )
+            } else {
+                format!(
+                    "Error | Time: {:.3}s",
+                    query_result.execution_time.as_secs_f64()
+                )
+            };
+            s.status_bar.set_label(&format_status(&base_msg, &conn_info));
         });
 
         let state_for_status = state.clone();
         state_borrow.sql_editor.set_status_callback(move |message| {
-            state_for_status.borrow_mut().status_bar.set_label(message);
+            let mut s = state_for_status.borrow_mut();
+            let conn_info = s.connection_info.borrow().clone();
+            s.status_bar.set_label(&format_status(message, &conn_info));
         });
 
         let state_for_find = state.clone();
@@ -464,13 +484,15 @@ impl MainWindow {
                     s.result_tabs
                         .start_statement(tab_index, &format!("Result {}", tab_index + 1));
                     s.fetch_row_counts.remove(&index);
-                    s.status_bar.set_label("Executing query...");
+                    let conn_info = s.connection_info.borrow().clone();
+                    s.status_bar.set_label(&format_status("Executing query...", &conn_info));
                 }
                 QueryProgress::SelectStart { index, columns } => {
                     let tab_index = s.result_tab_offset + index;
                     s.result_tabs.start_streaming(tab_index, &columns);
                     s.fetch_row_counts.insert(index, 0);
-                    s.status_bar.set_label("Fetching rows: 0");
+                    let conn_info = s.connection_info.borrow().clone();
+                    s.status_bar.set_label(&format_status("Fetching rows: 0", &conn_info));
                 }
                 QueryProgress::Rows { index, rows } => {
                     let tab_index = s.result_tab_offset + index;
@@ -481,8 +503,9 @@ impl MainWindow {
                         *count += rows_len;
                         *count
                     };
+                    let conn_info = s.connection_info.borrow().clone();
                     s.status_bar
-                        .set_label(&format!("Fetching rows: {}", new_count));
+                        .set_label(&format_status(&format!("Fetching rows: {}", new_count), &conn_info));
                 }
                 QueryProgress::ScriptOutput { lines } => {
                     s.result_tabs.append_script_output_lines(&lines);
@@ -503,12 +526,14 @@ impl MainWindow {
                     } else {
                         "Auto-commit disabled"
                     };
-                    s.status_bar.set_label(status);
+                    let conn_info = s.connection_info.borrow().clone();
+                    s.status_bar.set_label(&format_status(status, &conn_info));
                 }
                 QueryProgress::ConnectionChanged { info } => {
                     if let Some(info) = info {
+                        *s.connection_info.borrow_mut() = Some(info.clone());
                         s.status_bar.set_label(&format!(
-                            "Connected: {} | Ctrl+Space for autocomplete",
+                            "Connected | {}",
                             info.display_string()
                         ));
                         s.object_browser.refresh();
@@ -538,8 +563,8 @@ impl MainWindow {
                             }
                         });
                     } else {
-                        s.status_bar
-                            .set_label("Disconnected | Ctrl+Space for autocomplete");
+                        *s.connection_info.borrow_mut() = None;
+                        s.status_bar.set_label("Disconnected");
                         *s.sql_editor.get_intellisense_data().borrow_mut() =
                             IntellisenseData::new();
                         s.sql_editor
@@ -631,7 +656,11 @@ impl MainWindow {
                             let mut s = state.borrow_mut();
                             match result {
                                 ConnectionResult::Success(info) => {
-                                    s.status_bar.set_label(&format!("Connected: {} | Ctrl+Space for autocomplete", info.display_string()));
+                                    *s.connection_info.borrow_mut() = Some(info.clone());
+                                    s.status_bar.set_label(&format!(
+                                        "Connected | {}",
+                                        info.display_string()
+                                    ));
                                     s.object_browser.refresh();
                                     s.sql_editor.focus();
 
@@ -666,7 +695,10 @@ impl MainWindow {
                                 }
                                 ConnectionResult::Failure(err) => {
                                     s.status_bar.set_label("Connection failed");
-                                    fltk::dialog::alert_default(&format!("Connection failed: {}", err));
+                                    s.result_tabs.append_script_output_lines(
+                                        &[format!("Connection failed: {}", err)],
+                                    );
+                                    s.result_tabs.select_script_output();
                                 }
                             }
                         }
@@ -714,8 +746,11 @@ impl MainWindow {
                                             "Oracle Query Tool - {}",
                                             file_label
                                         ));
-                                        s.status_bar
-                                            .set_label(&format!("Saved {}", file_label));
+                                        let conn_info = s.connection_info.borrow().clone();
+                                        s.status_bar.set_label(&format_status(
+                                            &format!("Saved {}", file_label),
+                                            &conn_info,
+                                        ));
                                     }
                                     Err(err) => {
                                         fltk::dialog::alert_default(&format!(
@@ -732,9 +767,10 @@ impl MainWindow {
                                     Ok(()) => {
                                         let file_label =
                                             path.file_name().unwrap_or_default().to_string_lossy();
-                                        s.status_bar.set_label(&format!(
-                                            "Exported {} rows to {}",
-                                            row_count, file_label
+                                        let conn_info = s.connection_info.borrow().clone();
+                                        s.status_bar.set_label(&format_status(
+                                            &format!("Exported {} rows to {}", row_count, file_label),
+                                            &conn_info,
                                         ));
                                     }
                                     Err(err) => {
@@ -800,7 +836,7 @@ impl MainWindow {
                                 let conn_sender = conn_sender.clone();
                                 {
                                     let mut s = state_for_menu.borrow_mut();
-                                    s.status_bar.set_label(&format!("Connecting: {}...", info.display_string()));
+                                    s.status_bar.set_label(&format!("Connecting to {}...", info.display_string()));
                                 }
                                 thread::spawn(move || {
                                     let mut db_conn = lock_connection(&connection);
@@ -822,9 +858,10 @@ impl MainWindow {
                             let mut db_conn = lock_connection(&connection);
                             db_conn.disconnect();
                             drop(db_conn);
-                            
+
                             let mut s = state_for_menu.borrow_mut();
-                            s.status_bar.set_label("Disconnected | Ctrl+Space for autocomplete");
+                            *s.connection_info.borrow_mut() = None;
+                            s.status_bar.set_label("Disconnected");
                             *s.sql_editor.get_intellisense_data().borrow_mut() = IntellisenseData::new();
                             s.sql_editor.get_highlighter().borrow_mut().set_highlight_data(HighlightData::new());
                         }
@@ -894,10 +931,17 @@ impl MainWindow {
 
                             if focus_in_results {
                                 let cell_count = s.result_tabs.copy();
+                                let conn_info = s.connection_info.borrow().clone();
                                 if cell_count > 0 {
-                                    s.status_bar.set_label(&format!("Copied {} cells to clipboard", cell_count));
+                                    s.status_bar.set_label(&format_status(
+                                        &format!("Copied {} cells to clipboard", cell_count),
+                                        &conn_info,
+                                    ));
                                 } else {
-                                    s.status_bar.set_label("No cells selected to copy");
+                                    s.status_bar.set_label(&format_status(
+                                        "No cells selected to copy",
+                                        &conn_info,
+                                    ));
                                 }
                             } else {
                                 s.sql_editor.get_editor().copy();
@@ -915,7 +959,11 @@ impl MainWindow {
 
                             if focus_in_results {
                                 s.result_tabs.copy_with_headers();
-                                s.status_bar.set_label("Copied selection with headers");
+                                let conn_info = s.connection_info.borrow().clone();
+                                s.status_bar.set_label(&format_status(
+                                    "Copied selection with headers",
+                                    &conn_info,
+                                ));
                             } else {
                                 s.sql_editor.get_editor().copy();
                             }
@@ -1060,7 +1108,9 @@ impl MainWindow {
                                 let mut connection = lock_connection(&s.connection);
                                 connection.set_auto_commit(enabled);
                             }
-                            state_for_menu.borrow_mut().status_bar.set_label(status);
+                            let mut s = state_for_menu.borrow_mut();
+                            let conn_info = s.connection_info.borrow().clone();
+                            s.status_bar.set_label(&format_status(status, &conn_info));
                         }
                         _ => {}
                     }

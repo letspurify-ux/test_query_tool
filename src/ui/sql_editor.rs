@@ -498,10 +498,10 @@ impl SqlEditorWidget {
                                 SqlEditorWidget::show_plan_dialog(&plan_text);
                             }
                             Err(err) => {
-                                fltk::dialog::alert_default(&format!(
-                                    "Failed to explain plan: {}",
-                                    err
-                                ));
+                                let _ = widget.progress_sender.send(QueryProgress::ScriptOutput {
+                                    lines: vec![format!("Explain plan failed: {}", err)],
+                                });
+                                widget.emit_status("Explain plan failed");
                             }
                         },
                         UiActionResult::QuickDescribe {
@@ -538,12 +538,10 @@ impl SqlEditorWidget {
                                 widget.emit_status("Committed");
                             }
                             Err(err) => {
-                                fltk::dialog::alert_default(&format!("Commit failed: {}", err));
-                                if err.contains("Not connected") {
-                                    widget.emit_status("Commit failed: not connected");
-                                } else {
-                                    widget.emit_status("Commit failed");
-                                }
+                                let _ = widget.progress_sender.send(QueryProgress::ScriptOutput {
+                                    lines: vec![format!("Commit failed: {}", err)],
+                                });
+                                widget.emit_status("Commit failed");
                             }
                         },
                         UiActionResult::Rollback(result) => match result {
@@ -551,17 +549,18 @@ impl SqlEditorWidget {
                                 widget.emit_status("Rolled back");
                             }
                             Err(err) => {
-                                fltk::dialog::alert_default(&format!("Rollback failed: {}", err));
-                                if err.contains("Not connected") {
-                                    widget.emit_status("Rollback failed: not connected");
-                                } else {
-                                    widget.emit_status("Rollback failed");
-                                }
+                                let _ = widget.progress_sender.send(QueryProgress::ScriptOutput {
+                                    lines: vec![format!("Rollback failed: {}", err)],
+                                });
+                                widget.emit_status("Rollback failed");
                             }
                         },
                         UiActionResult::Cancel(result) => {
                             if let Err(err) = result {
-                                fltk::dialog::alert_default(&format!("Cancel failed: {}", err));
+                                let _ = widget.progress_sender.send(QueryProgress::ScriptOutput {
+                                    lines: vec![format!("Cancel failed: {}", err)],
+                                });
+                                widget.emit_status("Cancel failed");
                             }
                         }
                     },
