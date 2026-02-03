@@ -42,8 +42,8 @@ impl ConnectionInfo {
 
     pub fn display_string(&self) -> String {
         format!(
-            "{}@{}:{}/{}",
-            self.username, self.host, self.port, self.service_name
+            "{} ({}@{})",
+            self.name, self.username, self.service_name
         )
     }
 }
