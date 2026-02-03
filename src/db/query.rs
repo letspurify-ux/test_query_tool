@@ -672,6 +672,25 @@ impl StatementBuilder {
                 continue;
             }
 
+            // Handle nq'[...]' (National Character q-quoted strings)
+            if (c == 'n' || c == 'N')
+                && (next == Some('q') || next == Some('Q'))
+                && i + 2 < len
+                && chars[i + 2] == '\''
+            {
+                if let Some(&delimiter) = chars.get(i + 3) {
+                    self.state.flush_token();
+                    self.state.start_q_quote(delimiter);
+                    self.current.push(c);
+                    self.current.push(chars[i + 1]);
+                    self.current.push('\'');
+                    self.current.push(delimiter);
+                    i += 4;
+                    continue;
+                }
+            }
+
+            // Handle q'[...]' (q-quoted strings)
             if (c == 'q' || c == 'Q') && next == Some('\'') {
                 if let Some(delimiter) = next2 {
                     self.state.flush_token();
@@ -2161,6 +2180,27 @@ impl QueryExecutor {
                 continue;
             }
 
+            // Handle nq'[...]' (National Character q-quoted strings)
+            if (c == 'n' || c == 'N')
+                && (next == Some('q') || next == Some('Q'))
+                && i + 2 < len
+                && chars[i + 2] == '\''
+            {
+                if let Some(&delimiter) = chars.get(i + 3) {
+                    in_q_quote = true;
+                    q_quote_end = Some(match delimiter {
+                        '[' => ']',
+                        '(' => ')',
+                        '{' => '}',
+                        '<' => '>',
+                        other => other,
+                    });
+                    i += 4;
+                    continue;
+                }
+            }
+
+            // Handle q'[...]' (q-quoted strings)
             if (c == 'q' || c == 'Q') && next == Some('\'') {
                 if let Some(delimiter) = next2 {
                     in_q_quote = true;
@@ -2511,6 +2551,27 @@ impl QueryExecutor {
                 continue;
             }
 
+            // Handle nq'[...]' (National Character q-quoted strings)
+            if (c == 'n' || c == 'N')
+                && (next == Some('q') || next == Some('Q'))
+                && i + 2 < len
+                && chars[i + 2] == '\''
+            {
+                if let Some(&delimiter) = chars.get(i + 3) {
+                    in_q_quote = true;
+                    q_quote_end = Some(match delimiter {
+                        '[' => ']',
+                        '(' => ')',
+                        '{' => '}',
+                        '<' => '>',
+                        other => other,
+                    });
+                    i += 4;
+                    continue;
+                }
+            }
+
+            // Handle q'[...]' (q-quoted strings)
             if (c == 'q' || c == 'Q') && next == Some('\'') {
                 if let Some(delimiter) = next2 {
                     in_q_quote = true;
@@ -2632,6 +2693,31 @@ impl QueryExecutor {
                 continue;
             }
 
+            // Handle nq'[...]' (National Character q-quoted strings)
+            if (c == 'n' || c == 'N')
+                && (next == Some('q') || next == Some('Q'))
+                && i + 2 < len
+                && chars[i + 2] == '\''
+            {
+                if let Some(&delimiter) = chars.get(i + 3) {
+                    in_q_quote = true;
+                    q_quote_end = Some(match delimiter {
+                        '[' => ']',
+                        '(' => ')',
+                        '{' => '}',
+                        '<' => '>',
+                        other => other,
+                    });
+                    current.push(c);
+                    current.push(chars[i + 1]);
+                    current.push('\'');
+                    current.push(delimiter);
+                    i += 4;
+                    continue;
+                }
+            }
+
+            // Handle q'[...]' (q-quoted strings)
             if (c == 'q' || c == 'Q') && next == Some('\'') {
                 if let Some(delimiter) = next2 {
                     in_q_quote = true;
@@ -2756,6 +2842,27 @@ impl QueryExecutor {
                 continue;
             }
 
+            // Handle nq'[...]' (National Character q-quoted strings)
+            if (c == 'n' || c == 'N')
+                && (next == Some('q') || next == Some('Q'))
+                && i + 2 < len
+                && chars[i + 2] == '\''
+            {
+                if let Some(&delimiter) = chars.get(i + 3) {
+                    in_q_quote = true;
+                    q_quote_end = Some(match delimiter {
+                        '[' => ']',
+                        '(' => ')',
+                        '{' => '}',
+                        '<' => '>',
+                        other => other,
+                    });
+                    i += 4;
+                    continue;
+                }
+            }
+
+            // Handle q'[...]' (q-quoted strings)
             if (c == 'q' || c == 'Q') && next == Some('\'') {
                 if let Some(delimiter) = next2 {
                     in_q_quote = true;
@@ -6663,5 +6770,148 @@ END;"#;
         assert!(statements[0].contains("CREATE OR REPLACE TRIGGER oqt_nm_trg"));
         assert!(statements[0].contains("DECLARE"));
         assert!(statements[0].contains("END"));
+    }
+
+    #[test]
+    fn test_nq_quote_string_parsing() {
+        // Test nq'[...]' (National Character q-quoted string) parsing
+        let sql = r#"SELECT nq'[한글 문자열]' FROM dual;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement, got: {:?}", statements);
+        assert!(
+            statements[0].contains("nq'[한글 문자열]'"),
+            "Statement should contain nq'[...]', got: {}",
+            statements[0]
+        );
+    }
+
+    #[test]
+    fn test_nq_quote_with_semicolon_inside() {
+        // Test that semicolons inside nq'...' don't split the statement
+        let sql = r#"SELECT nq'[text with ; semicolon]' FROM dual;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement, got: {:?}", statements);
+        assert!(
+            statements[0].contains("nq'[text with ; semicolon]'"),
+            "Statement should preserve semicolon inside nq'...', got: {}",
+            statements[0]
+        );
+    }
+
+    #[test]
+    fn test_nq_quote_different_delimiters() {
+        // Test nq'...' with different delimiters: (), {}, <>
+        let sql1 = r#"SELECT nq'(parentheses)' FROM dual"#;
+        let sql2 = r#"SELECT nq'{braces}' FROM dual"#;
+        let sql3 = r#"SELECT nq'<angle brackets>' FROM dual"#;
+        let sql4 = r#"SELECT Nq'!custom delimiter!' FROM dual"#;
+
+        let items1 = QueryExecutor::split_script_items(sql1);
+        let items2 = QueryExecutor::split_script_items(sql2);
+        let items3 = QueryExecutor::split_script_items(sql3);
+        let items4 = QueryExecutor::split_script_items(sql4);
+
+        assert_eq!(items1.len(), 1, "nq'(...)' should parse as 1 statement");
+        assert_eq!(items2.len(), 1, "nq'{{...}}' should parse as 1 statement");
+        assert_eq!(items3.len(), 1, "nq'<...>' should parse as 1 statement");
+        assert_eq!(items4.len(), 1, "Nq'!...!' should parse as 1 statement");
+    }
+
+    #[test]
+    fn test_nq_quote_case_insensitive() {
+        // Test that NQ, Nq, nQ, nq all work
+        let sql1 = r#"SELECT nq'[lower]' FROM dual"#;
+        let sql2 = r#"SELECT NQ'[upper]' FROM dual"#;
+        let sql3 = r#"SELECT Nq'[mixed1]' FROM dual"#;
+        let sql4 = r#"SELECT nQ'[mixed2]' FROM dual"#;
+
+        let items1 = QueryExecutor::split_script_items(sql1);
+        let items2 = QueryExecutor::split_script_items(sql2);
+        let items3 = QueryExecutor::split_script_items(sql3);
+        let items4 = QueryExecutor::split_script_items(sql4);
+
+        assert_eq!(items1.len(), 1, "nq'...' should parse correctly");
+        assert_eq!(items2.len(), 1, "NQ'...' should parse correctly");
+        assert_eq!(items3.len(), 1, "Nq'...' should parse correctly");
+        assert_eq!(items4.len(), 1, "nQ'...' should parse correctly");
+    }
+
+    #[test]
+    fn test_nq_quote_in_plsql_block() {
+        // Test nq'...' inside PL/SQL block
+        let sql = r#"DECLARE
+    v_text VARCHAR2(100);
+BEGIN
+    v_text := nq'[Hello; World; End;]';
+    DBMS_OUTPUT.PUT_LINE(v_text);
+END;"#;
+
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 PL/SQL block, got: {:?}", statements);
+        assert!(
+            statements[0].contains("nq'[Hello; World; End;]'"),
+            "PL/SQL block should contain nq'...' string intact"
+        );
+    }
+
+    #[test]
+    fn test_nq_quote_mixed_with_q_quote() {
+        // Test both nq'...' and q'...' in same statement
+        let sql = r#"SELECT q'[regular q-quote]', nq'[national q-quote]' FROM dual;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement with both q'...' and nq'...'");
+        assert!(statements[0].contains("q'[regular q-quote]'"));
+        assert!(statements[0].contains("nq'[national q-quote]'"));
+    }
+
+    #[test]
+    fn test_nq_quote_bind_variable_extraction() {
+        // Test that bind variables inside nq'...' are NOT extracted
+        let sql = r#"SELECT nq'[:not_a_bind]', :real_bind FROM dual"#;
+        let names = QueryExecutor::extract_bind_names(sql);
+
+        assert_eq!(names.len(), 1, "Should have 1 bind variable, got: {:?}", names);
+        assert!(
+            names.iter().any(|n| n.to_uppercase() == "REAL_BIND"),
+            "Should contain REAL_BIND, got: {:?}",
+            names
+        );
+        assert!(
+            !names.iter().any(|n| n.to_uppercase() == "NOT_A_BIND"),
+            "Should NOT contain NOT_A_BIND (inside nq'...'), got: {:?}",
+            names
+        );
     }
 }

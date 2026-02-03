@@ -37,7 +37,7 @@ use crate::ui::syntax_highlight::{
 };
 use crate::ui::theme;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum SqlToken {
     Word(String),
     String(String),
@@ -3616,6 +3616,32 @@ impl SqlEditorWidget {
                 continue;
             }
 
+            // Handle nq-quoted strings: nq'[...]', nq'{...}', etc. (National Character Set)
+            if (c == 'n' || c == 'N')
+                && (next == Some('q') || next == Some('Q'))
+                && i + 2 < chars.len()
+                && chars[i + 2] == '\''
+                && i + 3 < chars.len()
+            {
+                let delimiter = chars[i + 3];
+                let closing = match delimiter {
+                    '[' => ']',
+                    '{' => '}',
+                    '(' => ')',
+                    '<' => '>',
+                    _ => delimiter,
+                };
+                flush_word(&mut current, &mut tokens);
+                current.push(c);
+                current.push(chars[i + 1]);
+                current.push('\'');
+                current.push(delimiter);
+                in_q_quote = true;
+                q_quote_end = Some(closing);
+                i += 4;
+                continue;
+            }
+
             // Handle q-quoted strings: q'[...]', q'{...}', q'(...)', q'<...>', q'!...!'
             if (c == 'q' || c == 'Q') && next == Some('\'') && i + 2 < chars.len() {
                 let delimiter = chars[i + 2];
@@ -6612,6 +6638,32 @@ impl SqlEditorWidget {
                 continue;
             }
 
+            // Handle nq'[...]' (National Character q-quoted strings)
+            if (c == 'n' || c == 'N')
+                && (next == Some('q') || next == Some('Q'))
+                && i + 2 < len
+                && chars[i + 2] == '\''
+                && i + 3 < len
+            {
+                let delimiter = chars[i + 3];
+                let closing = match delimiter {
+                    '(' => Some(')'),
+                    '[' => Some(']'),
+                    '{' => Some('}'),
+                    '<' => Some('>'),
+                    _ => Some(delimiter),
+                };
+                result.push(c);
+                result.push(chars[i + 1]);
+                result.push('\'');
+                result.push(delimiter);
+                in_q_quote = true;
+                q_quote_end = closing;
+                i += 4;
+                continue;
+            }
+
+            // Handle q'[...]' (q-quoted strings)
             if (c == 'q' || c == 'Q') && next == Some('\'') && next2.is_some() {
                 let delimiter = chars[i + 2];
                 let closing = match delimiter {
@@ -7166,6 +7218,109 @@ END;
         assert!(
             formatted.contains("q'[SELECT * FROM table WHERE name = 'test']'"),
             "Q-quoted string should be preserved exactly"
+        );
+    }
+
+    #[test]
+    fn format_sql_preserves_nq_quoted_strings() {
+        // Test nq'[...]' (National Character q-quoted strings)
+        let test_cases = [
+            (
+                "SELECT nq'[한글 문자열]' FROM dual",
+                "nq'[한글 문자열]'",
+                "basic nq'[...]' preservation",
+            ),
+            (
+                "SELECT NQ'[UPPERCASE]' FROM dual",
+                "NQ'[UPPERCASE]'",
+                "uppercase NQ'[...]' preservation",
+            ),
+            (
+                "SELECT Nq'[mixed case]' FROM dual",
+                "Nq'[mixed case]'",
+                "mixed case Nq'[...]' preservation",
+            ),
+            (
+                "SELECT nq'(parentheses)' FROM dual",
+                "nq'(parentheses)'",
+                "nq'(...)' with parentheses",
+            ),
+            (
+                "SELECT nq'{braces}' FROM dual",
+                "nq'{braces}'",
+                "nq'{...}' with braces",
+            ),
+            (
+                "SELECT nq'<angle brackets>' FROM dual",
+                "nq'<angle brackets>'",
+                "nq'<...>' with angle brackets",
+            ),
+            (
+                "SELECT nq'!custom!' FROM dual",
+                "nq'!custom!'",
+                "nq'!...!' with custom delimiter",
+            ),
+        ];
+
+        for (input, expected, description) in test_cases {
+            let formatted = SqlEditorWidget::format_sql_basic(input);
+            assert!(
+                formatted.contains(expected),
+                "{}: expected '{}' in formatted output, got: {}",
+                description,
+                expected,
+                formatted
+            );
+        }
+    }
+
+    #[test]
+    fn format_sql_preserves_nq_quote_with_semicolon() {
+        // Test that semicolons inside nq'...' are preserved
+        let input = "SELECT nq'[text with ; semicolon]' FROM dual";
+        let formatted = SqlEditorWidget::format_sql_basic(input);
+        assert!(
+            formatted.contains("nq'[text with ; semicolon]'"),
+            "nq'...' with semicolon should be preserved exactly, got: {}",
+            formatted
+        );
+    }
+
+    #[test]
+    fn format_sql_preserves_mixed_q_and_nq_quotes() {
+        // Test both q'...' and nq'...' in same statement
+        let input = "SELECT q'[regular]', nq'[national]' FROM dual";
+        let formatted = SqlEditorWidget::format_sql_basic(input);
+        assert!(
+            formatted.contains("q'[regular]'"),
+            "q'...' should be preserved, got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("nq'[national]'"),
+            "nq'...' should be preserved, got: {}",
+            formatted
+        );
+    }
+
+    #[test]
+    fn tokenize_sql_handles_nq_quotes() {
+        // Direct test of tokenization for nq'...'
+        let sql = "SELECT nq'[test string]' FROM dual";
+        let tokens = SqlEditorWidget::tokenize_sql(sql);
+
+        // Should have tokens: SELECT, nq'[test string]', FROM, dual
+        let has_nq_string = tokens.iter().any(|t| {
+            if let SqlToken::String(s) = t {
+                s.contains("nq'[test string]'")
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_nq_string,
+            "Tokenizer should produce String token for nq'[...]', got: {:?}",
+            tokens
         );
     }
 }
