@@ -1,0 +1,206 @@
+-- ============================================================
+-- OQT / TOAD / SQL*Plus 호환 쿼리툴: 하드코어 파서/실행단위 테스트 스크립트 (1개)
+-- 포함: nested BEGIN/END, DECLARE, IF, CASE(expr/stmt), LOOP/WHILE/FOR,
+--       cursor-for-loop, dynamic sql, exception, label/exit/continue,
+--       문자열 내 END;/;/* */ -- / 토큰, q-quote 등
+-- ============================================================
+
+-- (선택) 실행 로그 보기: SQL*Plus/TOAD 기준
+SET SERVEROUTPUT ON
+SET FEEDBACK ON
+SET DEFINE OFF
+
+-- 기존 오브젝트 정리 (없으면 무시)
+BEGIN
+  EXECUTE IMMEDIATE 'DROP TABLE oqt_t_test PURGE';
+EXCEPTION WHEN OTHERS THEN NULL;
+END;
+/
+BEGIN
+  EXECUTE IMMEDIATE 'DROP SEQUENCE oqt_seq_test';
+EXCEPTION WHEN OTHERS THEN NULL;
+END;
+/
+BEGIN
+  EXECUTE IMMEDIATE 'DROP PACKAGE oqt_parse_torture_pkg';
+EXCEPTION WHEN OTHERS THEN NULL;
+END;
+/
+
+-- 테스트용 테이블/시퀀스
+CREATE TABLE oqt_t_test (
+  id        NUMBER PRIMARY KEY,
+  grp       VARCHAR2(30),
+  n         NUMBER,
+  txt       VARCHAR2(4000),
+  created_at DATE DEFAULT SYSDATE
+);
+/
+CREATE SEQUENCE oqt_seq_test START WITH 1 INCREMENT BY 1;
+/
+
+-- 패키지: 복잡한 구조 한 방에
+CREATE OR REPLACE PACKAGE oqt_parse_torture_pkg AS
+  PROCEDURE run_all(p_limit IN NUMBER DEFAULT 5);
+END;
+/
+CREATE OR REPLACE PACKAGE BODY oqt_parse_torture_pkg AS
+
+  PROCEDURE log(p IN VARCHAR2) IS
+  BEGIN
+    DBMS_OUTPUT.PUT_LINE('[TORTURE] ' || p);
+  END;
+
+  FUNCTION f_tag(p_n IN NUMBER) RETURN VARCHAR2 IS
+  BEGIN
+    -- CASE 표현식
+    RETURN CASE
+             WHEN p_n IS NULL THEN 'N=NULL'
+             WHEN p_n < 0 THEN 'N<0'
+             WHEN p_n BETWEEN 0 AND 2 THEN 'N=0..2'
+             ELSE 'N=OTHER'
+           END;
+  END;
+
+  PROCEDURE p_insert(p_grp IN VARCHAR2, p_n IN NUMBER, p_txt IN VARCHAR2) IS
+  BEGIN
+    INSERT INTO oqt_t_test(id, grp, n, txt) VALUES (oqt_seq_test.NEXTVAL, p_grp, p_n, p_txt);
+  END;
+
+  PROCEDURE run_all(p_limit IN NUMBER DEFAULT 5) IS
+    v_i       NUMBER := 0;
+    v_sum     NUMBER := 0;
+    v_dummy   VARCHAR2(4000);
+    v_sql     VARCHAR2(4000);
+    v_cnt     NUMBER;
+  BEGIN
+    log('run_all start, p_limit=' || p_limit);
+
+    -- 문자열 안에 END;/; 주석토큰/슬래시 포함 (파서 흔들기)
+    v_dummy := q'[
+      fake tokens: ; ; ;; / /  /* comment */  -- line
+      also inside string: 'END;' "END;" q'[END;]'
+      and even: BEGIN END; /  (but all in a string)
+    ]';
+    log('dummy=' || SUBSTR(v_dummy, 1, 80));
+
+    -- 1) 기본 LOOP + IF + CONTINUE/EXIT WHEN + 중첩 블록
+    <<main_loop>>
+    LOOP
+      v_i := v_i + 1;
+
+      IF v_i > p_limit THEN
+        EXIT main_loop;
+      ELSIF MOD(v_i, 2) = 0 THEN
+        -- 짝수는 건너뛰되, 중첩 BEGIN/END 하나 넣기
+        BEGIN
+          log('continue at even v_i=' || v_i);
+        END;
+        CONTINUE main_loop;
+      ELSE
+        log('processing odd v_i=' || v_i);
+      END IF;
+
+      -- 2) 문장형 CASE (각 WHEN에서 다른 제어/블록)
+      CASE
+        WHEN v_i = 1 THEN
+          p_insert('CASE_STMT', v_i, 'when=1 ; still string token END;');
+        WHEN v_i = 3 THEN
+          DECLARE
+            x NUMBER := 100 + v_i;
+          BEGIN
+            p_insert('CASE_STMT', v_i, 'when=3 inner DECLARE x=' || x);
+          END;
+        ELSE
+          p_insert('CASE_STMT', v_i, 'when=else tag=' || f_tag(v_i));
+      END CASE;
+
+      -- 3) FOR LOOP 중첩 + IF + EXIT WHEN
+      FOR j IN 1..3 LOOP
+        v_sum := v_sum + j;
+
+        IF j = 2 AND v_i = 1 THEN
+          log('nested for: v_i=1 j=2 exit-when demonstration');
+        END IF;
+
+        EXIT WHEN (v_sum > 20);
+      END LOOP;
+
+      -- 4) WHILE LOOP + 중첩 BEGIN/END + 예외 처리
+      DECLARE
+        k NUMBER := 0;
+      BEGIN
+        WHILE k < 3 LOOP
+          k := k + 1;
+          BEGIN
+            IF k = 2 AND v_i = 3 THEN
+              -- 의도적 예외 발생
+              RAISE_APPLICATION_ERROR(-20001, 'forced error at v_i=3 k=2');
+            END IF;
+            p_insert('WHILE', v_i*10 + k, 'k=' || k || ' / txt contains "END;" inside');
+          EXCEPTION
+            WHEN OTHERS THEN
+              p_insert('EXCEPTION', v_i*10 + k, 'caught err: ' || SQLERRM);
+          END;
+        END LOOP;
+      END;
+
+      -- 5) 동적 SQL (EXECUTE IMMEDIATE) + 바인드
+      v_sql := 'INSERT INTO oqt_t_test(id, grp, n, txt) VALUES (oqt_seq_test.NEXTVAL, :g, :n, :t)';
+      EXECUTE IMMEDIATE v_sql USING 'DYN', v_i, 'dyn insert; token / ; END; inside string';
+
+    END LOOP main_loop;
+
+    -- 6) 커서 FOR LOOP (SELECT) + 내부 CASE 표현식 사용
+    v_cnt := 0;
+    FOR r IN (
+      SELECT id, grp, n, txt,
+             CASE WHEN n IS NULL THEN 'NULL' WHEN n < 10 THEN 'LT10' ELSE 'GE10' END AS bucket
+      FROM oqt_t_test
+      ORDER BY id
+    ) LOOP
+      v_cnt := v_cnt + 1;
+      IF v_cnt <= 5 THEN
+        log('row#' || v_cnt || ' id=' || r.id || ' grp=' || r.grp || ' bucket=' || r.bucket);
+      END IF;
+    END LOOP;
+
+    -- 7) 마지막 중첩 블록: 트랜잭션 + 집계 + 출력
+    DECLARE
+      z NUMBER;
+    BEGIN
+      SELECT COUNT(*)
+        INTO z
+        FROM oqt_t_test;
+
+      log('total rows=' || z);
+
+      IF z = 0 THEN
+        ROLLBACK;
+        log('rollback (no rows)');
+      ELSE
+        COMMIT;
+        log('commit (rows exist)');
+      END IF;
+    END;
+
+    log('run_all end');
+
+  END run_all;
+
+END oqt_parse_torture_pkg;
+/
+SHOW ERRORS PACKAGE BODY oqt_parse_torture_pkg
+
+-- 실행
+BEGIN
+  oqt_parse_torture_pkg.run_all(7);
+END;
+/
+
+-- 결과 확인
+SELECT grp, COUNT(*) cnt, MIN(n) min_n, MAX(n) max_n
+FROM oqt_t_test
+GROUP BY grp
+ORDER BY grp;
+/

@@ -6,12 +6,6 @@ CONNECT system/password@localhost:1521/FREE
 -- 목적: EXEC(=EXECUTE)로 프로시저 호출이 정상 동작하는지 검증
 -- =========================================================
 
--- 출력/로그 설정 (툴에 따라 일부는 무시되어도 OK)
-SET SERVEROUTPUT ON
-SET FEEDBACK ON
-SET HEADING ON
-SET ECHO ON
---SET TIMING ON
 
 PROMPT ==========================================
 PROMPT [1] 준비: 테스트 오브젝트 정리

@@ -2442,6 +2442,20 @@ impl SqlEditorWidget {
                     "SET DEFINE OFF".to_string()
                 }
             }
+            ToolCommand::SetScan { enabled } => {
+                if *enabled {
+                    "SET SCAN ON".to_string()
+                } else {
+                    "SET SCAN OFF".to_string()
+                }
+            }
+            ToolCommand::SetVerify { enabled } => {
+                if *enabled {
+                    "SET VERIFY ON".to_string()
+                } else {
+                    "SET VERIFY OFF".to_string()
+                }
+            }
             ToolCommand::SetEcho { enabled } => {
                 if *enabled {
                     "SET ECHO ON".to_string()
@@ -3490,6 +3504,8 @@ impl SqlEditorWidget {
         let mut in_double_quote = false;
         let mut in_line_comment = false;
         let mut in_block_comment = false;
+        let mut in_q_quote = false;
+        let mut q_quote_end: Option<char> = None;
 
         let flush_word = |current: &mut String, tokens: &mut Vec<SqlToken>| {
             if !current.is_empty() {
@@ -4251,6 +4267,8 @@ impl SqlEditorWidget {
                                 let (
                                     server_output,
                                     define_enabled,
+                                    scan_enabled,
+                                    verify_enabled,
                                     echo_enabled,
                                     feedback_enabled,
                                     heading_enabled,
@@ -4262,6 +4280,8 @@ impl SqlEditorWidget {
                                     Ok(guard) => (
                                         guard.server_output.clone(),
                                         guard.define_enabled,
+                                        guard.scan_enabled,
+                                        guard.verify_enabled,
                                         guard.echo_enabled,
                                         guard.feedback_enabled,
                                         guard.heading_enabled,
@@ -4278,6 +4298,8 @@ impl SqlEditorWidget {
                                         (
                                             guard.server_output.clone(),
                                             guard.define_enabled,
+                                            guard.scan_enabled,
+                                            guard.verify_enabled,
                                             guard.echo_enabled,
                                             guard.feedback_enabled,
                                             guard.heading_enabled,
@@ -4316,6 +4338,8 @@ impl SqlEditorWidget {
                                     ),
                                     serveroutput_line,
                                     format!("DEFINE {}", if define_enabled { "ON" } else { "OFF" }),
+                                    format!("SCAN {}", if scan_enabled { "ON" } else { "OFF" }),
+                                    format!("VERIFY {}", if verify_enabled { "ON" } else { "OFF" }),
                                     format!("ECHO {}", if echo_enabled { "ON" } else { "OFF" }),
                                     format!(
                                         "FEEDBACK {}",
@@ -4486,6 +4510,46 @@ impl SqlEditorWidget {
                                     &session,
                                     "SET DEFINE",
                                     &format!("DEFINE {}", if enabled { "ON" } else { "OFF" }),
+                                );
+                            }
+                            ToolCommand::SetScan { enabled } => {
+                                {
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    guard.scan_enabled = enabled;
+                                }
+                                SqlEditorWidget::emit_script_message(
+                                    &sender,
+                                    &session,
+                                    "SET SCAN",
+                                    &format!("SCAN {}", if enabled { "ON" } else { "OFF" }),
+                                );
+                            }
+                            ToolCommand::SetVerify { enabled } => {
+                                {
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    guard.verify_enabled = enabled;
+                                }
+                                SqlEditorWidget::emit_script_message(
+                                    &sender,
+                                    &session,
+                                    "SET VERIFY",
+                                    &format!("VERIFY {}", if enabled { "ON" } else { "OFF" }),
                                 );
                             }
                             ToolCommand::SetEcho { enabled } => {
@@ -4851,18 +4915,32 @@ impl SqlEditorWidget {
                         }
 
                         let mut sql_text = trimmed.to_string();
-                        let define_enabled = match session.lock() {
-                            Ok(guard) => guard.define_enabled,
+                        let (define_enabled, scan_enabled, verify_enabled) = match session.lock() {
+                            Ok(guard) => (guard.define_enabled, guard.scan_enabled, guard.verify_enabled),
                             Err(poisoned) => {
                                 eprintln!("Warning: session state lock was poisoned; recovering.");
-                                poisoned.into_inner().define_enabled
+                                let guard = poisoned.into_inner();
+                                (guard.define_enabled, guard.scan_enabled, guard.verify_enabled)
                             }
                         };
-                        if define_enabled {
+                        if define_enabled && scan_enabled {
+                            let sql_before = sql_text.clone();
                             match SqlEditorWidget::apply_define_substitution(
                                 &sql_text, &session, &sender,
                             ) {
-                                Ok(updated) => sql_text = updated,
+                                Ok(updated) => {
+                                    if verify_enabled && updated != sql_before {
+                                        SqlEditorWidget::emit_script_output(
+                                            &sender,
+                                            &session,
+                                            vec![
+                                                format!("old: {}", sql_before),
+                                                format!("new: {}", updated),
+                                            ],
+                                        );
+                                    }
+                                    sql_text = updated;
+                                }
                                 Err(message) => {
                                     let emitted = SqlEditorWidget::emit_non_select_result(
                                         &sender,

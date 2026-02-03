@@ -10,15 +10,7 @@ PROMPT =======================================================================
 -- (툴이 지원한다면) 오류 시 중단/계속 옵션도 확인
 WHENEVER SQLERROR CONTINUE
 WHENEVER OSERROR CONTINUE
-/*
-SET SERVEROUTPUT ON SIZE UNLIMITED
-SET FEEDBACK OFF
-SET HEADING ON
-SET PAGESIZE 100
-SET LINESIZE 200
-SET VERIFY ON
-SET DEFINE ON
-*/
+
 PROMPT [1] Cleanup previous objects (ignore errors)
 BEGIN
   FOR r IN (
