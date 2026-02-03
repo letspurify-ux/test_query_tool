@@ -251,6 +251,12 @@ struct SplitState {
     /// from nested block END (plain END at deeper block_depth) inside a CASE statement.
     /// CASE expressions end with plain END; PL/SQL CASE statements end with END CASE.
     case_depth_stack: Vec<usize>,
+    /// True when we're inside a COMPOUND TRIGGER definition.
+    /// COMPOUND TRIGGERs have timing points like BEFORE STATEMENT IS...END BEFORE STATEMENT;
+    in_compound_trigger: bool,
+    /// True when we've seen BEFORE or AFTER in a COMPOUND TRIGGER context,
+    /// waiting for IS to start the timing point block.
+    pending_timing_point_is: bool,
 }
 
 impl SplitState {
@@ -280,6 +286,12 @@ impl SplitState {
                 self.case_depth_stack.pop();
             } else if matches!(upper.as_str(), "IF" | "LOOP") {
                 // END IF, END LOOP - 이들은 별도 depth 관리 없음
+            } else if matches!(upper.as_str(), "BEFORE" | "AFTER") && self.in_compound_trigger {
+                // END BEFORE ..., END AFTER ... - COMPOUND TRIGGER timing point 종료
+                // depth 감소 (타이밍 포인트 블록 종료)
+                if self.block_depth > 0 {
+                    self.block_depth -= 1;
+                }
             } else {
                 // 일반 END - CASE expression END 또는 PL/SQL block END
                 // stack.last()가 현재 block_depth와 같으면 CASE expression의 END;
@@ -333,8 +345,11 @@ impl SplitState {
         //
         // We use nested_subprogram to track when IS should start a block.
         // For the first AS/IS in CREATE, we use block_depth==0 as indicator.
+        // For COMPOUND TRIGGER timing points, pending_timing_point_is indicates IS starts a block.
         let is_block_starting_as_is = if matches!(upper.as_str(), "AS" | "IS") {
-            if self.nested_subprogram {
+            if self.pending_timing_point_is {
+                true // COMPOUND TRIGGER timing point (BEFORE/AFTER ... IS)
+            } else if self.nested_subprogram {
                 true // Nested PROCEDURE/FUNCTION inside DECLARE
             } else if self.in_create_plsql && self.block_depth == 0 {
                 true // First AS/IS in CREATE statement
@@ -352,20 +367,23 @@ impl SplitState {
             // Don't set for procedure/function IS (which has BEGIN instead)
             // We leave after_as_is = false for packages to avoid incorrect depth decrements
             // when encountering REF CURSOR type declarations inside the package
-            if !self.is_package && !self.nested_subprogram {
+            // Don't set for COMPOUND TRIGGER timing points either
+            if !self.is_package && !self.nested_subprogram && !self.pending_timing_point_is {
                 // This might be CREATE TYPE ... AS/IS OBJECT/VARRAY/etc
                 self.after_as_is = true;
             }
             self.nested_subprogram = false; // Reset after seeing IS
+            self.pending_timing_point_is = false; // Reset after seeing IS in COMPOUND TRIGGER
             // Track that we're waiting for a BEGIN for this subprogram
             // Use counter to handle nested PROCEDURE/FUNCTION declarations
             // For packages: depth=1 is the package AS level (no BEGIN expected)
             //              depth>1 means we're inside a procedure/function that expects BEGIN
             // For procedures/functions: any depth needs BEGIN tracking
+            // For COMPOUND TRIGGER timing points: always need BEGIN tracking
             let needs_begin_tracking = if self.is_package {
                 self.block_depth > 1 // Inside package, nested proc/func
             } else {
-                true // Standalone procedure/function/trigger
+                true // Standalone procedure/function/trigger or COMPOUND TRIGGER timing point
             };
             if needs_begin_tracking {
                 self.pending_subprogram_begins += 1;
@@ -390,8 +408,15 @@ impl SplitState {
             // Set pending_end and determine in next token whether this is:
             // - END CASE (PL/SQL CASE statement)
             // - END IF / END LOOP
+            // - END BEFORE / END AFTER (COMPOUND TRIGGER timing point)
             // - END (CASE expression or PL/SQL block)
             self.pending_end = true;
+        } else if upper == "COMPOUND" && self.in_create_plsql {
+            // COMPOUND TRIGGER - set flag to track timing points
+            self.in_compound_trigger = true;
+        } else if matches!(upper.as_str(), "BEFORE" | "AFTER") && self.in_compound_trigger {
+            // BEFORE/AFTER in COMPOUND TRIGGER context - prepare for timing point IS
+            self.pending_timing_point_is = true;
         }
 
         self.token.clear();
@@ -441,6 +466,8 @@ impl SplitState {
         self.nested_subprogram = false;
         self.pending_subprogram_begins = 0;
         self.is_package = false;
+        self.in_compound_trigger = false;
+        self.pending_timing_point_is = false;
     }
 
     fn track_create_plsql(&mut self, upper: &str) {
@@ -6063,6 +6090,155 @@ END;"#;
       END CASE;
   END CASE;
 END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_compound_trigger_basic() {
+        // Basic COMPOUND TRIGGER with single timing point
+        let sql = r#"CREATE OR REPLACE TRIGGER test_compound_trg
+FOR INSERT ON test_table
+COMPOUND TRIGGER
+  BEFORE STATEMENT IS
+  BEGIN
+    DBMS_OUTPUT.PUT_LINE('Before statement');
+  END BEFORE STATEMENT;
+END test_compound_trg;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_compound_trigger_multiple_timing_points() {
+        // COMPOUND TRIGGER with all four timing points
+        let sql = r#"CREATE OR REPLACE TRIGGER test_compound_trg
+FOR INSERT OR UPDATE ON test_table
+COMPOUND TRIGGER
+  v_count NUMBER := 0;
+
+  BEFORE STATEMENT IS
+  BEGIN
+    v_count := 0;
+  END BEFORE STATEMENT;
+
+  BEFORE EACH ROW IS
+  BEGIN
+    v_count := v_count + 1;
+  END BEFORE EACH ROW;
+
+  AFTER EACH ROW IS
+  BEGIN
+    DBMS_OUTPUT.PUT_LINE('Row ' || v_count);
+  END AFTER EACH ROW;
+
+  AFTER STATEMENT IS
+  BEGIN
+    DBMS_OUTPUT.PUT_LINE('Total: ' || v_count);
+  END AFTER STATEMENT;
+END test_compound_trg;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_compound_trigger_with_declare_in_timing_point() {
+        // COMPOUND TRIGGER with local declarations in timing points
+        let sql = r#"CREATE OR REPLACE TRIGGER test_compound_trg
+FOR INSERT ON test_table
+COMPOUND TRIGGER
+  BEFORE EACH ROW IS
+    v_local NUMBER;
+  BEGIN
+    v_local := 1;
+    :NEW.col1 := v_local;
+  END BEFORE EACH ROW;
+END test_compound_trg;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_compound_trigger_with_nested_blocks() {
+        // COMPOUND TRIGGER with nested BEGIN/END blocks inside timing points
+        let sql = r#"CREATE OR REPLACE TRIGGER test_compound_trg
+FOR INSERT ON test_table
+COMPOUND TRIGGER
+  AFTER EACH ROW IS
+  BEGIN
+    IF :NEW.status = 'ACTIVE' THEN
+      BEGIN
+        INSERT INTO audit_table VALUES (:NEW.id, SYSDATE);
+      EXCEPTION
+        WHEN OTHERS THEN
+          NULL;
+      END;
+    END IF;
+  END AFTER EACH ROW;
+END test_compound_trg;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_compound_trigger_followed_by_show_errors() {
+        // COMPOUND TRIGGER followed by SHOW ERRORS should be separate
+        let sql = r#"CREATE OR REPLACE TRIGGER test_compound_trg
+FOR INSERT ON test_table
+COMPOUND TRIGGER
+  BEFORE STATEMENT IS
+  BEGIN
+    NULL;
+  END BEFORE STATEMENT;
+END test_compound_trg;
+
+SHOW ERRORS"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts: Vec<_> = items
+            .iter()
+            .filter_map(|item| {
+                if let ScriptItem::Statement(s) = item {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let tool_cmds: Vec<_> = items
+            .iter()
+            .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+            .collect();
+        assert_eq!(stmts.len(), 1, "Should have 1 statement");
+        assert_eq!(tool_cmds.len(), 1, "Should have 1 tool command (SHOW ERRORS)");
+        assert!(
+            !stmts[0].contains("SHOW ERRORS"),
+            "COMPOUND TRIGGER should NOT contain SHOW ERRORS"
+        );
+    }
+
+    #[test]
+    fn test_compound_trigger_with_case_statement() {
+        // COMPOUND TRIGGER with CASE statement inside timing point
+        let sql = r#"CREATE OR REPLACE TRIGGER test_compound_trg
+FOR UPDATE ON test_table
+COMPOUND TRIGGER
+  AFTER EACH ROW IS
+  BEGIN
+    CASE :NEW.type
+      WHEN 'A' THEN
+        INSERT INTO log_a VALUES (:NEW.id);
+      WHEN 'B' THEN
+        INSERT INTO log_b VALUES (:NEW.id);
+      ELSE
+        NULL;
+    END CASE;
+  END AFTER EACH ROW;
+END test_compound_trg;"#;
         let items = QueryExecutor::split_script_items(sql);
         let stmts = get_statements(&items);
         assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
