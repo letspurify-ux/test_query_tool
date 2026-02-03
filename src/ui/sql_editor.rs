@@ -3544,6 +3544,20 @@ impl SqlEditorWidget {
                 continue;
             }
 
+            if in_q_quote {
+                current.push(c);
+                if Some(c) == q_quote_end && next == Some('\'') {
+                    current.push('\'');
+                    tokens.push(SqlToken::String(std::mem::take(&mut current)));
+                    in_q_quote = false;
+                    q_quote_end = None;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
             if in_single_quote {
                 current.push(c);
                 if c == '\'' {
@@ -3602,6 +3616,26 @@ impl SqlEditorWidget {
                 continue;
             }
 
+            // Handle q-quoted strings: q'[...]', q'{...}', q'(...)', q'<...>', q'!...!'
+            if (c == 'q' || c == 'Q') && next == Some('\'') && i + 2 < chars.len() {
+                let delimiter = chars[i + 2];
+                let closing = match delimiter {
+                    '[' => ']',
+                    '{' => '}',
+                    '(' => ')',
+                    '<' => '>',
+                    _ => delimiter,
+                };
+                flush_word(&mut current, &mut tokens);
+                current.push(c);
+                current.push('\'');
+                current.push(delimiter);
+                in_q_quote = true;
+                q_quote_end = Some(closing);
+                i += 3;
+                continue;
+            }
+
             if c == '\'' {
                 flush_word(&mut current, &mut tokens);
                 in_single_quote = true;
@@ -3625,6 +3659,25 @@ impl SqlEditorWidget {
             }
 
             flush_word(&mut current, &mut tokens);
+
+            // Handle <<label>> (Oracle PL/SQL labels)
+            if c == '<' && next == Some('<') {
+                let mut label = String::from("<<");
+                let mut j = i + 2;
+                while j < chars.len() {
+                    let ch = chars[j];
+                    label.push(ch);
+                    if ch == '>' && j + 1 < chars.len() && chars[j + 1] == '>' {
+                        label.push('>');
+                        j += 2;
+                        break;
+                    }
+                    j += 1;
+                }
+                tokens.push(SqlToken::Word(label));
+                i = j;
+                continue;
+            }
 
             let sym = match (c, next) {
                 ('<', Some('=')) => Some("<=".to_string()),
@@ -3651,7 +3704,7 @@ impl SqlEditorWidget {
             if !current.is_empty() {
                 tokens.push(SqlToken::Comment(std::mem::take(&mut current)));
             }
-        } else if in_single_quote || in_double_quote {
+        } else if in_single_quote || in_double_quote || in_q_quote {
             if !current.is_empty() {
                 tokens.push(SqlToken::String(std::mem::take(&mut current)));
             }
@@ -7022,5 +7075,97 @@ mod tests {
                 file
             );
         }
+    }
+
+    #[test]
+    fn format_sql_preserves_oracle_labels() {
+        // Test <<loop_label>> preservation
+        let input = "<<outer_loop>>\nFOR i IN 1..10 LOOP\n<<inner_loop>>\nFOR j IN 1..5 LOOP\nNULL;\nEND LOOP inner_loop;\nEND LOOP outer_loop;";
+        let formatted = SqlEditorWidget::format_sql_basic(input);
+
+        // Labels should be preserved without extra spaces
+        assert!(
+            formatted.contains("<<outer_loop>>"),
+            "Label <<outer_loop>> should be preserved, got: {}",
+            formatted
+        );
+        assert!(
+            formatted.contains("<<inner_loop>>"),
+            "Label <<inner_loop>> should be preserved, got: {}",
+            formatted
+        );
+
+        // Idempotent test
+        let formatted_again = SqlEditorWidget::format_sql_basic(&formatted);
+        assert_eq!(
+            formatted, formatted_again,
+            "Formatting should be idempotent for labels"
+        );
+    }
+
+    #[test]
+    fn format_sql_preserves_q_quoted_strings() {
+        // Test q'[...]' quote literal preservation
+        let cases = [
+            (
+                "SELECT q'[It's a test]' FROM dual",
+                "q'[It's a test]'",
+            ),
+            (
+                "SELECT q'{Hello World}' FROM dual",
+                "q'{Hello World}'",
+            ),
+            (
+                "SELECT q'(Text with 'quotes')' FROM dual",
+                "q'(Text with 'quotes')'",
+            ),
+            (
+                "SELECT q'<Value with <brackets>>'" ,
+                "q'<Value with <brackets>>'",
+            ),
+            (
+                "SELECT Q'!Delimiter test!' FROM dual",
+                "Q'!Delimiter test!'",
+            ),
+        ];
+
+        for (input, expected_literal) in cases {
+            let formatted = SqlEditorWidget::format_sql_basic(input);
+            assert!(
+                formatted.contains(expected_literal),
+                "Q-quoted literal {} should be preserved in: {}",
+                expected_literal,
+                formatted
+            );
+
+            // Idempotent test
+            let formatted_again = SqlEditorWidget::format_sql_basic(&formatted);
+            assert_eq!(
+                formatted, formatted_again,
+                "Formatting should be idempotent for q-quoted string: {}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn format_sql_preserves_combined_special_syntax() {
+        // Test combination of labels and q-quoted strings
+        let input = r#"<<process_data>>
+BEGIN
+    v_sql := q'[SELECT * FROM table WHERE name = 'test']';
+    EXECUTE IMMEDIATE v_sql;
+END;
+"#;
+        let formatted = SqlEditorWidget::format_sql_basic(input);
+
+        assert!(
+            formatted.contains("<<process_data>>"),
+            "Label should be preserved"
+        );
+        assert!(
+            formatted.contains("q'[SELECT * FROM table WHERE name = 'test']'"),
+            "Q-quoted string should be preserved exactly"
+        );
     }
 }
