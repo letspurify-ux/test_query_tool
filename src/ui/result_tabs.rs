@@ -312,6 +312,12 @@ impl ResultTabsWidget {
         fltk::group::Group::delete(group);
     }
 
+    pub fn select_script_output(&mut self) {
+        let script_group = self.script_output.borrow().group.clone();
+        let _ = self.tabs.set_value(&script_group);
+        *self.active_index.borrow_mut() = None;
+    }
+
     fn clear_script_output(&self) {
         let script_output = self.script_output.borrow();
         let mut buffer = script_output.buffer.clone();
