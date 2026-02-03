@@ -246,10 +246,11 @@ struct SplitState {
     /// True when we're creating a PACKAGE (spec or body), not PROCEDURE/FUNCTION/TRIGGER/TYPE
     /// Packages don't have a BEGIN at the AS level, only their contained procedures do.
     is_package: bool,
-    /// Track CASE expression depth to distinguish CASE expressions (in SELECT/expressions)
-    /// from PL/SQL CASE statements. CASE expressions end with just END,
-    /// while PL/SQL CASE statements end with END CASE.
-    case_depth: usize,
+    /// Stack recording the block_depth at which each CASE keyword was opened.
+    /// Used to distinguish CASE expression END (plain END at same block_depth)
+    /// from nested block END (plain END at deeper block_depth) inside a CASE statement.
+    /// CASE expressions end with plain END; PL/SQL CASE statements end with END CASE.
+    case_depth_stack: Vec<usize>,
 }
 
 impl SplitState {
@@ -275,30 +276,27 @@ impl SplitState {
         if self.pending_end {
             if upper == "CASE" {
                 // END CASE - PL/SQL CASE statement 종료
-                // case_depth가 있으면 감소 (처음 CASE에서 증가시킨 것)
-                if self.case_depth > 0 {
-                    self.case_depth -= 1;
-                }
+                // stack에서 해당 CASE를 제거
+                self.case_depth_stack.pop();
             } else if matches!(upper.as_str(), "IF" | "LOOP") {
                 // END IF, END LOOP - 이들은 별도 depth 관리 없음
             } else {
-                // 일반 END - CASE expression이거나 PL/SQL block
-                if self.case_depth > 0 {
-                    // CASE expression 종료
-                    self.case_depth -= 1;
+                // 일반 END - CASE expression END 또는 PL/SQL block END
+                // stack.last()가 현재 block_depth와 같으면 CASE expression의 END;
+                // 아니면 (더 깊은 block_depth) PL/SQL 블록의 END
+                if self.case_depth_stack.last() == Some(&self.block_depth) {
+                    self.case_depth_stack.pop();
                 } else if self.block_depth > 0 {
-                    // PL/SQL block 종료
                     self.block_depth -= 1;
                 }
             }
             self.pending_end = false;
         }
 
-        // Track CASE expressions (in SELECT, expressions, etc.)
-        // CASE starts a CASE expression/statement
+        // CASE 키워드 발견 시 현재 block_depth를 stack에 push
         // END CASE의 CASE는 제외 (is_end_case로 체크)
         if upper == "CASE" && !is_end_case {
-            self.case_depth += 1;
+            self.case_depth_stack.push(self.block_depth);
         }
 
         // Handle TYPE declarations that don't create a block:
@@ -402,9 +400,9 @@ impl SplitState {
     fn resolve_pending_end_on_terminator(&mut self) {
         if self.pending_end {
             // END followed by terminator (;) - determine what it closes
-            if self.case_depth > 0 {
-                // CASE expression 종료
-                self.case_depth -= 1;
+            if self.case_depth_stack.last() == Some(&self.block_depth) {
+                // CASE expression 종료 (stack.last() == block_depth)
+                self.case_depth_stack.pop();
             } else if self.block_depth > 0 {
                 // PL/SQL block 종료
                 self.block_depth -= 1;
@@ -420,9 +418,9 @@ impl SplitState {
     fn resolve_pending_end_on_eof(&mut self) {
         if self.pending_end {
             // END at EOF - determine what it closes
-            if self.case_depth > 0 {
-                // CASE expression 종료
-                self.case_depth -= 1;
+            if self.case_depth_stack.last() == Some(&self.block_depth) {
+                // CASE expression 종료 (stack.last() == block_depth)
+                self.case_depth_stack.pop();
             } else if self.block_depth > 0 {
                 // PL/SQL block 종료
                 self.block_depth -= 1;
@@ -5942,6 +5940,127 @@ END;"#;
   CASE v_val
     WHEN 'Y' THEN DBMS_OUTPUT.PUT_LINE('Yes');
     ELSE DBMS_OUTPUT.PUT_LINE('No');
+  END CASE;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_case_statement_with_nested_declare_begin_end() {
+        // Regression: CASE statement 안의 DECLARE...BEGIN...END 블록이
+        // case_depth로 잘못 소비되어 block_depth가 남는 경우
+        let sql = r#"BEGIN
+  CASE v_val
+    WHEN 'A' THEN
+      DECLARE
+        x NUMBER := 0;
+      BEGIN
+        x := 1;
+      END;
+    ELSE
+      NULL;
+  END CASE;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_case_statement_with_nested_begin_end() {
+        // CASE statement 안 standalone BEGIN...END 블록
+        let sql = r#"BEGIN
+  CASE v_val
+    WHEN 1 THEN
+      BEGIN
+        DBMS_OUTPUT.PUT_LINE('nested');
+      END;
+  END CASE;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_case_statement_with_nested_block_and_exception() {
+        // test5.txt p_inner 패턴: CASE statement 안 DECLARE/BEGIN/EXCEPTION/END
+        let sql = r#"BEGIN
+  CASE MOD(k, 4)
+    WHEN 0 THEN
+      NULL;
+    WHEN 1 THEN
+      DECLARE
+        z NUMBER := 10;
+      BEGIN
+        IF z = 10 THEN
+          RAISE_APPLICATION_ERROR(-20001, 'test');
+        END IF;
+      EXCEPTION
+        WHEN OTHERS THEN
+          NULL;
+      END;
+    ELSE
+      NULL;
+  END CASE;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_case_statement_with_case_expression_inside() {
+        // CASE statement 안에 CASE expression (SELECT ... CASE ... END)이 중첩
+        let sql = r#"BEGIN
+  CASE v_val
+    WHEN 1 THEN
+      SELECT CASE WHEN x=1 THEN 'A' ELSE 'B' END INTO v_res FROM dual;
+    ELSE
+      NULL;
+  END CASE;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_multiple_case_statements_in_sequence() {
+        // 연속 CASE statement 두 개 + 중첩 블록
+        let sql = r#"BEGIN
+  CASE v1
+    WHEN 1 THEN
+      BEGIN
+        NULL;
+      END;
+  END CASE;
+  CASE v2
+    WHEN 2 THEN
+      BEGIN
+        NULL;
+      END;
+  END CASE;
+END;"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+        assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
+    }
+
+    #[test]
+    fn test_nested_case_statements() {
+        // CASE statement 안에 CASE statement 중첩 (각각 내부 블록 포함)
+        let sql = r#"BEGIN
+  CASE v1
+    WHEN 1 THEN
+      CASE v2
+        WHEN 'A' THEN
+          BEGIN
+            NULL;
+          END;
+      END CASE;
   END CASE;
 END;"#;
         let items = QueryExecutor::split_script_items(sql);
