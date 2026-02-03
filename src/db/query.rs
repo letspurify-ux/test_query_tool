@@ -102,6 +102,12 @@ pub enum ToolCommand {
     SetDefine {
         enabled: bool,
     },
+    SetScan {
+        enabled: bool,
+    },
+    SetVerify {
+        enabled: bool,
+    },
     SetEcho {
         enabled: bool,
     },
@@ -251,6 +257,10 @@ struct SplitState {
     /// from nested block END (plain END at deeper block_depth) inside a CASE statement.
     /// CASE expressions end with plain END; PL/SQL CASE statements end with END CASE.
     case_depth_stack: Vec<usize>,
+    /// True when we're creating a TRIGGER (not PROCEDURE/FUNCTION/PACKAGE/TYPE).
+    /// TRIGGER headers can contain INSERT/UPDATE/DELETE/SELECT keywords as event types
+    /// before block_depth increases, so we must not force-terminate on those keywords.
+    is_trigger: bool,
     /// True when we're inside a COMPOUND TRIGGER definition.
     /// COMPOUND TRIGGERs have timing points like BEFORE STATEMENT IS...END BEFORE STATEMENT;
     in_compound_trigger: bool,
@@ -470,6 +480,7 @@ impl SplitState {
         self.nested_subprogram = false;
         self.pending_subprogram_begins = 0;
         self.is_package = false;
+        self.is_trigger = false;
         self.in_compound_trigger = false;
         self.pending_timing_point_is = false;
     }
@@ -493,7 +504,8 @@ impl SplitState {
                 }
                 "PROCEDURE" | "FUNCTION" | "PACKAGE" | "TYPE" | "TRIGGER" => {
                     self.in_create_plsql = true;
-                    self.is_package = upper == "PACKAGE"; // Track if it's a package
+                    self.is_package = upper == "PACKAGE";
+                    self.is_trigger = upper == "TRIGGER";
                     self.create_pending = false;
                     self.create_or_seen = false;
                     return;
@@ -556,6 +568,10 @@ impl StatementBuilder {
 
     fn block_depth(&self) -> usize {
         self.state.block_depth
+    }
+
+    fn is_trigger(&self) -> bool {
+        self.state.is_trigger
     }
 
     fn process_text(&mut self, text: &str) {
@@ -914,10 +930,14 @@ impl QueryExecutor {
             let trimmed = line.trim();
             let trimmed_upper = trimmed.to_uppercase();
 
+            // TRIGGER 헤더에서는 INSERT/UPDATE/DELETE/SELECT 등이 이벤트 타입으로
+            // block_depth == 0 상태에서 나올 수 있으므로, TRIGGER의 block_depth == 0 구간에서는
+            // 이 강제 종료를 건너뜀
             if builder.is_idle()
                 && builder.in_create_plsql()
                 && builder.block_depth() == 0
                 && !builder.current_is_empty()
+                && !builder.is_trigger()
                 && (trimmed_upper.starts_with("CREATE")
                     || trimmed_upper.starts_with("ALTER")
                     || trimmed_upper.starts_with("DROP")
@@ -1041,6 +1061,7 @@ impl QueryExecutor {
                 && builder.in_create_plsql()
                 && builder.block_depth() == 0
                 && !builder.current_is_empty()
+                && !builder.is_trigger()
                 && (trimmed_upper.starts_with("CREATE")
                     || trimmed_upper.starts_with("ALTER")
                     || trimmed_upper.starts_with("DROP")
@@ -1196,6 +1217,14 @@ impl QueryExecutor {
             return Some(Self::parse_define_command(trimmed));
         }
 
+        if upper.starts_with("SET SCAN") {
+            return Some(Self::parse_scan_command(trimmed));
+        }
+
+        if upper.starts_with("SET VERIFY") {
+            return Some(Self::parse_verify_command(trimmed));
+        }
+
         if upper.starts_with("SET ECHO") {
             return Some(Self::parse_echo_command(trimmed));
         }
@@ -1235,7 +1264,9 @@ impl QueryExecutor {
             return Some(ToolCommand::Quit);
         }
 
-        if upper.starts_with("CONNECT") || upper.starts_with("CONN ") {
+        if (upper == "CONNECT" || (upper.starts_with("CONNECT ") && !upper.starts_with("CONNECT BY")))
+            || upper.starts_with("CONN ")
+        {
             return Some(Self::parse_connect_command(trimmed));
         }
 
@@ -1727,6 +1758,50 @@ impl QueryExecutor {
             _ => ToolCommand::Unsupported {
                 raw: raw.to_string(),
                 message: "SET DEFINE supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_scan_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET SCAN requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetScan { enabled: true },
+            "OFF" => ToolCommand::SetScan { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET SCAN supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_verify_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET VERIFY requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetVerify { enabled: true },
+            "OFF" => ToolCommand::SetVerify { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET VERIFY supports only ON or OFF.".to_string(),
                 is_error: true,
             },
         }
@@ -6517,5 +6592,76 @@ END test_compound_trg;"#;
             "Should NOT contain NEW, got: {:?}",
             names
         );
+    }
+
+    #[test]
+    fn test_connect_by_not_parsed_as_tool_command() {
+        // CONNECT BY는 SQL 절이므로 Tool Command로 해석되지 않아야 함
+        let sql = r#"INSERT INTO oqt_nm_t (id, grp, payload)
+SELECT
+  oqt_nm_seq.NEXTVAL,
+  'G' || TO_CHAR(MOD(level, 7)),
+  TO_CLOB('seed#' || level)
+FROM dual
+CONNECT BY level <= 20;"#;
+
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+        let tool_commands: Vec<&ScriptItem> = items
+            .iter()
+            .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement, got: {:?}", statements);
+        assert!(statements[0].contains("CONNECT BY"), "Statement should contain CONNECT BY");
+        assert!(tool_commands.is_empty(), "Should have no tool commands, got: {:?}", tool_commands);
+    }
+
+    #[test]
+    fn test_connect_tool_command_still_works() {
+        // 실제 CONNECT Tool Command는 여전히 동작해야 함
+        let sql = "CONNECT user/pass@localhost:1521/ORCL";
+        let items = QueryExecutor::split_script_items(sql);
+
+        let has_connect_command = items.iter().any(|item| {
+            matches!(item, ScriptItem::ToolCommand(ToolCommand::Connect { .. }))
+        });
+        assert!(has_connect_command, "CONNECT tool command should be recognized, got: {:?}", items);
+    }
+
+    #[test]
+    fn test_trigger_with_declare_and_multiline_header() {
+        // TRIGGER 헤더에서 이벤트 타입(INSERT)이 별도 행에 있고,
+        // DECLARE 블록과 q-quote 내의 가짜 키워드가 포함된 경우
+        let sql = r#"CREATE OR REPLACE TRIGGER oqt_nm_trg BEFORE
+INSERT
+    ON oqt_nm_t
+FOR EACH ROW
+DECLARE
+    v VARCHAR2 (2000);
+BEGIN
+    v := q '[TRG: fake tokens END; / ; BEGIN CASE LOOP IF THEN ELSE]' || ' + '' ; ''';
+    :new.payload := NVL (:new.payload, TO_CLOB ('')) || CHR (10) || v;
+END;"#;
+
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement, got: {:?}", statements);
+        assert!(statements[0].contains("CREATE OR REPLACE TRIGGER oqt_nm_trg"));
+        assert!(statements[0].contains("DECLARE"));
+        assert!(statements[0].contains("END"));
     }
 }
