@@ -5106,10 +5106,15 @@ impl SqlEditorWidget {
             return Err("Substitution prompt failed: UI disconnected.".to_string());
         }
 
-        match response_rx.recv() {
+        match response_rx.recv_timeout(Duration::from_secs(300)) {
             Ok(Some(value)) => Ok(value),
             Ok(None) => Err("Substitution prompt cancelled.".to_string()),
-            Err(_) => Err("Substitution prompt failed: UI disconnected.".to_string()),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err("Substitution prompt timed out.".to_string())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err("Substitution prompt failed: UI disconnected.".to_string())
+            }
         }
     }
 
