@@ -990,6 +990,14 @@ impl QueryExecutor {
             return Some(Self::parse_show_command(trimmed));
         }
 
+        if upper == "DESC"
+            || upper.starts_with("DESC ")
+            || upper == "DESCRIBE"
+            || upper.starts_with("DESCRIBE ")
+        {
+            return Some(Self::parse_describe_command(trimmed));
+        }
+
         if upper.starts_with("PROMPT") {
             let text = trimmed[6..].trim().to_string();
             return Some(ToolCommand::Prompt { text });
@@ -1247,6 +1255,22 @@ impl QueryExecutor {
                 message: "SHOW supports USER, ALL, or ERRORS.".to_string(),
                 is_error: true,
             },
+        }
+    }
+
+    fn parse_describe_command(raw: &str) -> ToolCommand {
+        let mut parts = raw.splitn(2, char::is_whitespace);
+        let _ = parts.next(); // DESC/DESCRIBE
+        let target = parts.next().unwrap_or("").trim();
+        if target.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "DESCRIBE requires an object name.".to_string(),
+                is_error: true,
+            };
+        }
+        ToolCommand::Describe {
+            name: target.to_string(),
         }
     }
 

@@ -333,6 +333,7 @@ impl SqlEditorWidget {
             }
             ToolCommand::ShowUser => "SHOW USER".to_string(),
             ToolCommand::ShowAll => "SHOW ALL".to_string(),
+            ToolCommand::Describe { name } => format!("DESCRIBE {}", name),
             ToolCommand::Prompt { text } => {
                 if text.trim().is_empty() {
                     "PROMPT".to_string()
@@ -2395,6 +2396,166 @@ impl SqlEditorWidget {
                                     "SHOW ALL",
                                     &lines.join("\n"),
                                 );
+                            }
+                            ToolCommand::Describe { name } => {
+                                let conn = match conn_opt.as_ref() {
+                                    Some(c) => c,
+                                    None => {
+                                        if script_mode {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "DESCRIBE",
+                                                "Error: Not connected to database",
+                                            );
+                                        } else {
+                                            let emitted = SqlEditorWidget::emit_non_select_result(
+                                                &sender,
+                                                &session,
+                                                &conn_name,
+                                                result_index,
+                                                &format!("DESCRIBE {}", name),
+                                                "Error: Not connected to database".to_string(),
+                                                false,
+                                                false,
+                                                false,
+                                            );
+                                            if emitted {
+                                                result_index += 1;
+                                            }
+                                        }
+                                        continue;
+                                    }
+                                };
+                                let title = format!("DESCRIBE {}", name);
+                                match QueryExecutor::describe_object(conn.as_ref(), &name) {
+                                    Ok(columns) => {
+                                        if columns.is_empty() {
+                                            if script_mode {
+                                                SqlEditorWidget::emit_script_message(
+                                                    &sender,
+                                                    &session,
+                                                    &title,
+                                                    "Error: Object not found.",
+                                                );
+                                            } else {
+                                                let emitted = SqlEditorWidget::emit_non_select_result(
+                                                    &sender,
+                                                    &session,
+                                                    &conn_name,
+                                                    result_index,
+                                                    &title,
+                                                    "Error: Object not found.".to_string(),
+                                                    false,
+                                                    false,
+                                                    false,
+                                                );
+                                                if emitted {
+                                                    result_index += 1;
+                                                }
+                                            }
+                                            command_error = true;
+                                        } else {
+                                            let rows = columns
+                                                .into_iter()
+                                                .map(|col| {
+                                                    let type_display = col.get_type_display();
+                                                    let TableColumnDetail {
+                                                        name,
+                                                        nullable,
+                                                        is_primary_key,
+                                                        ..
+                                                    } = col;
+                                                    vec![
+                                                        name,
+                                                        type_display,
+                                                        if nullable {
+                                                            "YES".to_string()
+                                                        } else {
+                                                            "NO".to_string()
+                                                        },
+                                                        if is_primary_key {
+                                                            "PK".to_string()
+                                                        } else {
+                                                            String::new()
+                                                        },
+                                                    ]
+                                                })
+                                                .collect::<Vec<Vec<String>>>();
+                                            if script_mode {
+                                                let (heading_enabled, _feedback_enabled) =
+                                                    SqlEditorWidget::current_output_settings(
+                                                        &session,
+                                                    );
+                                                SqlEditorWidget::emit_script_table(
+                                                    &sender,
+                                                    &session,
+                                                    &title,
+                                                    vec![
+                                                        "COLUMN".to_string(),
+                                                        "TYPE".to_string(),
+                                                        "NULLABLE".to_string(),
+                                                        "PK".to_string(),
+                                                    ],
+                                                    rows,
+                                                    heading_enabled,
+                                                );
+                                            } else {
+                                                let (heading_enabled, feedback_enabled) =
+                                                    SqlEditorWidget::current_output_settings(
+                                                        &session,
+                                                    );
+                                                let headers = SqlEditorWidget::apply_heading_setting(
+                                                    vec![
+                                                        "COLUMN".to_string(),
+                                                        "TYPE".to_string(),
+                                                        "NULLABLE".to_string(),
+                                                        "PK".to_string(),
+                                                    ],
+                                                    heading_enabled,
+                                                );
+                                                SqlEditorWidget::emit_select_result(
+                                                    &sender,
+                                                    &session,
+                                                    &conn_name,
+                                                    result_index,
+                                                    &title,
+                                                    headers,
+                                                    rows,
+                                                    true,
+                                                    feedback_enabled,
+                                                );
+                                                result_index += 1;
+                                            }
+                                        }
+                                    }
+                                    Err(err) => {
+                                        if script_mode {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                &title,
+                                                &format!("Error: {}", err),
+                                            );
+                                        } else {
+                                            let emitted = SqlEditorWidget::emit_non_select_result(
+                                                &sender,
+                                                &session,
+                                                &conn_name,
+                                                result_index,
+                                                &title,
+                                                format!("Error: {}", err),
+                                                false,
+                                                false,
+                                                false,
+                                            );
+                                            if emitted {
+                                                result_index += 1;
+                                            }
+                                        }
+                                        command_error = true;
+                                    }
+                                }
                             }
                             ToolCommand::Prompt { text } => {
                                 let mut output_text = text;

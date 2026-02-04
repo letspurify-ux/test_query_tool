@@ -105,6 +105,7 @@ pub const SQL_KEYWORDS: &[&str] = &[
     // SQL*Plus commands
     "DEFINE", "UNDEFINE", "OFF", "SHOW", "ERRORS", "PRINT", "WHENEVER", "SQLERROR",
     "VAR", "VARIABLE", "SERVEROUTPUT", "SYS_OUTPUT", "FEEDBACK", "VERIFY",
+    "DESCRIBE", "TIMING",
     "COMMENT", "PIPE", "CLOSE",
     // Conditional compilation (PL/SQL)
     "PLSQL_CCFLAGS", "PLSQL_DEBUG", "PLSQL_OPTIMIZE_LEVEL", "PLSQL_WARNINGS",

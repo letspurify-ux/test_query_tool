@@ -1876,6 +1876,191 @@ impl QueryExecutor {
         }
     }
 
+    fn split_qualified_name(value: &str) -> (Option<String>, String) {
+        let trimmed = value.trim();
+        let mut in_quotes = false;
+        let mut split_at: Option<usize> = None;
+        for (idx, ch) in trimmed.char_indices() {
+            if ch == '"' {
+                in_quotes = !in_quotes;
+            } else if ch == '.' && !in_quotes {
+                split_at = Some(idx);
+                break;
+            }
+        }
+
+        if let Some(idx) = split_at {
+            let (owner, name) = trimmed.split_at(idx);
+            (
+                Some(owner.trim().to_string()),
+                name.trim_start_matches('.').trim().to_string(),
+            )
+        } else {
+            (None, trimmed.to_string())
+        }
+    }
+
+    /// Describe a table or view, optionally schema-qualified (owner.object).
+    pub fn describe_object(
+        conn: &Connection,
+        object_name: &str,
+    ) -> Result<Vec<TableColumnDetail>, OracleError> {
+        let (owner_raw, name_raw) = Self::split_qualified_name(object_name);
+        let name = Self::normalize_object_name(&name_raw);
+        let owner = owner_raw.map(|value| Self::normalize_object_name(&value));
+
+        let sql = if owner.is_some() {
+            r#"
+                SELECT
+                    c.column_name,
+                    c.data_type,
+                    c.data_length,
+                    c.data_precision,
+                    c.data_scale,
+                    c.nullable,
+                    c.data_default,
+                    (SELECT 'PK' FROM all_cons_columns cc
+                     JOIN all_constraints con
+                       ON cc.owner = con.owner
+                      AND cc.constraint_name = con.constraint_name
+                     WHERE con.constraint_type = 'P'
+                       AND cc.owner = c.owner
+                       AND cc.table_name = c.table_name
+                       AND cc.column_name = c.column_name
+                       AND ROWNUM = 1) as is_pk
+                FROM all_tab_columns c
+                WHERE c.owner = :1
+                  AND c.table_name = :2
+                ORDER BY c.column_id
+            "#
+        } else {
+            r#"
+                SELECT
+                    c.column_name,
+                    c.data_type,
+                    c.data_length,
+                    c.data_precision,
+                    c.data_scale,
+                    c.nullable,
+                    c.data_default,
+                    (SELECT 'PK' FROM user_cons_columns cc
+                     JOIN user_constraints con ON cc.constraint_name = con.constraint_name
+                     WHERE con.constraint_type = 'P'
+                     AND cc.table_name = c.table_name
+                     AND cc.column_name = c.column_name
+                     AND ROWNUM = 1) as is_pk
+                FROM user_tab_columns c
+                WHERE c.table_name = :1
+                ORDER BY c.column_id
+            "#
+        };
+
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+
+        let rows = if let Some(owner) = owner.as_ref() {
+            match stmt.query(&[owner, &name]) {
+                Ok(rows) => rows,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            }
+        } else {
+            match stmt.query(&[&name]) {
+                Ok(rows) => rows,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            }
+        };
+
+        let mut columns: Vec<TableColumnDetail> = Vec::new();
+        for row_result in rows {
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let name = match row.get(0) {
+                Ok(name) => name,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let data_type = match row.get(1) {
+                Ok(data_type) => data_type,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let data_length = match row.get::<_, Option<i32>>(2) {
+                Ok(value) => value.unwrap_or(0),
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let data_precision = match row.get::<_, Option<i32>>(3) {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let data_scale = match row.get::<_, Option<i32>>(4) {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let nullable = match row.get::<_, String>(5) {
+                Ok(value) => value == "Y",
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let default_value = match row.get(6) {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let is_primary_key = match row.get::<_, Option<String>>(7) {
+                Ok(value) => value.is_some(),
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            columns.push(TableColumnDetail {
+                name,
+                data_type,
+                data_length,
+                data_precision,
+                data_scale,
+                nullable,
+                default_value,
+                is_primary_key,
+            });
+        }
+
+        Ok(columns)
+    }
+
     pub fn fetch_compilation_errors(
         conn: &Connection,
         object: &CompiledObject,

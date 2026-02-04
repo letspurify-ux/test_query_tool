@@ -73,6 +73,9 @@ pub enum ToolCommand {
     },
     ShowUser,
     ShowAll,
+    Describe {
+        name: String,
+    },
     Prompt {
         text: String,
     },
