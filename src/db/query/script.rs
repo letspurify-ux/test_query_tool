@@ -102,13 +102,19 @@ impl SplitState {
         // Handle TYPE declarations that don't create a block:
         // TYPE ... AS OBJECT/VARRAY/TABLE - these are type definitions, not blocks
         // TYPE ... IS REF CURSOR - this is a REF CURSOR type definition in package spec
-        if self.after_as_is == true
+        if self.after_as_is
             && matches!(
                 upper.as_str(),
                 "OBJECT" | "VARRAY" | "TABLE" | "REF" | "RECORD"
             )
         {
-            self.block_depth -= 1;
+            if self.block_depth > 0 {
+                self.block_depth -= 1;
+            } else {
+                eprintln!(
+                    "Warning: encountered TYPE body terminator while block depth was already zero."
+                );
+            }
             self.after_as_is = false;
         }
 
