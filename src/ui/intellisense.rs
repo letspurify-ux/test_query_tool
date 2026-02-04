@@ -104,6 +104,7 @@ pub const SQL_KEYWORDS: &[&str] = &[
     "PASSWORD", "EXPIRE", "ACCOUNT", "LOCK", "UNLOCK",
     // SQL*Plus commands
     "DEFINE", "UNDEFINE", "OFF", "SHOW", "ERRORS", "PRINT", "WHENEVER", "SQLERROR",
+    "VAR", "SERVEROUTPUT", "FEEDBACK", "VERIFY",
     // Conditional compilation (PL/SQL)
     "PLSQL_CCFLAGS", "PLSQL_DEBUG", "PLSQL_OPTIMIZE_LEVEL", "PLSQL_WARNINGS",
 ];
