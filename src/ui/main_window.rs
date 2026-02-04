@@ -844,7 +844,15 @@ impl MainWindow {
                                         Ok(_) => {
                                             let session = db_conn.session_state();
                                             drop(db_conn);
-                                            session.lock().expect("session lock was poisoned").reset();
+                                            match session.lock() {
+                                                Ok(mut guard) => guard.reset(),
+                                                Err(poisoned) => {
+                                                    eprintln!(
+                                                        "Warning: session state lock was poisoned; recovering."
+                                                    );
+                                                    poisoned.into_inner().reset();
+                                                }
+                                            }
                                             let _ = conn_sender.send(ConnectionResult::Success(info));
                                             app::awake();
                                         }
@@ -862,7 +870,15 @@ impl MainWindow {
                             db_conn.disconnect();
                             let session = db_conn.session_state();
                             drop(db_conn);
-                            session.lock().expect("session lock was poisoned").reset();
+                            match session.lock() {
+                                Ok(mut guard) => guard.reset(),
+                                Err(poisoned) => {
+                                    eprintln!(
+                                        "Warning: session state lock was poisoned; recovering."
+                                    );
+                                    poisoned.into_inner().reset();
+                                }
+                            }
 
                             let mut s = state_for_menu.borrow_mut();
                             *s.connection_info.borrow_mut() = None;

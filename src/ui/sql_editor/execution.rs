@@ -3095,7 +3095,15 @@ impl SqlEditorWidget {
                                             conn_name.clear();
                                         }
                                         drop(shared_conn_guard);
-                                        session.lock().expect("session lock was poisoned").reset();
+                                        match session.lock() {
+                                            Ok(mut guard) => guard.reset(),
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner().reset();
+                                            }
+                                        }
                                         SqlEditorWidget::emit_script_message(
                                             &sender,
                                             &session,
@@ -3134,7 +3142,15 @@ impl SqlEditorWidget {
                                         conn_name.clear();
                                     }
                                     drop(shared_conn_guard);
-                                    session.lock().expect("session lock was poisoned").reset();
+                                    match session.lock() {
+                                        Ok(mut guard) => guard.reset(),
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                                "Warning: session state lock was poisoned; recovering."
+                                            );
+                                            poisoned.into_inner().reset();
+                                        }
+                                    }
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
                                         &session,
