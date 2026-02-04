@@ -101,6 +101,7 @@ pub enum ToolCommand {
     },
     SetDefine {
         enabled: bool,
+        define_char: Option<char>,
     },
     SetScan {
         enabled: bool,
@@ -1783,20 +1784,35 @@ impl QueryExecutor {
         if tokens.len() < 3 {
             return ToolCommand::Unsupported {
                 raw: raw.to_string(),
-                message: "SET DEFINE requires ON or OFF.".to_string(),
+                message: "SET DEFINE requires ON, OFF, or a substitution character (e.g. '^').".to_string(),
                 is_error: true,
             };
         }
 
         let mode = tokens[2].to_uppercase();
         match mode.as_str() {
-            "ON" => ToolCommand::SetDefine { enabled: true },
-            "OFF" => ToolCommand::SetDefine { enabled: false },
-            _ => ToolCommand::Unsupported {
-                raw: raw.to_string(),
-                message: "SET DEFINE supports only ON or OFF.".to_string(),
-                is_error: true,
-            },
+            "ON" => ToolCommand::SetDefine { enabled: true, define_char: None },
+            "OFF" => ToolCommand::SetDefine { enabled: false, define_char: None },
+            _ => {
+                // Accept a single character, optionally wrapped in single quotes: '^' or ^
+                let raw_arg = tokens[2];
+                let ch = if raw_arg.starts_with('\'') && raw_arg.ends_with('\'') {
+                    let inner: Vec<char> = raw_arg[1..raw_arg.len() - 1].chars().collect();
+                    if inner.len() == 1 { Some(inner[0]) } else { None }
+                } else {
+                    let chars: Vec<char> = raw_arg.chars().collect();
+                    if chars.len() == 1 { Some(chars[0]) } else { None }
+                };
+
+                match ch {
+                    Some(c) => ToolCommand::SetDefine { enabled: true, define_char: Some(c) },
+                    None => ToolCommand::Unsupported {
+                        raw: raw.to_string(),
+                        message: "SET DEFINE requires ON, OFF, or a single substitution character (e.g. '^').".to_string(),
+                        is_error: true,
+                    },
+                }
+            }
         }
     }
 
