@@ -1703,6 +1703,7 @@ impl SqlEditorWidget {
 
         // Only check connection status if this is not a CONNECT/DISCONNECT command
         if !is_connect_command && !conn_guard.is_connected() {
+            drop(conn_guard);
             fltk::dialog::alert_default("Not connected to database");
             return;
         }
