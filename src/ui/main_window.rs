@@ -842,6 +842,9 @@ impl MainWindow {
                                     let mut db_conn = lock_connection(&connection);
                                     match db_conn.connect(info.clone()) {
                                         Ok(_) => {
+                                            let session = db_conn.session_state();
+                                            drop(db_conn);
+                                            session.lock().expect("session lock was poisoned").reset();
                                             let _ = conn_sender.send(ConnectionResult::Success(info));
                                             app::awake();
                                         }
@@ -857,7 +860,9 @@ impl MainWindow {
                             let connection = state_for_menu.borrow().connection.clone();
                             let mut db_conn = lock_connection(&connection);
                             db_conn.disconnect();
+                            let session = db_conn.session_state();
                             drop(db_conn);
+                            session.lock().expect("session lock was poisoned").reset();
 
                             let mut s = state_for_menu.borrow_mut();
                             *s.connection_info.borrow_mut() = None;

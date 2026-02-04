@@ -94,13 +94,6 @@ impl DatabaseConnection {
         self.connection = Some(connection);
         self.info = info;
         self.connected = true;
-        match self.session.lock() {
-            Ok(mut session) => session.reset(),
-            Err(poisoned) => {
-                eprintln!("Warning: session state lock was poisoned; recovering.");
-                poisoned.into_inner().reset();
-            }
-        }
 
         Ok(())
     }
@@ -108,13 +101,6 @@ impl DatabaseConnection {
     pub fn disconnect(&mut self) {
         self.connection = None;
         self.connected = false;
-        match self.session.lock() {
-            Ok(mut session) => session.reset(),
-            Err(poisoned) => {
-                eprintln!("Warning: session state lock was poisoned; recovering.");
-                poisoned.into_inner().reset();
-            }
-        }
     }
 
     pub fn is_connected(&self) -> bool {
@@ -164,11 +150,7 @@ pub fn create_shared_connection() -> SharedConnection {
 }
 
 pub fn lock_connection(connection: &SharedConnection) -> MutexGuard<'_, DatabaseConnection> {
-    match connection.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            eprintln!("Warning: database connection lock was poisoned; recovering.");
-            poisoned.into_inner()
-        }
-    }
+    connection
+        .lock()
+        .expect("database connection lock was poisoned")
 }

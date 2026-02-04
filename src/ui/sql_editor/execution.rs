@@ -14,6 +14,7 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -1738,6 +1739,7 @@ impl SqlEditorWidget {
         app::flush();
 
         thread::spawn(move || {
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
             struct ScriptFrame {
                 items: Vec<ScriptItem>,
                 index: usize,
@@ -3086,12 +3088,6 @@ impl SqlEditorWidget {
                                 let mut shared_conn_guard = lock_connection(&shared_connection);
                                 match shared_conn_guard.connect(conn_info.clone()) {
                                     Ok(_) => {
-                                        SqlEditorWidget::emit_script_message(
-                                            &sender,
-                                            &session,
-                                            "CONNECT",
-                                            &format!("Connected to {}", conn_info.display_string()),
-                                        );
                                         conn_opt = shared_conn_guard.get_connection();
                                         if shared_conn_guard.is_connected() {
                                             conn_name = shared_conn_guard.get_info().name.clone();
@@ -3099,6 +3095,13 @@ impl SqlEditorWidget {
                                             conn_name.clear();
                                         }
                                         drop(shared_conn_guard);
+                                        session.lock().expect("session lock was poisoned").reset();
+                                        SqlEditorWidget::emit_script_message(
+                                            &sender,
+                                            &session,
+                                            "CONNECT",
+                                            &format!("Connected to {}", conn_info.display_string()),
+                                        );
                                         previous_timeout = conn_opt
                                             .as_ref()
                                             .and_then(|c| c.call_timeout().ok())
@@ -3124,12 +3127,6 @@ impl SqlEditorWidget {
                                 let mut shared_conn_guard = lock_connection(&shared_connection);
                                 if shared_conn_guard.is_connected() {
                                     shared_conn_guard.disconnect();
-                                    SqlEditorWidget::emit_script_message(
-                                        &sender,
-                                        &session,
-                                        "DISCONNECT",
-                                        "Disconnected from database",
-                                    );
                                     conn_opt = shared_conn_guard.get_connection();
                                     if shared_conn_guard.is_connected() {
                                         conn_name = shared_conn_guard.get_info().name.clone();
@@ -3137,6 +3134,13 @@ impl SqlEditorWidget {
                                         conn_name.clear();
                                     }
                                     drop(shared_conn_guard);
+                                    session.lock().expect("session lock was poisoned").reset();
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "DISCONNECT",
+                                        "Disconnected from database",
+                                    );
                                     previous_timeout = conn_opt
                                         .as_ref()
                                         .and_then(|c| c.call_timeout().ok())
@@ -4515,6 +4519,13 @@ impl SqlEditorWidget {
             }
             let _ = sender.send(QueryProgress::BatchFinished);
             app::awake();
+            })); // end catch_unwind
+
+            if let Err(e) = result {
+                eprintln!("Query thread panicked: {:?}", e);
+                let _ = sender.send(QueryProgress::BatchFinished);
+                app::awake();
+            }
         });
     }
 
