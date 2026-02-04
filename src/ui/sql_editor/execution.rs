@@ -2457,8 +2457,21 @@ impl SqlEditorWidget {
                                 ) {
                                     Ok(value) => {
                                         let key = SessionState::normalize_name(&name);
-                                        if let Ok(mut guard) = session.lock() {
-                                            guard.define_vars.insert(key.clone(), value.clone());
+                                        match session.lock() {
+                                            Ok(mut guard) => {
+                                                guard
+                                                    .define_vars
+                                                    .insert(key.clone(), value.clone());
+                                            }
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                let mut guard = poisoned.into_inner();
+                                                guard
+                                                    .define_vars
+                                                    .insert(key.clone(), value.clone());
+                                            }
                                         }
                                         SqlEditorWidget::emit_script_message(
                                             &sender,
@@ -2512,10 +2525,21 @@ impl SqlEditorWidget {
                                 }
                                 let key = SessionState::normalize_name(&name);
                                 if !command_error {
-                                    if let Ok(mut guard) = session.lock() {
-                                        guard
-                                            .define_vars
-                                            .insert(key.clone(), resolved_value.clone());
+                                    match session.lock() {
+                                        Ok(mut guard) => {
+                                            guard
+                                                .define_vars
+                                                .insert(key.clone(), resolved_value.clone());
+                                        }
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                                "Warning: session state lock was poisoned; recovering."
+                                            );
+                                            let mut guard = poisoned.into_inner();
+                                            guard
+                                                .define_vars
+                                                .insert(key.clone(), resolved_value.clone());
+                                        }
                                     }
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
@@ -2527,8 +2551,17 @@ impl SqlEditorWidget {
                             }
                             ToolCommand::Undefine { name } => {
                                 let key = SessionState::normalize_name(&name);
-                                if let Ok(mut guard) = session.lock() {
-                                    guard.define_vars.remove(&key);
+                                match session.lock() {
+                                    Ok(mut guard) => {
+                                        guard.define_vars.remove(&key);
+                                    }
+                                    Err(poisoned) => {
+                                        eprintln!(
+                                            "Warning: session state lock was poisoned; recovering."
+                                        );
+                                        let mut guard = poisoned.into_inner();
+                                        guard.define_vars.remove(&key);
+                                    }
                                 }
                                 SqlEditorWidget::emit_script_message(
                                     &sender,
@@ -2756,9 +2789,19 @@ impl SqlEditorWidget {
                                     } else {
                                         frame.base_dir.join(&path)
                                     };
-                                    if let Ok(mut guard) = session.lock() {
-                                        guard.spool_path = Some(target_path.clone());
-                                        guard.spool_truncate = true;
+                                    match session.lock() {
+                                        Ok(mut guard) => {
+                                            guard.spool_path = Some(target_path.clone());
+                                            guard.spool_truncate = true;
+                                        }
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                                "Warning: session state lock was poisoned; recovering."
+                                            );
+                                            let mut guard = poisoned.into_inner();
+                                            guard.spool_path = Some(target_path.clone());
+                                            guard.spool_truncate = true;
+                                        }
                                     }
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
@@ -2768,9 +2811,19 @@ impl SqlEditorWidget {
                                     );
                                 }
                                 None => {
-                                    if let Ok(mut guard) = session.lock() {
-                                        guard.spool_path = None;
-                                        guard.spool_truncate = false;
+                                    match session.lock() {
+                                        Ok(mut guard) => {
+                                            guard.spool_path = None;
+                                            guard.spool_truncate = false;
+                                        }
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                                "Warning: session state lock was poisoned; recovering."
+                                            );
+                                            let mut guard = poisoned.into_inner();
+                                            guard.spool_path = None;
+                                            guard.spool_truncate = false;
+                                        }
                                     }
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
@@ -4617,8 +4670,17 @@ impl SqlEditorWidget {
                     let prompt = format!("Enter value for {}:", name);
                     let input = SqlEditorWidget::prompt_for_input_with_sender(sender, &prompt)?;
                     if is_double {
-                        if let Ok(mut guard) = session.lock() {
-                            guard.define_vars.insert(key.clone(), input.clone());
+                        match session.lock() {
+                            Ok(mut guard) => {
+                                guard.define_vars.insert(key.clone(), input.clone());
+                            }
+                            Err(poisoned) => {
+                                eprintln!(
+                                    "Warning: session state lock was poisoned; recovering."
+                                );
+                                let mut guard = poisoned.into_inner();
+                                guard.define_vars.insert(key.clone(), input.clone());
+                            }
                         }
                     }
                     input
