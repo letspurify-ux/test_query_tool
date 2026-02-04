@@ -17,6 +17,8 @@ pub const STYLE_COMMENT: char = 'E';
 pub const STYLE_NUMBER: char = 'F';
 pub const STYLE_OPERATOR: char = 'G';
 pub const STYLE_IDENTIFIER: char = 'H';
+pub const STYLE_HINT: char = 'I';
+pub const STYLE_DATETIME_LITERAL: char = 'J';
 
 static SQL_KEYWORDS_SET: Lazy<HashSet<&'static str>> =
     Lazy::new(|| SQL_KEYWORDS.iter().copied().collect());
@@ -71,6 +73,18 @@ pub fn create_style_table() -> Vec<StyleTableEntry> {
         // H - Identifiers/Table names (cyan)
         StyleTableEntry {
             color: Color::from_rgb(78, 201, 176),
+            font: Font::Courier,
+            size: 14,
+        },
+        // I - Hints (gold/yellow)
+        StyleTableEntry {
+            color: Color::from_rgb(255, 215, 0),
+            font: Font::CourierItalic,
+            size: 14,
+        },
+        // J - DateTime literals (DATE '...', TIMESTAMP '...', INTERVAL '...')
+        StyleTableEntry {
+            color: Color::from_rgb(255, 160, 122),
             font: Font::Courier,
             size: 14,
         },
@@ -229,9 +243,11 @@ impl SqlHighlighter {
                 continue;
             }
 
-            // Check for multi-line comment (/* */)
+            // Check for multi-line comment (/* */) or hint (/*+ */)
             if byte == b'/' && bytes.get(idx + 1) == Some(&b'*') {
                 let start = idx;
+                // Check if this is a hint (/*+ ...)
+                let is_hint = bytes.get(idx + 2) == Some(&b'+');
                 idx += 2;
                 loop {
                     match (bytes.get(idx), bytes.get(idx + 1)) {
@@ -243,9 +259,10 @@ impl SqlHighlighter {
                         (None, _) => break,
                     }
                 }
+                let style_char = if is_hint { STYLE_HINT } else { STYLE_COMMENT };
                 for b in start..idx {
                     if let Some(style) = styles.get_mut(b) {
-                        *style = STYLE_COMMENT;
+                        *style = style_char;
                     }
                 }
                 continue;
@@ -375,6 +392,41 @@ impl SqlHighlighter {
                     idx += 1;
                 }
                 let word = text.get(start..idx).unwrap_or("");
+                let upper_word = word.to_ascii_uppercase();
+
+                // Check for DATE/TIMESTAMP/INTERVAL literals (e.g., DATE '2024-01-01')
+                if matches!(upper_word.as_str(), "DATE" | "TIMESTAMP" | "INTERVAL") {
+                    // Skip whitespace to find potential string literal
+                    let mut look_ahead = idx;
+                    while bytes.get(look_ahead).map_or(false, |&b| b == b' ' || b == b'\t') {
+                        look_ahead += 1;
+                    }
+                    // Check if followed by a single quote (string literal)
+                    if bytes.get(look_ahead) == Some(&b'\'') {
+                        // Find the end of the string literal
+                        look_ahead += 1;
+                        while let Some(&b) = bytes.get(look_ahead) {
+                            if b == b'\'' {
+                                if bytes.get(look_ahead + 1) == Some(&b'\'') {
+                                    look_ahead += 2; // escaped quote
+                                    continue;
+                                }
+                                look_ahead += 1; // include closing quote
+                                break;
+                            }
+                            look_ahead += 1;
+                        }
+                        // Style the keyword and string as datetime literal
+                        for b in start..look_ahead {
+                            if let Some(style) = styles.get_mut(b) {
+                                *style = STYLE_DATETIME_LITERAL;
+                            }
+                        }
+                        idx = look_ahead;
+                        continue;
+                    }
+                }
+
                 let token_type = self.classify_word(word);
                 for b in start..idx {
                     if let Some(style) = styles.get_mut(b) {
@@ -676,6 +728,142 @@ mod tests {
         assert!(
             styles[q_start..q_end].chars().all(|c| c == STYLE_STRING),
             "q'[...]' with embedded quote should be string style"
+        );
+    }
+
+    #[test]
+    fn test_hint_highlighting() {
+        let highlighter = SqlHighlighter::new();
+        let text = "SELECT /*+ FULL(t) */ * FROM table t";
+        let styles = highlighter.generate_styles(text);
+
+        // Find the hint position
+        let hint_start = text.find("/*+").unwrap();
+        let hint_end = text.find("*/").unwrap() + 2;
+
+        assert!(
+            styles[hint_start..hint_end].chars().all(|c| c == STYLE_HINT),
+            "Hint /*+ ... */ should be styled as hint, got: {}",
+            &styles[hint_start..hint_end]
+        );
+    }
+
+    #[test]
+    fn test_hint_vs_regular_comment() {
+        let highlighter = SqlHighlighter::new();
+
+        // Regular comment should be comment style
+        let text1 = "SELECT /* comment */ * FROM dual";
+        let styles1 = highlighter.generate_styles(text1);
+        let comment_start = text1.find("/*").unwrap();
+        let comment_end = text1.find("*/").unwrap() + 2;
+        assert!(
+            styles1[comment_start..comment_end].chars().all(|c| c == STYLE_COMMENT),
+            "Regular comment should be comment style"
+        );
+
+        // Hint should be hint style
+        let text2 = "SELECT /*+ INDEX(t) */ * FROM dual";
+        let styles2 = highlighter.generate_styles(text2);
+        let hint_start = text2.find("/*+").unwrap();
+        let hint_end = text2.find("*/").unwrap() + 2;
+        assert!(
+            styles2[hint_start..hint_end].chars().all(|c| c == STYLE_HINT),
+            "Hint should be hint style"
+        );
+    }
+
+    #[test]
+    fn test_complex_hint_highlighting() {
+        let highlighter = SqlHighlighter::new();
+        let text = "SELECT /*+ PARALLEL(t,4) FULL(t) INDEX(x idx_name) */ * FROM table t";
+        let styles = highlighter.generate_styles(text);
+
+        let hint_start = text.find("/*+").unwrap();
+        let hint_end = text.find("*/").unwrap() + 2;
+        assert!(
+            styles[hint_start..hint_end].chars().all(|c| c == STYLE_HINT),
+            "Complex hint should be fully styled as hint"
+        );
+    }
+
+    #[test]
+    fn test_date_literal_highlighting() {
+        let highlighter = SqlHighlighter::new();
+        let text = "SELECT DATE '2024-01-01' FROM dual";
+        let styles = highlighter.generate_styles(text);
+
+        // Find DATE literal position
+        let date_start = text.find("DATE").unwrap();
+        let date_end = text.find("'2024-01-01'").unwrap() + "'2024-01-01'".len();
+
+        assert!(
+            styles[date_start..date_end].chars().all(|c| c == STYLE_DATETIME_LITERAL),
+            "DATE literal should be styled as datetime literal, got: {}",
+            &styles[date_start..date_end]
+        );
+    }
+
+    #[test]
+    fn test_timestamp_literal_highlighting() {
+        let highlighter = SqlHighlighter::new();
+        let text = "SELECT TIMESTAMP '2024-01-01 12:30:00' FROM dual";
+        let styles = highlighter.generate_styles(text);
+
+        let ts_start = text.find("TIMESTAMP").unwrap();
+        let ts_end = text.find("'2024-01-01 12:30:00'").unwrap() + "'2024-01-01 12:30:00'".len();
+
+        assert!(
+            styles[ts_start..ts_end].chars().all(|c| c == STYLE_DATETIME_LITERAL),
+            "TIMESTAMP literal should be styled as datetime literal"
+        );
+    }
+
+    #[test]
+    fn test_interval_literal_highlighting() {
+        let highlighter = SqlHighlighter::new();
+        let text = "SELECT INTERVAL '5' DAY FROM dual";
+        let styles = highlighter.generate_styles(text);
+
+        let int_start = text.find("INTERVAL").unwrap();
+        let int_end = text.find("'5'").unwrap() + "'5'".len();
+
+        assert!(
+            styles[int_start..int_end].chars().all(|c| c == STYLE_DATETIME_LITERAL),
+            "INTERVAL literal should be styled as datetime literal"
+        );
+    }
+
+    #[test]
+    fn test_date_keyword_without_literal() {
+        let highlighter = SqlHighlighter::new();
+        // DATE as column name or keyword should be keyword style
+        let text = "SELECT hire_date FROM employees";
+        let styles = highlighter.generate_styles(text);
+
+        // "date" in "hire_date" should not be specially styled
+        // The whole identifier should be default
+        let hire_date_start = text.find("hire_date").unwrap();
+        let hire_date_end = hire_date_start + "hire_date".len();
+        // hire_date is not a keyword or function, should be default
+        assert!(
+            styles[hire_date_start..hire_date_end].chars().all(|c| c == STYLE_DEFAULT),
+            "hire_date should be default style"
+        );
+    }
+
+    #[test]
+    fn test_lowercase_date_literal() {
+        let highlighter = SqlHighlighter::new();
+        let text = "SELECT date '2024-01-01' FROM dual";
+        let styles = highlighter.generate_styles(text);
+
+        let date_start = text.find("date").unwrap();
+        let date_end = text.find("'2024-01-01'").unwrap() + "'2024-01-01'".len();
+
+        assert!(
+            styles[date_start..date_end].chars().all(|c| c == STYLE_DATETIME_LITERAL),
+            "Lowercase date literal should be styled as datetime literal"
         );
     }
 }
