@@ -357,6 +357,11 @@ impl SqlEditorWidget {
                 return;
             }
 
+            if *query_running.borrow() {
+                set_cursor(Cursor::Wait);
+                app::flush();
+            }
+
             // Reschedule for next poll
             app::add_timeout3(0.05, move |_| {
                 schedule_poll(
