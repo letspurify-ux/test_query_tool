@@ -45,9 +45,11 @@ pub const SQL_KEYWORDS: &[&str] = &[
     "SUBTYPE", "RECORD", "OBJECT", "VARRAY", "REF", "OUT", "NOCOPY",
     "DETERMINISTIC", "PIPELINED", "PARALLEL_ENABLE", "RESULT_CACHE",
     "ACCESSIBLE", "AUTHID", "CURRENT_USER", "DEFINER",
+    "OPEN", "OTHERS", "REFCURSOR", "EACH", "ROW", "MEMBER",
     // Additional DML/DDL keywords
     "RETURNING", "FLASHBACK", "MODEL", "SAMPLE", "SEED",
     "SKIP", "LOCKED", "NOWAIT", "WAIT", "SCN", "VERSIONS", "PERIOD",
+    "INCREMENT", "SIZE", "UNLIMITED",
     // Data types
     "BINARY_FLOAT", "BINARY_DOUBLE", "LONG", "RAW", "NCHAR", "NVARCHAR2", "NCLOB", "BFILE",
     "XMLTYPE", "ANYDATA", "ANYTYPE", "ANYDATASET",
@@ -100,6 +102,8 @@ pub const SQL_KEYWORDS: &[&str] = &[
     // Security
     "AUDIT", "NOAUDIT", "IDENTIFIED", "EXTERNALLY", "GLOBALLY",
     "PASSWORD", "EXPIRE", "ACCOUNT", "LOCK", "UNLOCK",
+    // SQL*Plus commands
+    "DEFINE", "UNDEFINE", "OFF", "SHOW", "ERRORS", "PRINT", "WHENEVER", "SQLERROR",
     // Conditional compilation (PL/SQL)
     "PLSQL_CCFLAGS", "PLSQL_DEBUG", "PLSQL_OPTIMIZE_LEVEL", "PLSQL_WARNINGS",
 ];
