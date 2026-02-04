@@ -909,7 +909,7 @@ impl ObjectBrowserWidget {
                     "Execute Procedure"
                 }
                 ObjectItem::Simple { object_type, .. } if object_type == "PACKAGES" => {
-                    "Generate DDL|Generate DDL (Body)"
+                    "Generate DDL"
                 }
                 _ => return,
             };
@@ -1195,38 +1195,6 @@ impl ObjectBrowserWidget {
                                 app::awake();
                             });
                         }
-                    }
-                    (
-                        "Generate DDL (Body)",
-                        ObjectItem::Simple {
-                            object_type,
-                            object_name,
-                        },
-                    ) if object_type == "PACKAGES" => {
-                        let connection = connection.clone();
-                        let sender = action_sender.clone();
-                        let object_name = object_name.clone();
-                        thread::spawn(move || {
-                            let conn = {
-                                let conn_guard = lock_connection(&connection);
-                                if !conn_guard.is_connected() {
-                                    None
-                                } else {
-                                    conn_guard.get_connection()
-                                }
-                            };
-                            let result = if let Some(db_conn) = conn {
-                                ObjectBrowser::get_package_body_ddl(
-                                    db_conn.as_ref(),
-                                    &object_name,
-                                )
-                                .map_err(|err| err.to_string())
-                            } else {
-                                Err("Not connected to database".to_string())
-                            };
-                            let _ = sender.send(ObjectActionResult::Ddl(result));
-                            app::awake();
-                        });
                     }
                     _ => {}
                 }

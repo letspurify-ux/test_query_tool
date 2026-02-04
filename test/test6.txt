@@ -1,206 +1,401 @@
 -- ============================================================
--- OQT / TOAD / SQL*Plus 호환 쿼리툴: 하드코어 파서/실행단위 테스트 스크립트 (1개)
--- 포함: nested BEGIN/END, DECLARE, IF, CASE(expr/stmt), LOOP/WHILE/FOR,
---       cursor-for-loop, dynamic sql, exception, label/exit/continue,
---       문자열 내 END;/;/* */ -- / 토큰, q-quote 등
+-- OQT Mega Torture Script (Deep Nest + Parser Traps)
 -- ============================================================
 
--- (선택) 실행 로그 보기: SQL*Plus/TOAD 기준
-SET SERVEROUTPUT ON
+SET SERVEROUTPUT ON SIZE UNLIMITED
 SET FEEDBACK ON
-SET DEFINE OFF
+SET VERIFY ON
+SET DEFINE ON
+WHENEVER SQLERROR EXIT SQL.SQLCODE
 
--- 기존 오브젝트 정리 (없으면 무시)
+PROMPT [0] bind/substitution setup
+
+VAR v_rc   REFCURSOR
+VAR v_grp  NUMBER
+VAR v_n    NUMBER
+VAR v_txt  VARCHAR2(400)
+
+DEFINE oqt_tag = 'OQT_MEGA'
+
 BEGIN
-  EXECUTE IMMEDIATE 'DROP TABLE oqt_t_test PURGE';
-EXCEPTION WHEN OTHERS THEN NULL;
-END;
-/
-BEGIN
-  EXECUTE IMMEDIATE 'DROP SEQUENCE oqt_seq_test';
-EXCEPTION WHEN OTHERS THEN NULL;
-END;
-/
-BEGIN
-  EXECUTE IMMEDIATE 'DROP PACKAGE oqt_parse_torture_pkg';
-EXCEPTION WHEN OTHERS THEN NULL;
+  :v_grp := 2;
+  :v_n   := 5;
+  :v_txt := 'hello &oqt_tag';
 END;
 /
 
--- 테스트용 테이블/시퀀스
+PROMPT [1] cleanup (ignore errors)
+
+BEGIN EXECUTE IMMEDIATE 'DROP TRIGGER oqt_trg_test_bi'; EXCEPTION WHEN OTHERS THEN NULL; END;
+/
+BEGIN EXECUTE IMMEDIATE 'DROP PACKAGE oqt_mega_pkg';     EXCEPTION WHEN OTHERS THEN NULL; END;
+/
+BEGIN EXECUTE IMMEDIATE 'DROP TYPE oqt_obj FORCE';       EXCEPTION WHEN OTHERS THEN NULL; END;
+/
+BEGIN EXECUTE IMMEDIATE 'DROP TABLE oqt_t_test PURGE';   EXCEPTION WHEN OTHERS THEN NULL; END;
+/
+BEGIN EXECUTE IMMEDIATE 'DROP TABLE oqt_t_log  PURGE';   EXCEPTION WHEN OTHERS THEN NULL; END;
+/
+BEGIN EXECUTE IMMEDIATE 'DROP SEQUENCE oqt_seq_test';    EXCEPTION WHEN OTHERS THEN NULL; END;
+/
+BEGIN EXECUTE IMMEDIATE 'DROP SEQUENCE oqt_seq_log';     EXCEPTION WHEN OTHERS THEN NULL; END;
+/
+
+PROMPT [2] schema objects
+
 CREATE TABLE oqt_t_test (
-  id        NUMBER PRIMARY KEY,
-  grp       VARCHAR2(30),
-  n         NUMBER,
-  txt       VARCHAR2(4000),
+  id         NUMBER PRIMARY KEY,
+  grp        NUMBER NOT NULL,
+  n          NUMBER NOT NULL,
+  txt        VARCHAR2(4000),
   created_at DATE DEFAULT SYSDATE
 );
-/
-CREATE SEQUENCE oqt_seq_test START WITH 1 INCREMENT BY 1;
-/
 
--- 패키지: 복잡한 구조 한 방에
-CREATE OR REPLACE PACKAGE oqt_parse_torture_pkg AS
-  PROCEDURE run_all(p_limit IN NUMBER DEFAULT 5);
+CREATE TABLE oqt_t_log (
+  log_id     NUMBER PRIMARY KEY,
+  tag        VARCHAR2(30),
+  step       VARCHAR2(60),
+  depth      NUMBER,
+  msg        VARCHAR2(4000),
+  created_at DATE DEFAULT SYSDATE
+);
+
+CREATE SEQUENCE oqt_seq_test START WITH 1 INCREMENT BY 1 NOCACHE;
+CREATE SEQUENCE oqt_seq_log  START WITH 1 INCREMENT BY 1 NOCACHE;
+
+PROMPT [3] object type (nested tokens in string)
+
+CREATE OR REPLACE TYPE oqt_obj AS OBJECT (
+  id  NUMBER,
+  txt VARCHAR2(2000),
+  MEMBER FUNCTION peek RETURN VARCHAR2
+);
+/
+SHOW ERRORS TYPE oqt_obj
+
+CREATE OR REPLACE TYPE BODY oqt_obj AS
+  MEMBER FUNCTION peek RETURN VARCHAR2 IS
+  BEGIN
+    RETURN 'peek:'||SUBSTR(txt,1,40)||q'[ | tokens: END; / ; /* */ -- ]';
+  END;
 END;
 /
-CREATE OR REPLACE PACKAGE BODY oqt_parse_torture_pkg AS
+SHOW ERRORS TYPE BODY oqt_obj
 
-  PROCEDURE log(p IN VARCHAR2) IS
+PROMPT [4] package spec
+
+CREATE OR REPLACE PACKAGE oqt_mega_pkg AS
+  PROCEDURE seed(p_rows IN NUMBER);
+  PROCEDURE run_torture(p_grp IN NUMBER, p_n IN NUMBER, p_txt IN VARCHAR2);
+  PROCEDURE open_rc(p_grp IN NUMBER, p_rc OUT SYS_REFCURSOR);
+
+  FUNCTION f_expr_case(p IN NUMBER) RETURN VARCHAR2;
+  FUNCTION f_deep(p_grp IN NUMBER, p_n IN NUMBER, p_txt IN VARCHAR2) RETURN NUMBER;
+END oqt_mega_pkg;
+/
+SHOW ERRORS PACKAGE oqt_mega_pkg
+
+PROMPT [5] package body (deep nesting)
+
+CREATE OR REPLACE PACKAGE BODY oqt_mega_pkg AS
+
+  PROCEDURE log_msg(p_tag IN VARCHAR2, p_step IN VARCHAR2, p_depth IN NUMBER, p_msg IN VARCHAR2) IS
   BEGIN
-    DBMS_OUTPUT.PUT_LINE('[TORTURE] ' || p);
+    INSERT INTO oqt_t_log(log_id, tag, step, depth, msg)
+    VALUES (oqt_seq_log.NEXTVAL, SUBSTR(p_tag,1,30), SUBSTR(p_step,1,60), p_depth, SUBSTR(p_msg,1,4000));
+
+    DBMS_OUTPUT.PUT_LINE('[LOG]['||p_tag||']['||p_step||'][d='||p_depth||'] '||SUBSTR(p_msg,1,200));
   END;
 
-  FUNCTION f_tag(p_n IN NUMBER) RETURN VARCHAR2 IS
+  FUNCTION f_expr_case(p IN NUMBER) RETURN VARCHAR2 IS
   BEGIN
-    -- CASE 표현식
-    RETURN CASE
-             WHEN p_n IS NULL THEN 'N=NULL'
-             WHEN p_n < 0 THEN 'N<0'
-             WHEN p_n BETWEEN 0 AND 2 THEN 'N=0..2'
-             ELSE 'N=OTHER'
-           END;
-  END;
-
-  PROCEDURE p_insert(p_grp IN VARCHAR2, p_n IN NUMBER, p_txt IN VARCHAR2) IS
-  BEGIN
-    INSERT INTO oqt_t_test(id, grp, n, txt) VALUES (oqt_seq_test.NEXTVAL, p_grp, p_n, p_txt);
-  END;
-
-  PROCEDURE run_all(p_limit IN NUMBER DEFAULT 5) IS
-    v_i       NUMBER := 0;
-    v_sum     NUMBER := 0;
-    v_dummy   VARCHAR2(4000);
-    v_sql     VARCHAR2(4000);
-    v_cnt     NUMBER;
-  BEGIN
-    log('run_all start, p_limit=' || p_limit);
-
-    -- 문자열 안에 END;/; 주석토큰/슬래시 포함 (파서 흔들기)
-    v_dummy := q'[
-      fake tokens: ; ; ;; / /  /* comment */  -- line
-      also inside string: 'END;' "END;" q'[END;]'
-      and even: BEGIN END; /  (but all in a string)
-    ]';
-    log('dummy=' || SUBSTR(v_dummy, 1, 80));
-
-    -- 1) 기본 LOOP + IF + CONTINUE/EXIT WHEN + 중첩 블록
-    <<main_loop>>
-    LOOP
-      v_i := v_i + 1;
-
-      IF v_i > p_limit THEN
-        EXIT main_loop;
-      ELSIF MOD(v_i, 2) = 0 THEN
-        -- 짝수는 건너뛰되, 중첩 BEGIN/END 하나 넣기
-        BEGIN
-          log('continue at even v_i=' || v_i);
-        END;
-        CONTINUE main_loop;
-      ELSE
-        log('processing odd v_i=' || v_i);
-      END IF;
-
-      -- 2) 문장형 CASE (각 WHEN에서 다른 제어/블록)
+    RETURN
       CASE
-        WHEN v_i = 1 THEN
-          p_insert('CASE_STMT', v_i, 'when=1 ; still string token END;');
-        WHEN v_i = 3 THEN
-          DECLARE
-            x NUMBER := 100 + v_i;
-          BEGIN
-            p_insert('CASE_STMT', v_i, 'when=3 inner DECLARE x=' || x);
-          END;
+        WHEN p IS NULL THEN 'NULL'
+        WHEN p < 0 THEN 'NEG'
+        WHEN p = 0 THEN 'ZERO'
+        WHEN MOD(p,2)=0 THEN 'EVEN'
+        ELSE 'ODD'
+      END;
+  END;
+
+  FUNCTION f_deep(p_grp IN NUMBER, p_n IN NUMBER, p_txt IN VARCHAR2) RETURN NUMBER IS
+    v NUMBER := 0;
+    -- 레코드/컬렉션까지 섞기
+    TYPE t_num_tab IS TABLE OF NUMBER INDEX BY PLS_INTEGER;
+    a t_num_tab;
+  BEGIN
+    -- 다층: CASE(식) 안에 CASE(식) + 함수 호출 + 문자열 토큰
+    v :=
+      CASE
+        WHEN p_grp < 0 THEN -1000
+        WHEN p_grp = 0 THEN
+          CASE
+            WHEN p_n > 10 THEN 100
+            ELSE 10
+          END
         ELSE
-          p_insert('CASE_STMT', v_i, 'when=else tag=' || f_tag(v_i));
-      END CASE;
-
-      -- 3) FOR LOOP 중첩 + IF + EXIT WHEN
-      FOR j IN 1..3 LOOP
-        v_sum := v_sum + j;
-
-        IF j = 2 AND v_i = 1 THEN
-          log('nested for: v_i=1 j=2 exit-when demonstration');
-        END IF;
-
-        EXIT WHEN (v_sum > 20);
-      END LOOP;
-
-      -- 4) WHILE LOOP + 중첩 BEGIN/END + 예외 처리
-      DECLARE
-        k NUMBER := 0;
-      BEGIN
-        WHILE k < 3 LOOP
-          k := k + 1;
-          BEGIN
-            IF k = 2 AND v_i = 3 THEN
-              -- 의도적 예외 발생
-              RAISE_APPLICATION_ERROR(-20001, 'forced error at v_i=3 k=2');
-            END IF;
-            p_insert('WHILE', v_i*10 + k, 'k=' || k || ' / txt contains "END;" inside');
-          EXCEPTION
-            WHEN OTHERS THEN
-              p_insert('EXCEPTION', v_i*10 + k, 'caught err: ' || SQLERRM);
-          END;
-        END LOOP;
+          CASE
+            WHEN INSTR(NVL(p_txt,'x'), 'END;') > 0 THEN 777
+            ELSE LENGTH(NVL(p_txt,'')) + p_n
+          END
       END;
 
-      -- 5) 동적 SQL (EXECUTE IMMEDIATE) + 바인드
-      v_sql := 'INSERT INTO oqt_t_test(id, grp, n, txt) VALUES (oqt_seq_test.NEXTVAL, :g, :n, :t)';
-      EXECUTE IMMEDIATE v_sql USING 'DYN', v_i, 'dyn insert; token / ; END; inside string';
-
-    END LOOP main_loop;
-
-    -- 6) 커서 FOR LOOP (SELECT) + 내부 CASE 표현식 사용
-    v_cnt := 0;
-    FOR r IN (
-      SELECT id, grp, n, txt,
-             CASE WHEN n IS NULL THEN 'NULL' WHEN n < 10 THEN 'LT10' ELSE 'GE10' END AS bucket
-      FROM oqt_t_test
-      ORDER BY id
-    ) LOOP
-      v_cnt := v_cnt + 1;
-      IF v_cnt <= 5 THEN
-        log('row#' || v_cnt || ' id=' || r.id || ' grp=' || r.grp || ' bucket=' || r.bucket);
-      END IF;
+    -- 배열 채우고 루프
+    FOR i IN 1..5 LOOP
+      a(i) := v + i;
     END LOOP;
 
-    -- 7) 마지막 중첩 블록: 트랜잭션 + 집계 + 출력
+    -- WHILE + EXIT
     DECLARE
-      z NUMBER;
+      k PLS_INTEGER := 1;
+      s NUMBER := 0;
     BEGIN
-      SELECT COUNT(*)
-        INTO z
-        FROM oqt_t_test;
+      WHILE k <= 5 LOOP
+        s := s + a(k);
+        k := k + 1;
+        EXIT WHEN s > 99999;
+      END LOOP;
+      v := v + s;
+    END;
 
-      log('total rows=' || z);
+    RETURN v;
+  END;
 
-      IF z = 0 THEN
-        ROLLBACK;
-        log('rollback (no rows)');
-      ELSE
-        COMMIT;
-        log('commit (rows exist)');
+  PROCEDURE seed(p_rows IN NUMBER) IS
+    i NUMBER := 0;
+  BEGIN
+    WHILE i < p_rows LOOP
+      i := i + 1;
+      INSERT INTO oqt_t_test(id, grp, n, txt)
+      VALUES (oqt_seq_test.NEXTVAL,
+              MOD(i, 4),
+              i,
+              'seed#'||i||q'[ ; tokens: END; / ; /* */ -- ]');
+      IF MOD(i, 9) = 0 THEN
+        log_msg('SEED','progress',1,'i='||i);
+      END IF;
+    END LOOP;
+    COMMIT;
+  END;
+
+  PROCEDURE run_torture(p_grp IN NUMBER, p_n IN NUMBER, p_txt IN VARCHAR2) IS
+    v_depth NUMBER := 0;
+    v_sql   VARCHAR2(4000);
+    v_cnt   NUMBER;
+    v_obj   oqt_obj;
+    v_flag  VARCHAR2(20);
+    v_sum   NUMBER := 0;
+
+    -- 커스텀 예외
+    e_bad_input EXCEPTION;
+    PRAGMA EXCEPTION_INIT(e_bad_input, -20001);
+
+    -- 레이블/GOTO 테스트(사람이 잘 안 씀)
+    PROCEDURE jumpy(p IN NUMBER) IS
+      x NUMBER := 0;
+    BEGIN
+      <<top>>
+      x := x + 1;
+      IF x < 2 THEN
+        GOTO top;
+      END IF;
+
+      IF p = 12345 THEN
+        NULL;
       END IF;
     END;
 
-    log('run_all end');
+  BEGIN
+    v_depth := v_depth + 1;
+    log_msg('RUN','start',v_depth,'grp='||p_grp||' n='||p_n||' txt='||SUBSTR(p_txt,1,80));
 
-  END run_all;
+    -- 입력 검증 + RAISE_APPLICATION_ERROR
+    IF p_txt IS NULL THEN
+      RAISE_APPLICATION_ERROR(-20001, 'p_txt is NULL');
+    END IF;
 
-END oqt_parse_torture_pkg;
+    -- IF + CASE(statement) + nested blocks
+    IF p_grp IS NULL THEN
+      v_flag := 'G_NULL';
+    ELSIF p_grp < 0 THEN
+      v_flag := 'G_NEG';
+    ELSE
+      CASE
+        WHEN p_grp = 0 THEN
+          v_flag := 'G0_'||f_expr_case(p_n);
+          IF p_n BETWEEN 3 AND 7 THEN
+            DECLARE
+              inner NUMBER := p_n * 11;
+            BEGIN
+              log_msg('RUN','inner0',v_depth+1,'inner='||inner||q'[ | inside: END; / ; ]');
+            END;
+          END IF;
+
+        WHEN p_grp IN (1,2) THEN
+          v_flag := 'G12';
+          CASE
+            WHEN p_n < 0 THEN v_flag := v_flag||'_N';
+            WHEN p_n = 0 THEN v_flag := v_flag||'_Z';
+            ELSE
+              v_flag := v_flag||'_P';
+              -- FOR LOOP + nested CASE(expression)
+              FOR i IN 1..3 LOOP
+                v_sum := v_sum + (CASE WHEN MOD(i,2)=0 THEN i*10 ELSE i END);
+              END LOOP;
+          END CASE;
+
+        ELSE
+          v_flag := 'G_OTHER';
+      END CASE;
+    END IF;
+
+    v_depth := v_depth + 1;
+    log_msg('RUN','flag',v_depth,'flag='||v_flag||' v_sum='||v_sum);
+
+    -- 객체 타입 사용
+    v_obj := oqt_obj(999, p_txt);
+    log_msg('RUN','obj',v_depth, v_obj.peek);
+
+    -- 동적 SQL with bind
+    v_sql := 'INSERT INTO oqt_t_test(id, grp, n, txt) VALUES (oqt_seq_test.NEXTVAL, :g, :n, :t)';
+    EXECUTE IMMEDIATE v_sql USING p_grp, p_n,
+      (p_txt || ' |flag='||v_flag||' |deep='||f_deep(p_grp,p_n,p_txt) ||
+       q'[ |q-quote: END; / ; /* */ -- ]');
+
+    -- SAVEPOINT + 예외 처리 분기
+    SAVEPOINT sp1;
+    BEGIN
+      -- 일부러 0으로 나누기 유발(조건부) -> 예외 테스트
+      IF p_n = 0 THEN
+        v_sum := v_sum / p_n; -- ZERO_DIVIDE
+      END IF;
+    EXCEPTION
+      WHEN ZERO_DIVIDE THEN
+        log_msg('RUN','ex_zero',v_depth+1,'caught ZERO_DIVIDE; rollback to sp1');
+        ROLLBACK TO sp1;
+    END;
+
+    -- 커서 루프 + EXIT WHEN + CASE(expression)
+    FOR r IN (
+      SELECT id, grp, n,
+             CASE
+               WHEN n < 0 THEN 'NEG'
+               WHEN n = 0 THEN 'ZERO'
+               WHEN MOD(n,2)=0 THEN 'EVEN'
+               ELSE 'ODD'
+             END AS kind
+      FROM oqt_t_test
+      WHERE grp = p_grp
+      ORDER BY id
+      FETCH FIRST 6 ROWS ONLY
+    ) LOOP
+      v_depth := v_depth + 1;
+      log_msg('RUN','loop',v_depth,'id='||r.id||' n='||r.n||' kind='||r.kind);
+      EXIT WHEN v_depth > 10;
+    END LOOP;
+
+    SELECT COUNT(*) INTO v_cnt FROM oqt_t_test WHERE grp = p_grp;
+    log_msg('RUN','count',v_depth,'cnt(grp='||p_grp||')='||v_cnt);
+
+    -- 레이블/GOTO 사용 프로시저 호출(파서/블록 검증용)
+    jumpy(p_n);
+
+    COMMIT;
+    log_msg('RUN','done',v_depth,'done');
+
+  EXCEPTION
+    WHEN e_bad_input THEN
+      ROLLBACK;
+      log_msg('ERR','bad_input',999,'code='||SQLCODE||' msg='||SQLERRM);
+      RAISE;
+    WHEN OTHERS THEN
+      ROLLBACK;
+      log_msg('ERR','others',999,'code='||SQLCODE||' msg='||SQLERRM);
+      RAISE;
+  END run_torture;
+
+  PROCEDURE open_rc(p_grp IN NUMBER, p_rc OUT SYS_REFCURSOR) IS
+  BEGIN
+    OPEN p_rc FOR
+      SELECT
+        t.id, t.grp, t.n,
+        CASE
+          WHEN t.grp = 0 THEN CASE WHEN t.n > 10 THEN 'G0_BIG' ELSE 'G0_SMALL' END
+          WHEN t.grp IN (1,2) THEN 'G12'
+          ELSE 'GOTHER'
+        END AS bucket,
+        SUBSTR(t.txt,1,200) AS txt
+      FROM oqt_t_test t
+      WHERE t.grp = p_grp
+      ORDER BY t.id;
+  END open_rc;
+
+END oqt_mega_pkg;
 /
-SHOW ERRORS PACKAGE BODY oqt_parse_torture_pkg
+SHOW ERRORS PACKAGE BODY oqt_mega_pkg
 
--- 실행
+PROMPT [6] trigger (extra nesting surface)
+
+CREATE OR REPLACE TRIGGER oqt_trg_test_bi
+BEFORE INSERT ON oqt_t_test
+FOR EACH ROW
+DECLARE
+  v_tag VARCHAR2(30) := 'TRG';
 BEGIN
-  oqt_parse_torture_pkg.run_all(7);
+  -- 문자열에 END;/; 토큰 포함
+  :NEW.txt := NVL(:NEW.txt,'(null)') || q'[ |trg tokens: END; / ; /* */ -- ]';
+
+  IF :NEW.n < 0 THEN
+    v_tag := 'TRG_NEG';
+  ELSE
+    CASE
+      WHEN MOD(:NEW.n,2)=0 THEN v_tag := 'TRG_EVEN';
+      ELSE v_tag := 'TRG_ODD';
+    END CASE;
+  END IF;
+
+  INSERT INTO oqt_t_log(log_id, tag, step, depth, msg)
+  VALUES (oqt_seq_log.NEXTVAL, v_tag, 'before_insert', 1, 'id='||NVL(:NEW.id,-1));
+END;
+/
+SHOW ERRORS TRIGGER oqt_trg_test_bi
+
+PROMPT [7] execute
+
+BEGIN
+  oqt_mega_pkg.seed(30);
 END;
 /
 
--- 결과 확인
-SELECT grp, COUNT(*) cnt, MIN(n) min_n, MAX(n) max_n
+BEGIN
+  oqt_mega_pkg.run_torture(:v_grp, :v_n, :v_txt);
+  oqt_mega_pkg.run_torture(0, 11, 'txt has END; and / and ; inside');
+  oqt_mega_pkg.run_torture(1,  0, 'n=0 triggers ZERO_DIVIDE branch (caught)'); -- 예외 블록 테스트
+END;
+/
+
+PROMPT [8] refcursor print
+
+BEGIN
+  oqt_mega_pkg.open_rc(0, :v_rc);
+END;
+/
+PRINT v_rc
+
+PROMPT [9] summary queries
+
+SELECT grp,
+       COUNT(*) AS cnt,
+       SUM(CASE WHEN MOD(n,2)=0 THEN 1 ELSE 0 END) AS even_cnt,
+       SUM(CASE WHEN INSTR(txt,'END;')>0 THEN 1 ELSE 0 END) AS has_end_token_cnt
 FROM oqt_t_test
 GROUP BY grp
 ORDER BY grp;
-/
+
+SELECT log_id, tag, step, depth, SUBSTR(msg,1,120) AS msg
+FROM oqt_t_log
+ORDER BY log_id
+FETCH FIRST 40 ROWS ONLY;
+
+PROMPT [DONE]
