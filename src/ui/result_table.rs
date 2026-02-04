@@ -265,8 +265,10 @@ impl ResultTableWidget {
             return None;
         }
 
-        let start_row = table.row_position().max(0).min(rows - 1);
-        let start_col = table.col_position().max(0).min(cols - 1);
+        let last_row = rows.saturating_sub(1);
+        let last_col = cols.saturating_sub(1);
+        let start_row = table.row_position().max(0).min(last_row);
+        let start_col = table.col_position().max(0).min(last_col);
 
         let mut row_hit = None;
         let mut row = start_row;
@@ -343,10 +345,13 @@ impl ResultTableWidget {
         let data_bottom = table_y + table_h;
 
         // Clamp row
+        let last_row = rows.saturating_sub(1);
+        let last_col = cols.saturating_sub(1);
+
         let row = if mouse_y < data_top {
             0
         } else if mouse_y >= data_bottom {
-            rows - 1
+            last_row
         } else {
             // Find row by iterating
             (0..rows)
@@ -359,14 +364,14 @@ impl ResultTableWidget {
                         false
                     }
                 })
-                .unwrap_or(rows - 1)
+                .unwrap_or(last_row)
         };
 
         // Clamp col
         let col = if mouse_x < data_left {
             0
         } else if mouse_x >= data_right {
-            cols - 1
+            last_col
         } else {
             (0..cols)
                 .find(|&c| {
@@ -378,7 +383,7 @@ impl ResultTableWidget {
                         false
                     }
                 })
-                .unwrap_or(cols - 1)
+                .unwrap_or(last_col)
         };
 
         Some((row, col))
