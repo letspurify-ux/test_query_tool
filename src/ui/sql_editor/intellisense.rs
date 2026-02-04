@@ -19,7 +19,7 @@ use crate::ui::intellisense::{
 use super::*;
 
 impl SqlEditorWidget {
-    fn setup_intellisense(&mut self) {
+    pub fn setup_intellisense(&mut self) {
         let buffer = self.buffer.clone();
         let mut editor = self.editor.clone();
         let intellisense_data = self.intellisense_data.clone();
@@ -514,7 +514,7 @@ impl SqlEditorWidget {
         });
     }
 
-    fn trigger_intellisense(
+    pub fn trigger_intellisense(
         editor: &TextEditor,
         buffer: &TextBuffer,
         intellisense_data: &Rc<RefCell<IntellisenseData>>,
@@ -1010,7 +1010,7 @@ impl SqlEditorWidget {
     }
 
     /// Show quick describe dialog for a table (F4 functionality)
-    fn show_quick_describe_dialog(object_name: &str, columns: &[TableColumnDetail]) {
+    pub fn show_quick_describe_dialog(object_name: &str, columns: &[TableColumnDetail]) {
         use fltk::{prelude::*, text::TextDisplay, window::Window};
 
         let mut info = format!("=== {} ===\n\n", object_name.to_uppercase());
