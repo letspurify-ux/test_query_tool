@@ -394,6 +394,13 @@ impl SqlEditorWidget {
                     "SET ECHO OFF".to_string()
                 }
             }
+            ToolCommand::SetTiming { enabled } => {
+                if *enabled {
+                    "SET TIMING ON".to_string()
+                } else {
+                    "SET TIMING OFF".to_string()
+                }
+            }
             ToolCommand::SetFeedback { enabled } => {
                 if *enabled {
                     "SET FEEDBACK ON".to_string()
@@ -2281,6 +2288,7 @@ impl SqlEditorWidget {
                                     scan_enabled,
                                     verify_enabled,
                                     echo_enabled,
+                                    timing_enabled,
                                     feedback_enabled,
                                     heading_enabled,
                                     pagesize,
@@ -2295,6 +2303,7 @@ impl SqlEditorWidget {
                                         guard.scan_enabled,
                                         guard.verify_enabled,
                                         guard.echo_enabled,
+                                        guard.timing_enabled,
                                         guard.feedback_enabled,
                                         guard.heading_enabled,
                                         guard.pagesize,
@@ -2314,6 +2323,7 @@ impl SqlEditorWidget {
                                             guard.scan_enabled,
                                             guard.verify_enabled,
                                             guard.echo_enabled,
+                                            guard.timing_enabled,
                                             guard.feedback_enabled,
                                             guard.heading_enabled,
                                             guard.pagesize,
@@ -2358,6 +2368,10 @@ impl SqlEditorWidget {
                                     format!("SCAN {}", if scan_enabled { "ON" } else { "OFF" }),
                                     format!("VERIFY {}", if verify_enabled { "ON" } else { "OFF" }),
                                     format!("ECHO {}", if echo_enabled { "ON" } else { "OFF" }),
+                                    format!(
+                                        "TIMING {}",
+                                        if timing_enabled { "ON" } else { "OFF" }
+                                    ),
                                     format!(
                                         "FEEDBACK {}",
                                         if feedback_enabled { "ON" } else { "OFF" }
@@ -2700,6 +2714,26 @@ impl SqlEditorWidget {
                                     &session,
                                     "SET ECHO",
                                     &format!("ECHO {}", if enabled { "ON" } else { "OFF" }),
+                                );
+                            }
+                            ToolCommand::SetTiming { enabled } => {
+                                {
+                                    let mut guard = match session.lock() {
+                                        Ok(guard) => guard,
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                            poisoned.into_inner()
+                                        }
+                                    };
+                                    guard.timing_enabled = enabled;
+                                }
+                                SqlEditorWidget::emit_script_message(
+                                    &sender,
+                                    &session,
+                                    "SET TIMING",
+                                    &format!("TIMING {}", if enabled { "ON" } else { "OFF" }),
                                 );
                             }
                             ToolCommand::SetFeedback { enabled } => {
@@ -3119,7 +3153,8 @@ impl SqlEditorWidget {
 
                         if upper.starts_with("COMMIT") {
                             let mut timed_out = false;
-                            let result = match conn.commit() {
+                            let statement_start = Instant::now();
+                            let mut result = match conn.commit() {
                                 Ok(()) => QueryResult {
                                     sql: sql_text.to_string(),
                                     columns: vec![],
@@ -3135,6 +3170,8 @@ impl SqlEditorWidget {
                                     QueryResult::new_error(&sql_text, &err.to_string())
                                 }
                             };
+                            let timing_duration = statement_start.elapsed();
+                            result.execution_time = timing_duration;
                             let result_success = result.success;
                             if script_mode {
                                 if result_success {
@@ -3170,6 +3207,11 @@ impl SqlEditorWidget {
                                 app::awake();
                                 result_index += 1;
                             }
+                            SqlEditorWidget::emit_timing_if_enabled(
+                                &sender,
+                                &session,
+                                timing_duration,
+                            );
                             if timed_out {
                                 stop_execution = true;
                             } else if !result_success && !continue_on_error {
@@ -3180,7 +3222,8 @@ impl SqlEditorWidget {
 
                         if upper.starts_with("ROLLBACK") {
                             let mut timed_out = false;
-                            let result = match conn.rollback() {
+                            let statement_start = Instant::now();
+                            let mut result = match conn.rollback() {
                                 Ok(()) => QueryResult {
                                     sql: sql_text.to_string(),
                                     columns: vec![],
@@ -3196,6 +3239,8 @@ impl SqlEditorWidget {
                                     QueryResult::new_error(&sql_text, &err.to_string())
                                 }
                             };
+                            let timing_duration = statement_start.elapsed();
+                            result.execution_time = timing_duration;
                             let result_success = result.success;
                             if script_mode {
                                 if result_success {
@@ -3231,6 +3276,11 @@ impl SqlEditorWidget {
                                 app::awake();
                                 result_index += 1;
                             }
+                            SqlEditorWidget::emit_timing_if_enabled(
+                                &sender,
+                                &session,
+                                timing_duration,
+                            );
                             if timed_out {
                                 stop_execution = true;
                             } else if !result_success && !continue_on_error {
@@ -3374,6 +3424,11 @@ impl SqlEditorWidget {
                                         app::awake();
                                         result_index += 1;
                                     }
+                                    SqlEditorWidget::emit_timing_if_enabled(
+                                        &sender,
+                                        &session,
+                                        statement_start.elapsed(),
+                                    );
                                     if timed_out || cancelled || !continue_on_error {
                                         stop_execution = true;
                                     }
@@ -3381,12 +3436,13 @@ impl SqlEditorWidget {
                                 }
                             };
 
+                            let timing_duration = statement_start.elapsed();
                             let mut result = QueryResult {
                                 sql: sql_text.to_string(),
                                 columns: vec![],
                                 rows: vec![],
                                 row_count: 0,
-                                execution_time: statement_start.elapsed(),
+                                execution_time: timing_duration,
                                 message: "PL/SQL procedure successfully completed".to_string(),
                                 is_select: false,
                                 success: true,
@@ -3796,6 +3852,11 @@ impl SqlEditorWidget {
                                 &session,
                                 &mut result_index,
                             );
+                            SqlEditorWidget::emit_timing_if_enabled(
+                                &sender,
+                                &session,
+                                timing_duration,
+                            );
 
                             if timed_out {
                                 stop_execution = true;
@@ -3952,6 +4013,11 @@ impl SqlEditorWidget {
                                     &[result.message.clone()],
                                 );
                             }
+                            let timing_duration = if result.execution_time.is_zero() {
+                                statement_start.elapsed()
+                            } else {
+                                result.execution_time
+                            };
                             let _ = sender.send(QueryProgress::StatementFinished {
                                 index,
                                 result: result.clone(),
@@ -3967,6 +4033,11 @@ impl SqlEditorWidget {
                                 conn.as_ref(),
                                 &session,
                                 &mut result_index,
+                            );
+                            SqlEditorWidget::emit_timing_if_enabled(
+                                &sender,
+                                &session,
+                                timing_duration,
                             );
 
                             if timed_out {
@@ -4059,6 +4130,11 @@ impl SqlEditorWidget {
                                         app::awake();
                                         result_index += 1;
                                     }
+                                    SqlEditorWidget::emit_timing_if_enabled(
+                                        &sender,
+                                        &session,
+                                        statement_start.elapsed(),
+                                    );
                                     if timed_out || cancelled || !continue_on_error {
                                         stop_execution = true;
                                     }
@@ -4067,6 +4143,7 @@ impl SqlEditorWidget {
                             };
 
                             let execution_time = statement_start.elapsed();
+                            let timing_duration = execution_time;
                             let dml_type = if upper.starts_with("INSERT") {
                                 Some("INSERT")
                             } else if upper.starts_with("UPDATE") {
@@ -4255,6 +4332,11 @@ impl SqlEditorWidget {
                                 &session,
                                 &mut result_index,
                             );
+                            SqlEditorWidget::emit_timing_if_enabled(
+                                &sender,
+                                &session,
+                                timing_duration,
+                            );
 
                             if timed_out {
                                 stop_execution = true;
@@ -4437,6 +4519,25 @@ impl SqlEditorWidget {
         SqlEditorWidget::append_spool_output(session, &lines);
         let _ = sender.send(QueryProgress::ScriptOutput { lines });
         app::awake();
+    }
+
+    fn emit_timing_if_enabled(
+        sender: &mpsc::Sender<QueryProgress>,
+        session: &Arc<Mutex<SessionState>>,
+        duration: Duration,
+    ) {
+        let enabled = match session.lock() {
+            Ok(guard) => guard.timing_enabled,
+            Err(poisoned) => {
+                eprintln!("Warning: session state lock was poisoned; recovering.");
+                poisoned.into_inner().timing_enabled
+            }
+        };
+        if !enabled {
+            return;
+        }
+        let line = format!("Elapsed: {:.3}s", duration.as_secs_f64());
+        SqlEditorWidget::emit_script_output(sender, session, vec![line]);
     }
 
     fn emit_script_lines(

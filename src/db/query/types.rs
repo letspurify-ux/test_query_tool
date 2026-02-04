@@ -109,6 +109,9 @@ pub enum ToolCommand {
     SetEcho {
         enabled: bool,
     },
+    SetTiming {
+        enabled: bool,
+    },
     SetFeedback {
         enabled: bool,
     },

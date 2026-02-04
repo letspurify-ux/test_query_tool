@@ -1039,6 +1039,10 @@ impl QueryExecutor {
             return Some(Self::parse_echo_command(trimmed));
         }
 
+        if upper.starts_with("SET TIMING") {
+            return Some(Self::parse_timing_command(trimmed));
+        }
+
         if upper.starts_with("SET FEEDBACK") {
             return Some(Self::parse_feedback_command(trimmed));
         }
@@ -1649,6 +1653,28 @@ impl QueryExecutor {
             _ => ToolCommand::Unsupported {
                 raw: raw.to_string(),
                 message: "SET ECHO supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_timing_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET TIMING requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetTiming { enabled: true },
+            "OFF" => ToolCommand::SetTiming { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET TIMING supports only ON or OFF.".to_string(),
                 is_error: true,
             },
         }
