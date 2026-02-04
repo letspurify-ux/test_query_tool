@@ -2435,8 +2435,10 @@ impl SqlEditorWidget {
                     "SET AUTOCOMMIT OFF".to_string()
                 }
             }
-            ToolCommand::SetDefine { enabled } => {
-                if *enabled {
+            ToolCommand::SetDefine { enabled, define_char } => {
+                if let Some(ch) = define_char {
+                    format!("SET DEFINE '{}'", ch)
+                } else if *enabled {
                     "SET DEFINE ON".to_string()
                 } else {
                     "SET DEFINE OFF".to_string()
@@ -4346,6 +4348,7 @@ impl SqlEditorWidget {
                                 let (
                                     server_output,
                                     define_enabled,
+                                    define_char,
                                     scan_enabled,
                                     verify_enabled,
                                     echo_enabled,
@@ -4359,6 +4362,7 @@ impl SqlEditorWidget {
                                     Ok(guard) => (
                                         guard.server_output.clone(),
                                         guard.define_enabled,
+                                        guard.define_char,
                                         guard.scan_enabled,
                                         guard.verify_enabled,
                                         guard.echo_enabled,
@@ -4377,6 +4381,7 @@ impl SqlEditorWidget {
                                         (
                                             guard.server_output.clone(),
                                             guard.define_enabled,
+                                            guard.define_char,
                                             guard.scan_enabled,
                                             guard.verify_enabled,
                                             guard.echo_enabled,
@@ -4416,7 +4421,11 @@ impl SqlEditorWidget {
                                         if autocommit_enabled { "ON" } else { "OFF" }
                                     ),
                                     serveroutput_line,
-                                    format!("DEFINE {}", if define_enabled { "ON" } else { "OFF" }),
+                                    if define_enabled {
+                                        format!("DEFINE '{}'", define_char)
+                                    } else {
+                                        "DEFINE OFF".to_string()
+                                    },
                                     format!("SCAN {}", if scan_enabled { "ON" } else { "OFF" }),
                                     format!("VERIFY {}", if verify_enabled { "ON" } else { "OFF" }),
                                     format!("ECHO {}", if echo_enabled { "ON" } else { "OFF" }),
@@ -4643,7 +4652,7 @@ impl SqlEditorWidget {
                                 let _ = sender.send(QueryProgress::AutoCommitChanged { enabled });
                                 app::awake();
                             }
-                            ToolCommand::SetDefine { enabled } => {
+                            ToolCommand::SetDefine { enabled, define_char } => {
                                 {
                                     let mut guard = match session.lock() {
                                         Ok(guard) => guard,
@@ -4655,12 +4664,20 @@ impl SqlEditorWidget {
                                         }
                                     };
                                     guard.define_enabled = enabled;
+                                    if let Some(ch) = define_char {
+                                        guard.define_char = ch;
+                                    }
                                 }
+                                let msg = if let Some(ch) = define_char {
+                                    format!("DEFINE '{}'", ch)
+                                } else {
+                                    format!("DEFINE {}", if enabled { "ON" } else { "OFF" })
+                                };
                                 SqlEditorWidget::emit_script_message(
                                     &sender,
                                     &session,
                                     "SET DEFINE",
-                                    &format!("DEFINE {}", if enabled { "ON" } else { "OFF" }),
+                                    &msg,
                                 );
                             }
                             ToolCommand::SetScan { enabled } => {
@@ -6552,6 +6569,14 @@ impl SqlEditorWidget {
         session: &Arc<Mutex<SessionState>>,
         sender: &mpsc::Sender<QueryProgress>,
     ) -> Result<String, String> {
+        let define_char = match session.lock() {
+            Ok(guard) => guard.define_char,
+            Err(poisoned) => {
+                eprintln!("Warning: session state lock was poisoned; recovering.");
+                poisoned.into_inner().define_char
+            }
+        };
+
         let mut result = String::with_capacity(sql.len());
         let mut in_single_quote = false;
         let mut in_double_quote = false;
@@ -6614,8 +6639,8 @@ impl SqlEditorWidget {
                 continue;
             }
 
-            if c == '&' {
-                let is_double = next == Some('&');
+            if c == define_char {
+                let is_double = next == Some(define_char);
                 let start = if is_double { i + 2 } else { i + 1 };
                 let mut j = start;
                 while j < len {
@@ -6630,7 +6655,7 @@ impl SqlEditorWidget {
                 if j == start {
                     result.push(c);
                     if is_double {
-                        result.push('&');
+                        result.push(define_char);
                         i += 2;
                     } else {
                         i += 1;
