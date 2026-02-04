@@ -4445,7 +4445,44 @@ impl SqlEditorWidget {
                                 );
                             }
                             ToolCommand::Prompt { text } => {
-                                SqlEditorWidget::emit_script_output(&sender, &session, vec![text]);
+                                let mut output_text = text;
+                                let (define_enabled, scan_enabled) = match session.lock() {
+                                    Ok(guard) => (guard.define_enabled, guard.scan_enabled),
+                                    Err(poisoned) => {
+                                        eprintln!(
+                                            "Warning: session state lock was poisoned; recovering."
+                                        );
+                                        let guard = poisoned.into_inner();
+                                        (guard.define_enabled, guard.scan_enabled)
+                                    }
+                                };
+                                if define_enabled && scan_enabled && !output_text.is_empty() {
+                                    match SqlEditorWidget::apply_define_substitution(
+                                        &output_text,
+                                        &session,
+                                        &sender,
+                                    ) {
+                                        Ok(updated) => {
+                                            output_text = updated;
+                                        }
+                                        Err(message) => {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                "PROMPT",
+                                                &format!("Error: {}", message),
+                                            );
+                                            command_error = true;
+                                        }
+                                    }
+                                }
+                                if !command_error {
+                                    SqlEditorWidget::emit_script_output(
+                                        &sender,
+                                        &session,
+                                        vec![output_text],
+                                    );
+                                }
                             }
                             ToolCommand::Pause { message } => {
                                 let prompt_text = message
@@ -4504,16 +4541,51 @@ impl SqlEditorWidget {
                                 }
                             }
                             ToolCommand::Define { name, value } => {
-                                let key = SessionState::normalize_name(&name);
-                                if let Ok(mut guard) = session.lock() {
-                                    guard.define_vars.insert(key.clone(), value.clone());
+                                let (define_enabled, scan_enabled) = match session.lock() {
+                                    Ok(guard) => (guard.define_enabled, guard.scan_enabled),
+                                    Err(poisoned) => {
+                                        eprintln!(
+                                            "Warning: session state lock was poisoned; recovering."
+                                        );
+                                        let guard = poisoned.into_inner();
+                                        (guard.define_enabled, guard.scan_enabled)
+                                    }
+                                };
+                                let mut resolved_value = value;
+                                if define_enabled && scan_enabled {
+                                    match SqlEditorWidget::apply_define_substitution(
+                                        &resolved_value,
+                                        &session,
+                                        &sender,
+                                    ) {
+                                        Ok(updated) => {
+                                            resolved_value = updated;
+                                        }
+                                        Err(message) => {
+                                            SqlEditorWidget::emit_script_message(
+                                                &sender,
+                                                &session,
+                                                &format!("DEFINE {}", name),
+                                                &format!("Error: {}", message),
+                                            );
+                                            command_error = true;
+                                        }
+                                    }
                                 }
-                                SqlEditorWidget::emit_script_message(
-                                    &sender,
-                                    &session,
-                                    &format!("DEFINE {}", key),
-                                    &format!("Defined {} = {}", key, value),
-                                );
+                                let key = SessionState::normalize_name(&name);
+                                if !command_error {
+                                    if let Ok(mut guard) = session.lock() {
+                                        guard
+                                            .define_vars
+                                            .insert(key.clone(), resolved_value.clone());
+                                    }
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        &format!("DEFINE {}", key),
+                                        &format!("Defined {} = {}", key, resolved_value),
+                                    );
+                                }
                             }
                             ToolCommand::Undefine { name } => {
                                 let key = SessionState::normalize_name(&name);
