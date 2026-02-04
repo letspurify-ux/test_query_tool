@@ -225,6 +225,34 @@ impl SqlHighlighter {
         let mut idx = 0usize;
 
         while let Some(&byte) = bytes.get(idx) {
+            // Check for PROMPT command at the start of a line (SQL*Plus style)
+            if idx == 0 || bytes.get(idx.saturating_sub(1)) == Some(&b'\n') {
+                let line_start = idx;
+                let mut scan = idx;
+                while bytes
+                    .get(scan)
+                    .map_or(false, |&b| b == b' ' || b == b'\t')
+                {
+                    scan += 1;
+                }
+                if is_prompt_keyword(bytes, scan) {
+                    let mut end = scan;
+                    while let Some(&b) = bytes.get(end) {
+                        if b == b'\n' {
+                            break;
+                        }
+                        end += 1;
+                    }
+                    for b in line_start..end {
+                        if let Some(style) = styles.get_mut(b) {
+                            *style = STYLE_COMMENT;
+                        }
+                    }
+                    idx = end;
+                    continue;
+                }
+            }
+
             // Check for single-line comment (--)
             if byte == b'-' && bytes.get(idx + 1) == Some(&b'-') {
                 let start = idx;
@@ -510,6 +538,23 @@ fn is_identifier_continue_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
 }
 
+fn is_prompt_keyword(bytes: &[u8], start: usize) -> bool {
+    if bytes.len() < start + 6 {
+        return false;
+    }
+    if !bytes[start..start + 6]
+        .iter()
+        .zip(b"PROMPT")
+        .all(|(b, c)| b.to_ascii_uppercase() == *c)
+    {
+        return false;
+    }
+    matches!(
+        bytes.get(start + 6),
+        None | Some(b' ') | Some(b'\t') | Some(b'\n')
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -578,6 +623,30 @@ mod tests {
 
         // Entire line should be comment style (E)
         assert!(styles.chars().all(|c| c == STYLE_COMMENT));
+    }
+
+    #[test]
+    fn test_prompt_highlighting() {
+        let highlighter = SqlHighlighter::new();
+        let text = "PROMPT Enter value for id";
+        let styles = highlighter.generate_styles(text);
+
+        assert!(styles.chars().all(|c| c == STYLE_COMMENT));
+    }
+
+    #[test]
+    fn test_prompt_highlighting_with_leading_whitespace() {
+        let highlighter = SqlHighlighter::new();
+        let text = "  prompt Enter value\nSELECT * FROM dual";
+        let styles = highlighter.generate_styles(text);
+
+        let first_line_end = text.find('\n').unwrap();
+        assert!(styles[..first_line_end]
+            .chars()
+            .all(|c| c == STYLE_COMMENT));
+        assert!(styles[first_line_end + 1..]
+            .chars()
+            .any(|c| c != STYLE_COMMENT));
     }
 
     #[test]
