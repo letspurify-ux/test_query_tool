@@ -267,6 +267,9 @@ struct SplitState {
     /// True when we've seen BEFORE or AFTER in a COMPOUND TRIGGER context,
     /// waiting for IS to start the timing point block.
     pending_timing_point_is: bool,
+    /// True when we've just seen TYPE in CREATE context, waiting to check for BODY.
+    /// TYPE BODY should be treated like PACKAGE BODY (is_package = true).
+    after_type: bool,
 }
 
 impl SplitState {
@@ -483,9 +486,22 @@ impl SplitState {
         self.is_trigger = false;
         self.in_compound_trigger = false;
         self.pending_timing_point_is = false;
+        self.after_type = false;
     }
 
     fn track_create_plsql(&mut self, upper: &str) {
+        // Check for BODY after TYPE - TYPE BODY should be treated like PACKAGE BODY
+        if self.in_create_plsql && self.after_type && upper == "BODY" {
+            self.is_package = true;
+            self.after_type = false;
+            return;
+        }
+
+        // Reset after_type if we see any other token
+        if self.after_type && upper != "BODY" {
+            self.after_type = false;
+        }
+
         if self.in_create_plsql {
             return;
         }
@@ -506,6 +522,8 @@ impl SplitState {
                     self.in_create_plsql = true;
                     self.is_package = upper == "PACKAGE";
                     self.is_trigger = upper == "TRIGGER";
+                    // Track when we just saw TYPE to detect TYPE BODY
+                    self.after_type = upper == "TYPE";
                     self.create_pending = false;
                     self.create_or_seen = false;
                     return;
@@ -7209,5 +7227,64 @@ PIVOT (
 
         assert_eq!(statements.len(), 1, "Should be 1 statement");
         assert!(statements[0].contains("ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"));
+    }
+
+    #[test]
+    fn test_type_body_with_q_quoted_string() {
+        // TYPE BODY with q-quoted string containing special characters
+        // The q'[...]' syntax allows embedding ; / -- /* */ without escaping
+        let sql = r#"CREATE OR REPLACE TYPE BODY oqt_obj AS
+  MEMBER FUNCTION peek RETURN VARCHAR2 IS
+  BEGIN
+    RETURN 'peek:'||SUBSTR(txt,1,40)||q'[ | tokens: END; / ; /* */ -- ]';
+  END;
+END;
+/
+SHOW ERRORS TYPE BODY oqt_obj"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let stmts = get_statements(&items);
+
+        // Should have exactly 1 statement (the TYPE BODY)
+        // SHOW ERRORS is a tool command, not a statement
+        assert_eq!(
+            stmts.len(),
+            1,
+            "Should have 1 statement (TYPE BODY), got {} statements: {:?}",
+            stmts.len(),
+            stmts
+        );
+
+        // The statement should contain the full TYPE BODY
+        assert!(
+            stmts[0].contains("CREATE OR REPLACE TYPE BODY oqt_obj"),
+            "Should contain CREATE OR REPLACE TYPE BODY"
+        );
+        assert!(
+            stmts[0].contains("MEMBER FUNCTION peek"),
+            "Should contain MEMBER FUNCTION"
+        );
+        assert!(
+            stmts[0].contains(r#"q'[ | tokens: END; / ; /* */ -- ]'"#),
+            "Should contain q-quoted string intact"
+        );
+        assert!(
+            stmts[0].ends_with("END") || stmts[0].ends_with("END;"),
+            "Should end with END or END;, got: {}",
+            &stmts[0][stmts[0].len().saturating_sub(50)..]
+        );
+
+        // Verify SHOW ERRORS is parsed as tool command
+        let tool_commands: Vec<&ToolCommand> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::ToolCommand(cmd) => Some(cmd),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_commands.len(),
+            1,
+            "Should have 1 tool command (SHOW ERRORS)"
+        );
     }
 }
