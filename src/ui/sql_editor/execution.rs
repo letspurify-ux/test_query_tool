@@ -19,9 +19,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::db::{
-    lock_connection, BindValue, BindVar, ColumnInfo, CursorResult, FormatItem, ObjectBrowser,
-    QueryExecutor, QueryResult, ScriptItem, SessionState, TableColumnDetail, ToolCommand,
+    lock_connection, BindValue, BindVar, ColumnInfo, CursorResult, FormatItem,
+    QueryExecutor, QueryResult, ScriptItem, SessionState, ToolCommand,
 };
+use crate::ui::SQL_KEYWORDS;
 
 use super::*;
 
@@ -1424,7 +1425,7 @@ impl SqlEditorWidget {
         out.trim().to_string()
     }
 
-    fn tokenize_sql(sql: &str) -> Vec<SqlToken> {
+    pub fn tokenize_sql(sql: &str) -> Vec<SqlToken> {
         let mut tokens = Vec::new();
         let chars: Vec<char> = sql.chars().collect();
         let mut i = 0;
@@ -4760,7 +4761,7 @@ impl SqlEditorWidget {
         }
     }
 
-    fn prompt_input_dialog(prompt: &str) -> Option<String> {
+    pub fn prompt_input_dialog(prompt: &str) -> Option<String> {
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut dialog = fltk::window::Window::default()

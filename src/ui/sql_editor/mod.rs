@@ -11,7 +11,7 @@ use fltk::{
 };
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::mpsc;
 use std::thread;
 
 use crate::db::{
@@ -28,7 +28,7 @@ mod execution;
 mod intellisense;
 
 #[derive(Clone, Debug)]
-enum SqlToken {
+pub(crate) enum SqlToken {
     Word(String),
     String(String),
     Comment(String),
@@ -83,13 +83,13 @@ pub enum QueryProgress {
 }
 
 #[derive(Clone)]
-struct ColumnLoadUpdate {
+pub(crate) struct ColumnLoadUpdate {
     table: String,
     columns: Vec<String>,
 }
 
 #[derive(Clone)]
-struct PendingIntellisense {
+pub(crate) struct PendingIntellisense {
     cursor_pos: i32,
 }
 

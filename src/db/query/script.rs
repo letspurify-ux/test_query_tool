@@ -573,7 +573,7 @@ impl StatementBuilder {
 }
 
 impl QueryExecutor {
-    fn strip_leading_comments(sql: &str) -> String {
+    pub fn strip_leading_comments(sql: &str) -> String {
         let mut remaining = sql;
 
         loop {
@@ -708,7 +708,7 @@ impl QueryExecutor {
         }
     }
 
-    fn leading_keyword(sql: &str) -> Option<String> {
+    pub fn leading_keyword(sql: &str) -> Option<String> {
         let cleaned = Self::strip_leading_comments(sql);
         cleaned
             .split_whitespace()
@@ -952,7 +952,7 @@ impl QueryExecutor {
         items
     }
 
-    fn parse_tool_command(line: &str) -> Option<ToolCommand> {
+    pub fn parse_tool_command(line: &str) -> Option<ToolCommand> {
         let trimmed = line.trim();
         if trimmed.is_empty() {
             return None;
@@ -1858,3 +1858,4 @@ impl QueryExecutor {
         let end = value[start + 1..].find(')')? + start + 1;
         value[start + 1..end].trim().parse::<u8>().ok()
     }
+}
