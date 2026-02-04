@@ -4919,6 +4919,66 @@ impl ObjectBrowser {
         };
         Ok(ddl)
     }
+
+    /// Generate DDL for a package specification
+    pub fn get_package_spec_ddl(
+        conn: &Connection,
+        package_name: &str,
+    ) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('PACKAGE', :1) FROM DUAL";
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let row = match stmt.query_row(&[&package_name.to_uppercase()]) {
+            Ok(row) => row,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let ddl: String = match row.get(0) {
+            Ok(ddl) => ddl,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        Ok(ddl)
+    }
+
+    /// Generate DDL for a package body
+    pub fn get_package_body_ddl(
+        conn: &Connection,
+        package_name: &str,
+    ) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('PACKAGE_BODY', :1) FROM DUAL";
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let row = match stmt.query_row(&[&package_name.to_uppercase()]) {
+            Ok(row) => row,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let ddl: String = match row.get(0) {
+            Ok(ddl) => ddl,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        Ok(ddl)
+    }
 }
 
 /// Detailed column information for table structure
