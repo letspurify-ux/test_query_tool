@@ -10,6 +10,18 @@ use super::{ColumnInfo, ProcedureArgument, QueryResult, ResolvedBind, ScriptItem
 pub struct QueryExecutor;
 
 impl QueryExecutor {
+    fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
+        let idx = index.min(text.len());
+        if text.is_char_boundary(idx) {
+            return idx;
+        }
+        text.char_indices()
+            .map(|(pos, _)| pos)
+            .take_while(|pos| *pos < idx)
+            .last()
+            .unwrap_or(0)
+    }
+
     /// Check if the SQL is a CREATE [OR REPLACE] TRIGGER statement.
     /// Used to skip :NEW and :OLD pseudo-records from bind scanning.
     pub(crate) fn is_create_trigger(sql: &str) -> bool {
@@ -1119,7 +1131,7 @@ impl QueryExecutor {
             text: String,
         }
 
-        let cursor_pos = cursor_pos.min(sql.len());
+        let cursor_pos = Self::clamp_to_char_boundary(sql, cursor_pos);
         let line_start = sql[..cursor_pos]
             .rfind('\n')
             .map(|idx| idx + 1)
