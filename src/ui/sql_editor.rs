@@ -6655,11 +6655,10 @@ impl SqlEditorWidget {
                     }
                 };
 
-                if let Some(value) = define_value {
-                    result.push_str(&value);
+                let mut replacement = if let Some(value) = define_value {
+                    value
                 } else if let Some(bind) = bind_value {
-                    let formatted = SqlEditorWidget::format_define_value(&key, &bind)?;
-                    result.push_str(&formatted);
+                    SqlEditorWidget::format_define_value(&key, &bind)?
                 } else {
                     let prompt = format!("Enter value for {}:", name);
                     let input = SqlEditorWidget::prompt_for_input_with_sender(sender, &prompt)?;
@@ -6668,8 +6667,19 @@ impl SqlEditorWidget {
                             guard.define_vars.insert(key.clone(), input.clone());
                         }
                     }
-                    result.push_str(&input);
+                    input
                 }
+                .to_string();
+
+                if in_single_quote || in_q_quote {
+                    if let Some(stripped) =
+                        SqlEditorWidget::strip_wrapping_single_quotes(&replacement)
+                    {
+                        replacement = stripped;
+                    }
+                }
+
+                result.push_str(&replacement);
                 i = j;
                 continue;
             }
@@ -6935,6 +6945,18 @@ impl SqlEditorWidget {
 
     fn escape_sql_literal(value: &str) -> String {
         value.replace('\'', "''")
+    }
+
+    fn strip_wrapping_single_quotes(value: &str) -> Option<String> {
+        let trimmed = value.trim();
+        if trimmed.len() < 2 {
+            return None;
+        }
+        if trimmed.starts_with('\'') && trimmed.ends_with('\'') {
+            Some(trimmed[1..trimmed.len() - 1].to_string())
+        } else {
+            None
+        }
     }
 
     fn emit_dbms_output(
