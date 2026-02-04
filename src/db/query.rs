@@ -6914,4 +6914,300 @@ END;"#;
             names
         );
     }
+
+    #[test]
+    fn test_hint_in_select_statement() {
+        // Test that hints are preserved in statements
+        let sql = "SELECT /*+ FULL(t) PARALLEL(t,4) */ * FROM table t;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(
+            statements[0].contains("/*+ FULL(t) PARALLEL(t,4) */"),
+            "Hint should be preserved in statement, got: {}",
+            statements[0]
+        );
+    }
+
+    #[test]
+    fn test_hint_not_split_statement() {
+        // Hint should not cause statement splitting
+        let sql = "SELECT /*+ INDEX(t idx1) */ col1, col2 FROM table t WHERE id = 1;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement with hint");
+        assert!(statements[0].contains("/*+"));
+        assert!(statements[0].contains("*/"));
+    }
+
+    #[test]
+    fn test_date_literal_parsing() {
+        // DATE literals should be parsed correctly
+        let sql = "SELECT DATE '2024-01-01' FROM dual;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(
+            statements[0].contains("DATE '2024-01-01'"),
+            "DATE literal should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_timestamp_literal_parsing() {
+        // TIMESTAMP literals should be parsed correctly
+        let sql = "SELECT TIMESTAMP '2024-01-01 12:30:00' FROM dual;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(
+            statements[0].contains("TIMESTAMP '2024-01-01 12:30:00'"),
+            "TIMESTAMP literal should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_interval_literal_parsing() {
+        // INTERVAL literals should be parsed correctly
+        let sql = "SELECT INTERVAL '5' DAY FROM dual;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(
+            statements[0].contains("INTERVAL '5' DAY"),
+            "INTERVAL literal should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_interval_year_to_month_literal() {
+        // INTERVAL YEAR TO MONTH literals
+        let sql = "SELECT INTERVAL '1-6' YEAR TO MONTH FROM dual;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(statements[0].contains("INTERVAL '1-6' YEAR TO MONTH"));
+    }
+
+    #[test]
+    fn test_multiple_datetime_literals() {
+        // Multiple datetime literals in one statement
+        let sql = "SELECT DATE '2024-01-01', TIMESTAMP '2024-01-01 12:00:00', INTERVAL '1' DAY FROM dual;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(statements[0].contains("DATE '2024-01-01'"));
+        assert!(statements[0].contains("TIMESTAMP '2024-01-01 12:00:00'"));
+        assert!(statements[0].contains("INTERVAL '1' DAY"));
+    }
+
+    #[test]
+    fn test_flashback_query_parsing() {
+        // FLASHBACK query with AS OF should parse correctly
+        let sql = "SELECT * FROM employees AS OF TIMESTAMP (SYSDATE - 1/24);";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(statements[0].contains("AS OF TIMESTAMP"));
+    }
+
+    #[test]
+    fn test_fetch_first_rows_parsing() {
+        // Oracle 12c+ FETCH FIRST clause
+        let sql = "SELECT * FROM employees ORDER BY salary DESC FETCH FIRST 10 ROWS ONLY;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(statements[0].contains("FETCH FIRST 10 ROWS ONLY"));
+    }
+
+    #[test]
+    fn test_offset_fetch_parsing() {
+        // OFFSET with FETCH
+        let sql = "SELECT * FROM employees ORDER BY id OFFSET 10 ROWS FETCH NEXT 5 ROWS ONLY;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(statements[0].contains("OFFSET 10 ROWS"));
+        assert!(statements[0].contains("FETCH NEXT 5 ROWS ONLY"));
+    }
+
+    #[test]
+    fn test_listagg_within_group() {
+        // LISTAGG with WITHIN GROUP
+        let sql = "SELECT department_id, LISTAGG(employee_name, ', ') WITHIN GROUP (ORDER BY employee_name) AS employees FROM emp GROUP BY department_id;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(statements[0].contains("LISTAGG"));
+        assert!(statements[0].contains("WITHIN GROUP"));
+    }
+
+    #[test]
+    fn test_keep_dense_rank() {
+        // KEEP (DENSE_RANK FIRST/LAST ORDER BY)
+        let sql = "SELECT department_id, MAX(salary) KEEP (DENSE_RANK FIRST ORDER BY hire_date) AS first_salary FROM employees GROUP BY department_id;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(statements[0].contains("KEEP (DENSE_RANK FIRST ORDER BY hire_date)"));
+    }
+
+    #[test]
+    fn test_pivot_query() {
+        // PIVOT query
+        let sql = r#"SELECT * FROM sales_data
+PIVOT (
+    SUM(amount)
+    FOR month IN ('JAN', 'FEB', 'MAR')
+);"#;
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(statements[0].contains("PIVOT"));
+        assert!(statements[0].contains("SUM(amount)"));
+    }
+
+    #[test]
+    fn test_sample_query() {
+        // SAMPLE clause
+        let sql = "SELECT * FROM large_table SAMPLE (10) SEED (42);";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(statements[0].contains("SAMPLE (10)"));
+        assert!(statements[0].contains("SEED (42)"));
+    }
+
+    #[test]
+    fn test_for_update_skip_locked() {
+        // FOR UPDATE with SKIP LOCKED
+        let sql = "SELECT * FROM jobs WHERE status = 'PENDING' FOR UPDATE SKIP LOCKED;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(statements[0].contains("FOR UPDATE SKIP LOCKED"));
+    }
+
+    #[test]
+    fn test_analytic_window_frame() {
+        // Analytic function with ROWS BETWEEN
+        let sql = "SELECT employee_id, salary, SUM(salary) OVER (ORDER BY hire_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) running_total FROM employees;";
+        let items = QueryExecutor::split_script_items(sql);
+        let statements: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                ScriptItem::Statement(s) => Some(s.as_str()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(statements.len(), 1, "Should be 1 statement");
+        assert!(statements[0].contains("ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"));
+    }
 }
