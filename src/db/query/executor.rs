@@ -12,7 +12,7 @@ pub struct QueryExecutor;
 impl QueryExecutor {
     /// Check if the SQL is a CREATE [OR REPLACE] TRIGGER statement.
     /// Used to skip :NEW and :OLD pseudo-records from bind scanning.
-    fn is_create_trigger(sql: &str) -> bool {
+    pub(crate) fn is_create_trigger(sql: &str) -> bool {
         let cleaned = Self::strip_leading_comments(sql);
         let upper = cleaned.to_uppercase();
         let tokens: Vec<&str> = upper.split_whitespace().collect();
@@ -41,7 +41,7 @@ impl QueryExecutor {
         false
     }
 
-    fn extract_bind_names(sql: &str) -> Vec<String> {
+    pub(crate) fn extract_bind_names(sql: &str) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
 
@@ -2959,5 +2959,3 @@ pub struct ConstraintInfo {
     pub ref_table: Option<String>,
 }
 
-#[cfg(test)]
-mod query_tests;
