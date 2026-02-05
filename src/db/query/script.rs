@@ -168,12 +168,12 @@ impl SplitState {
             }
             self.nested_subprogram = false; // Reset after seeing IS
             self.pending_timing_point_is = false; // Reset after seeing IS in COMPOUND TRIGGER
-            // Track that we're waiting for a BEGIN for this subprogram
-            // Use counter to handle nested PROCEDURE/FUNCTION declarations
-            // For packages: depth=1 is the package AS level (no BEGIN expected)
-            //              depth>1 means we're inside a procedure/function that expects BEGIN
-            // For procedures/functions: any depth needs BEGIN tracking
-            // For COMPOUND TRIGGER timing points: always need BEGIN tracking
+                                                  // Track that we're waiting for a BEGIN for this subprogram
+                                                  // Use counter to handle nested PROCEDURE/FUNCTION declarations
+                                                  // For packages: depth=1 is the package AS level (no BEGIN expected)
+                                                  //              depth>1 means we're inside a procedure/function that expects BEGIN
+                                                  // For procedures/functions: any depth needs BEGIN tracking
+                                                  // For COMPOUND TRIGGER timing points: always need BEGIN tracking
             let needs_begin_tracking = if self.is_package {
                 self.block_depth > 1 // Inside package, nested proc/func
             } else {
@@ -579,6 +579,34 @@ impl StatementBuilder {
 }
 
 impl QueryExecutor {
+    pub fn line_block_depths(sql: &str) -> Vec<usize> {
+        let mut builder = StatementBuilder::new();
+        let mut depths = Vec::new();
+
+        for line in sql.lines() {
+            let trimmed = line.trim_start();
+            let starts_with_end = builder.is_idle()
+                && trimmed
+                    .split_whitespace()
+                    .next()
+                    .map(|tok| tok.eq_ignore_ascii_case("END"))
+                    .unwrap_or(false);
+
+            let depth = if starts_with_end {
+                builder.block_depth().saturating_sub(1)
+            } else {
+                builder.block_depth()
+            };
+            depths.push(depth);
+
+            let mut line_with_newline = String::from(line);
+            line_with_newline.push('\n');
+            builder.process_text(&line_with_newline);
+        }
+
+        depths
+    }
+
     pub fn strip_leading_comments(sql: &str) -> String {
         let mut remaining = sql;
 
@@ -1092,7 +1120,8 @@ impl QueryExecutor {
             return Some(ToolCommand::Quit);
         }
 
-        if (upper == "CONNECT" || (upper.starts_with("CONNECT ") && !upper.starts_with("CONNECT BY")))
+        if (upper == "CONNECT"
+            || (upper.starts_with("CONNECT ") && !upper.starts_with("CONNECT BY")))
             || upper.starts_with("CONN ")
         {
             return Some(Self::parse_connect_command(trimmed));
@@ -1446,7 +1475,8 @@ impl QueryExecutor {
         if rest.is_empty() {
             return ToolCommand::Unsupported {
                 raw: raw.to_string(),
-                message: "CONNECT requires connection string: user/password@host:port/service_name".to_string(),
+                message: "CONNECT requires connection string: user/password@host:port/service_name"
+                    .to_string(),
                 is_error: true,
             };
         }
@@ -1456,7 +1486,8 @@ impl QueryExecutor {
         if parts.len() != 2 {
             return ToolCommand::Unsupported {
                 raw: raw.to_string(),
-                message: "Invalid CONNECT syntax. Expected: user/password@host:port/service_name".to_string(),
+                message: "Invalid CONNECT syntax. Expected: user/password@host:port/service_name"
+                    .to_string(),
                 is_error: true,
             };
         }
@@ -1590,24 +1621,39 @@ impl QueryExecutor {
         if tokens.len() < 3 {
             return ToolCommand::Unsupported {
                 raw: raw.to_string(),
-                message: "SET DEFINE requires ON, OFF, or a substitution character (e.g. '^').".to_string(),
+                message: "SET DEFINE requires ON, OFF, or a substitution character (e.g. '^')."
+                    .to_string(),
                 is_error: true,
             };
         }
 
         let mode = tokens[2].to_uppercase();
         match mode.as_str() {
-            "ON" => ToolCommand::SetDefine { enabled: true, define_char: None },
-            "OFF" => ToolCommand::SetDefine { enabled: false, define_char: None },
+            "ON" => ToolCommand::SetDefine {
+                enabled: true,
+                define_char: None,
+            },
+            "OFF" => ToolCommand::SetDefine {
+                enabled: false,
+                define_char: None,
+            },
             _ => {
                 // Accept a single character, optionally wrapped in single quotes: '^' or ^
                 let raw_arg = tokens[2];
                 let ch = if raw_arg.starts_with('\'') && raw_arg.ends_with('\'') {
                     let inner: Vec<char> = raw_arg[1..raw_arg.len() - 1].chars().collect();
-                    if inner.len() == 1 { Some(inner[0]) } else { None }
+                    if inner.len() == 1 {
+                        Some(inner[0])
+                    } else {
+                        None
+                    }
                 } else {
                     let chars: Vec<char> = raw_arg.chars().collect();
-                    if chars.len() == 1 { Some(chars[0]) } else { None }
+                    if chars.len() == 1 {
+                        Some(chars[0])
+                    } else {
+                        None
+                    }
                 };
 
                 match ch {
@@ -1797,19 +1843,11 @@ impl QueryExecutor {
     fn parse_script_command(raw: &str) -> ToolCommand {
         let trimmed = raw.trim();
         let (relative_to_caller, command_label, path) = if trimmed.starts_with("@@") {
-            (
-                true,
-                "@@",
-                trimmed.trim_start_matches("@@").trim(),
-            )
+            (true, "@@", trimmed.trim_start_matches("@@").trim())
         } else if trimmed.starts_with('@') {
             (false, "@", trimmed.trim_start_matches('@').trim())
         } else if Self::is_start_script_command(trimmed) {
-            (
-                false,
-                "START",
-                trimmed.get(5..).unwrap_or_default().trim(),
-            )
+            (false, "START", trimmed.get(5..).unwrap_or_default().trim())
         } else {
             (false, "@", "")
         };
