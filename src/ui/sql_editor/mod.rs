@@ -21,7 +21,7 @@ use crate::db::{
 use crate::ui::intellisense::{IntellisenseData, IntellisensePopup};
 use crate::ui::query_history::QueryHistoryDialog;
 use crate::ui::syntax_highlight::{
-    create_style_table, HighlightData, SqlHighlighter, STYLE_COMMENT, STYLE_DEFAULT, STYLE_STRING,
+    create_style_table, HighlightData, SqlHighlighter, STYLE_DEFAULT,
 };
 use crate::ui::theme;
 
@@ -654,16 +654,6 @@ impl SqlEditorWidget {
             } else if let Some((start, end)) = edited_range {
                 let inserted_text = inserted_text(buf, pos, ins);
                 if !has_stateful_sql_delimiter(&inserted_text) {
-                    if let Some(inherited_style) = style_before(&style_buffer, start) {
-                        if is_string_or_comment_style(inherited_style) {
-                            let inherited: String = std::iter::repeat(inherited_style)
-                                .take(end.saturating_sub(start))
-                                .collect();
-                            style_buffer.replace(start as i32, end as i32, &inherited);
-                            return;
-                        }
-                    }
-
                     edited_range = Some(expand_connected_word_range(buf, start, end));
                 }
             }
@@ -993,22 +983,6 @@ fn inserted_text(buf: &TextBuffer, pos: i32, ins: i32) -> String {
     buf.text_range(pos, insert_end).unwrap_or_default()
 }
 
-fn style_before(style_buffer: &TextBuffer, start: usize) -> Option<char> {
-    if start == 0 {
-        return None;
-    }
-
-    let idx = start.saturating_sub(1) as i32;
-    style_buffer
-        .text_range(idx, idx + 1)
-        .and_then(|text| text.chars().next())
-}
-
-fn is_string_or_comment_style(style: char) -> bool {
-    style == STYLE_COMMENT || style == STYLE_STRING
-}
-
-
 fn is_identifier_continue_byte_for_expand(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
 }
@@ -1023,7 +997,8 @@ fn expand_connected_word_range(buf: &TextBuffer, start: usize, end: usize) -> (u
         expanded_start -= 1;
     }
 
-    while expanded_end < bytes.len() && is_identifier_continue_byte_for_expand(bytes[expanded_end]) {
+    while expanded_end < bytes.len() && is_identifier_continue_byte_for_expand(bytes[expanded_end])
+    {
         expanded_end += 1;
     }
 
