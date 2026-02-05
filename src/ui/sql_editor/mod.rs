@@ -1069,6 +1069,7 @@ fn has_stateful_sql_delimiter(text: &str) -> bool {
         || text.contains("nQ'")
 }
 
+#[allow(dead_code)]
 fn style_before(style_buffer: &TextBuffer, pos: i32) -> Option<char> {
     if pos <= 0 {
         return None;
@@ -1081,6 +1082,7 @@ fn style_before(style_buffer: &TextBuffer, pos: i32) -> Option<char> {
         .and_then(|text| text.chars().next())
 }
 
+#[allow(dead_code)]
 fn is_string_or_comment_style(style: char) -> bool {
     style == STYLE_COMMENT || style == STYLE_STRING
 }

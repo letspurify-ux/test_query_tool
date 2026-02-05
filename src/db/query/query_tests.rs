@@ -2506,7 +2506,7 @@ END IF;
 END;"#;
 
     let depths = QueryExecutor::line_block_depths(sql);
-    let expected = vec![0, 1, 2, 3, 3, 3, 3, 2, 1];
+    let expected = vec![0, 1, 2, 3, 4, 3, 4, 2, 1, 0];
 
     assert_eq!(depths, expected, "IF/CASE depth tracking mismatch");
 }

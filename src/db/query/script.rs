@@ -84,6 +84,9 @@ impl SplitState {
                 }
             } else if upper == "LOOP" {
                 // END LOOP
+                if self.block_depth > 0 {
+                    self.block_depth -= 1;
+                }
             } else if matches!(upper.as_str(), "BEFORE" | "AFTER") && self.in_compound_trigger {
                 // END BEFORE ..., END AFTER ... - COMPOUND TRIGGER timing point 종료
                 // depth 감소 (타이밍 포인트 블록 종료)
@@ -147,10 +150,7 @@ impl SplitState {
         // Track nested PROCEDURE/FUNCTION inside DECLARE blocks (anonymous blocks)
         // These need IS to start their body block
         // Only track when NOT in CREATE PL/SQL (packages already handle nested subprograms via in_create_plsql)
-        if !self.in_create_plsql
-            && self.block_depth > 0
-            && matches!(upper.as_str(), "PROCEDURE" | "FUNCTION")
-        {
+        if self.block_depth > 0 && matches!(upper.as_str(), "PROCEDURE" | "FUNCTION") {
             self.nested_subprogram = true;
         }
 
@@ -631,22 +631,19 @@ impl QueryExecutor {
             matches!(leading_word, "END" | "ELSE" | "ELSIF" | "EXCEPTION")
         }
 
-        fn is_end_variant(words: &[String], variant: &str) -> bool {
-            words.first().is_some_and(|w| w == "END") && words.get(1).is_some_and(|w| w == variant)
-        }
-
         let mut builder = StatementBuilder::new();
         let mut depths = Vec::new();
 
         // Extra indentation state for SQL formatting depth that should not affect splitting.
         let mut subquery_paren_depth = 0usize;
+        let mut pending_subquery_paren = 0usize;
         let mut with_cte_depth = 0usize;
         let mut with_cte_paren = 0isize;
         let mut pending_with = false;
         let mut pending_subprogram_begin = false;
-        let mut subprogram_begin_depth = 0usize;
-        let mut pending_package_body = false;
-        let mut package_body_depth = 0usize;
+        let mut exception_depth_stack: Vec<usize> = Vec::new();
+        let mut exception_handler_body = false;
+        let mut case_branch_stack: Vec<bool> = Vec::new();
 
         for line in sql.lines() {
             let words = if builder.is_idle() {
@@ -655,22 +652,81 @@ impl QueryExecutor {
                 Vec::new()
             };
 
+            let trimmed_start = line.trim_start();
+            let is_comment_or_blank = trimmed_start.is_empty()
+                || trimmed_start.starts_with("--")
+                || trimmed_start.starts_with("/*")
+                || trimmed_start.starts_with("*/");
+
+            if pending_subquery_paren > 0 && !is_comment_or_blank {
+                if words.first().is_some_and(|w| w == "SELECT") {
+                    subquery_paren_depth = subquery_paren_depth.saturating_add(pending_subquery_paren);
+                }
+                pending_subquery_paren = 0;
+            }
+
             let leading_word = words.first().map(String::as_str);
+            let open_cases = builder.state.case_depth_stack.len();
+            if case_branch_stack.len() < open_cases {
+                case_branch_stack.resize(open_cases, false);
+            } else if case_branch_stack.len() > open_cases {
+                case_branch_stack.truncate(open_cases);
+            }
+            let innermost_case_depth = builder.state.case_depth_stack.last().copied();
+            let at_case_header_level = innermost_case_depth
+                .is_some_and(|depth| depth + 1 == builder.block_depth());
+            let exception_end_line = exception_depth_stack
+                .last()
+                .is_some_and(|depth| *depth == builder.block_depth())
+                && matches!(leading_word, Some("END"));
             let mut depth = if leading_word.is_some_and(should_pre_dedent) {
                 builder.block_depth().saturating_sub(1)
             } else {
                 builder.block_depth()
             };
 
+            if at_case_header_level && matches!(leading_word, Some("WHEN" | "ELSE")) {
+                depth = builder.block_depth();
+            }
+
+            if matches!(leading_word, Some("BEGIN"))
+                && (pending_subprogram_begin || builder.state.after_declare)
+            {
+                depth = depth.saturating_sub(1);
+            }
+
+            if exception_handler_body
+                && !matches!(leading_word, Some("WHEN"))
+                && !exception_end_line
+            {
+                depth = depth.saturating_add(1);
+            }
+
+            let mut case_branch_indent = 0usize;
+            for (case_depth, branch_active) in builder
+                .state
+                .case_depth_stack
+                .iter()
+                .zip(case_branch_stack.iter())
+            {
+                if !*branch_active {
+                    continue;
+                }
+                let is_header_line = builder.block_depth() == *case_depth + 1
+                    && matches!(leading_word, Some("WHEN" | "ELSE" | "END"));
+                if !is_header_line {
+                    case_branch_indent += 1;
+                }
+            }
+            if case_branch_indent > 0 {
+                depth = depth.saturating_add(case_branch_indent);
+            }
+
             // Pre-dedent additional virtual depths for closing lines.
             if line.trim_start().starts_with(')') && subquery_paren_depth > 0 {
                 depth = depth.saturating_add(subquery_paren_depth.saturating_sub(1));
             } else {
                 depth = depth.saturating_add(subquery_paren_depth);
-            }
-
-            if is_end_variant(&words, "LOOP") || is_end_variant(&words, "CASE") {
-                depth = depth.saturating_sub(1);
             }
 
             if with_cte_depth > 0 {
@@ -683,18 +739,7 @@ impl QueryExecutor {
                 }
             }
 
-            if words.first().is_some_and(|w| w == "END")
-                && !is_end_variant(&words, "IF")
-                && !is_end_variant(&words, "LOOP")
-                && !is_end_variant(&words, "CASE")
-                && (subprogram_begin_depth > 0 || package_body_depth > 0)
-            {
-                depth = depth.saturating_sub(1);
-            }
-
-            depth = depth
-                .saturating_add(subprogram_begin_depth)
-                .saturating_add(package_body_depth);
+            // No extra subprogram body depth: declarations and statements share the same level.
 
             depths.push(depth);
 
@@ -732,6 +777,12 @@ impl QueryExecutor {
                         if word == "SELECT" {
                             subquery_paren_depth += 1;
                         }
+                    } else if j >= chars.len() {
+                        pending_subquery_paren += 1;
+                    } else if chars[j] == '-' && j + 1 < chars.len() && chars[j + 1] == '-' {
+                        pending_subquery_paren += 1;
+                    } else if chars[j] == '/' && j + 1 < chars.len() && chars[j + 1] == '*' {
+                        pending_subquery_paren += 1;
                     }
                     if with_cte_depth > 0 {
                         with_cte_paren += 1;
@@ -752,29 +803,16 @@ impl QueryExecutor {
                 let word = words[idx].as_str();
                 let next = words.get(idx + 1).map(String::as_str);
 
-                if word == "PACKAGE" && next == Some("BODY") {
-                    pending_package_body = true;
-                    idx += 1;
-                } else if pending_package_body && matches!(word, "AS" | "IS") {
-                    package_body_depth += 1;
-                    pending_package_body = false;
-                }
-
                 if matches!(word, "PROCEDURE" | "FUNCTION") {
                     pending_subprogram_begin = true;
                 } else if pending_subprogram_begin && word == "BEGIN" {
-                    subprogram_begin_depth += 1;
                     pending_subprogram_begin = false;
                 } else if word == "END"
                     && next != Some("IF")
                     && next != Some("LOOP")
                     && next != Some("CASE")
                 {
-                    if subprogram_begin_depth > 0 {
-                        subprogram_begin_depth -= 1;
-                    } else if package_body_depth > 0 {
-                        package_body_depth -= 1;
-                    }
+                    // No subprogram body depth tracking.
                 }
 
                 idx += 1;
@@ -783,6 +821,29 @@ impl QueryExecutor {
             if pending_with && words.first().is_some_and(|w| w == "SELECT") && with_cte_paren <= 0 {
                 with_cte_depth = 0;
                 pending_with = false;
+            }
+
+            if matches!(leading_word, Some("EXCEPTION")) {
+                exception_depth_stack.push(builder.block_depth());
+                exception_handler_body = false;
+            } else if !exception_depth_stack.is_empty() && matches!(leading_word, Some("WHEN")) {
+                exception_handler_body = true;
+            } else if exception_depth_stack
+                .last()
+                .is_some_and(|depth| *depth == builder.block_depth())
+                && matches!(leading_word, Some("END"))
+            {
+                exception_depth_stack.pop();
+                exception_handler_body = false;
+            }
+            if at_case_header_level && matches!(leading_word, Some("WHEN" | "ELSE")) {
+                if let Some(last) = case_branch_stack.last_mut() {
+                    *last = true;
+                }
+            } else if at_case_header_level && matches!(leading_word, Some("END")) {
+                if let Some(last) = case_branch_stack.last_mut() {
+                    *last = false;
+                }
             }
 
             let mut line_with_newline = String::from(line);

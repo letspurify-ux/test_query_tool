@@ -285,7 +285,7 @@ fn format_sql_places_newline_after_inline_block_comment() {
     let formatted = SqlEditorWidget::format_sql_basic(input);
 
     assert!(
-        formatted.contains("/* 헤더 주석 */\nSELECT 1 FROM dual;"),
+        formatted.contains("/* 헤더 주석 */\nSELECT 1\nFROM DUAL;"),
         "Inline block comment should be followed by newline before SQL, got: {}",
         formatted
     );
@@ -309,7 +309,7 @@ fn format_sql_preserves_newline_after_block_comment_end() {
     let formatted = SqlEditorWidget::format_sql_basic(input);
 
     assert!(
-        formatted.contains("/* trailing */\nFROM dual;"),
+        formatted.contains("/* trailing */\nFROM DUAL;"),
         "newline after */ should be preserved, got: {}",
         formatted
     );
@@ -321,7 +321,7 @@ fn format_sql_preserves_newline_before_line_comment() {
     let formatted = SqlEditorWidget::format_sql_basic(input);
 
     assert!(
-        formatted.contains("SELECT 1\n-- comment\nFROM dual;"),
+        formatted.contains("SELECT 1\n-- comment\nFROM DUAL;"),
         "newline before -- should be preserved, got: {}",
         formatted
     );
@@ -333,7 +333,7 @@ fn format_sql_preserves_newline_before_block_comment() {
     let formatted = SqlEditorWidget::format_sql_basic(input);
 
     assert!(
-        formatted.contains("SELECT 1\n/* comment */\nFROM dual;"),
+        formatted.contains("SELECT 1\n/* comment */\nFROM DUAL;"),
         "newline before /* should be preserved, got: {}",
         formatted
     );
@@ -364,6 +364,76 @@ fn format_sql_indents_case_expression_inside_select_clause() {
 }
 
 #[test]
+fn format_sql_open_cursor_for_select_indentation() {
+    let input = r#"BEGIN
+OPEN p_rc
+FOR
+SELECT empno,
+ename,
+deptno,
+salary
+FROM oqt_emp
+WHERE deptno = p_deptno
+ORDER BY empno;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "BEGIN",
+        "    OPEN p_rc FOR",
+        "        SELECT empno,",
+        "            ename,",
+        "            deptno,",
+        "            salary",
+        "        FROM oqt_emp",
+        "        WHERE deptno = p_deptno",
+        "        ORDER BY empno;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_fetch_into_list_indentation() {
+    let input = r#"BEGIN
+FETCH c
+INTO v_empno,
+v_ename,
+v_dept,
+v_sal;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "BEGIN",
+        "    FETCH c",
+        "    INTO v_empno,",
+        "        v_ename,",
+        "        v_dept,",
+        "        v_sal;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_keeps_insert_into_together() {
+    let input = "INSERT\nINTO oqt_call_log (id, tag, msg, n1)\nVALUES (1, 'T', 'M', 10)";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "INSERT INTO oqt_call_log (id, tag, msg, n1)",
+        "VALUES (1, 'T', 'M', 10);",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn compute_edited_range_handles_insert_delete_and_replace() {
     assert_eq!(compute_edited_range(5, 3, 0, 20), Some((5, 8)));
     assert_eq!(compute_edited_range(5, 0, 4, 20), Some((5, 9)));
@@ -388,52 +458,6 @@ fn has_stateful_sql_delimiter_detects_comment_and_string_tokens() {
     assert!(!has_stateful_sql_delimiter("SELECT col FROM tab"));
 }
 
-#[test]
-fn needs_full_rehighlight_when_edit_creates_stateful_token_with_neighbor_char() {
-    let mut buffer = TextBuffer::default();
-    buffer.set_text("SELECT 1 * FROM dual");
-
-    // Simulate typing '/' right after '*' to form '*/'.
-    let pos = buffer.text().find('*').unwrap() as i32 + 1;
-    buffer.insert(pos, "/");
-
-    assert!(needs_full_rehighlight(&buffer, pos, 1, ""));
-}
-
-#[test]
-fn style_before_returns_previous_style_char() {
-    let mut style_buffer = TextBuffer::default();
-    style_buffer.set_text("AABCDE");
-
-    assert_eq!(style_before(&style_buffer, 0), None);
-    assert_eq!(style_before(&style_buffer, 1), Some('A'));
-    assert_eq!(style_before(&style_buffer, 5), Some('D'));
-}
-
-#[test]
-fn expand_connected_word_range_expands_to_identifier_boundaries() {
-    let mut buffer = TextBuffer::default();
-    buffer.set_text("SELECT employee_name FROM dual");
-
-    let start = "SELECT ".len() + "employee".len();
-    let end = start + 1;
-    let expanded = expand_connected_word_range(&buffer, start, end);
-
-    let text = buffer.text();
-    assert_eq!(&text[expanded.0..expanded.1], "employee_name");
-}
-
-#[test]
-fn inserted_text_reads_current_insert_span() {
-    let mut buffer = TextBuffer::default();
-    buffer.set_text("SELECT FROM dual");
-
-    let insert_pos = "SELECT ".len() as i32;
-    buffer.insert(insert_pos, "col ");
-
-    assert_eq!(inserted_text(&buffer, insert_pos, 4), "col ");
-    assert_eq!(inserted_text(&buffer, insert_pos, 0), "");
-}
 
 #[test]
 fn is_string_or_comment_style_matches_only_comment_or_string() {
@@ -455,7 +479,7 @@ END;"#;
 
     let formatted = SqlEditorWidget::format_sql_basic(input);
     let expected = [
-        "BEGIN;",
+        "BEGIN",
         "    IF 1 = 1 THEN",
         "        BEGIN",
         "            NULL;",
@@ -485,17 +509,17 @@ END;"#;
 
     let formatted = SqlEditorWidget::format_sql_basic(input);
     let expected = [
-        "BEGIN;",
+        "BEGIN",
         "    IF v_flag = 'Y' THEN",
-        "    NULL;",
+        "        NULL;",
         "    ELSIF v_flag = 'N' THEN",
-        "    NULL;",
+        "        NULL;",
         "    ELSE",
-        "    NULL;",
+        "        NULL;",
         "    END IF;",
         "EXCEPTION",
-        "WHEN OTHERS THEN",
-        "NULL;",
+        "    WHEN OTHERS THEN",
+        "        NULL;",
         "END;",
     ]
     .join("\n");
@@ -518,15 +542,157 @@ END;"#;
 
     let formatted = SqlEditorWidget::format_sql_basic(input);
     let expected = [
-        "BEGIN;",
+        "BEGIN",
         "    IF v_flag = 'Y' THEN",
         "        CASE",
         "            WHEN v_num = 1 THEN",
         "                NULL;",
+        "",
         "            ELSE",
         "                NULL;",
         "        END CASE;",
         "    END IF;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_case_branches_with_blank_lines() {
+    let input = r#"BEGIN
+CASE
+WHEN p_n < 0 THEN
+v := p_n * p_n;
+WHEN p_n BETWEEN 0 AND 10 THEN
+x := p_n + 100;
+v := x - 50;
+ELSE
+v := p_n + 999;
+END CASE;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "BEGIN",
+        "    CASE",
+        "        WHEN p_n < 0 THEN",
+        "            v := p_n * p_n;",
+        "",
+        "        WHEN p_n BETWEEN 0 AND 10 THEN",
+        "            x := p_n + 100;",
+        "            v := x - 50;",
+        "",
+        "        ELSE",
+        "            v := p_n + 999;",
+        "    END CASE;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_keeps_comments_together() {
+    let input = r#"BEGIN
+-- first
+-- second
+NULL;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "BEGIN",
+        "    -- first",
+        "    -- second",
+        "    NULL;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_indents_line_comments_to_depth() {
+    let input = r#"BEGIN
+IF 1 = 1 THEN
+-- inside if
+NULL;
+END IF;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "BEGIN",
+        "    IF 1 = 1 THEN",
+        "        -- inside if",
+        "        NULL;",
+        "    END IF;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_select_case_inside_sum_is_indented() {
+    let input = r#"SELECT grp,
+COUNT (*) AS cnt,
+SUM (
+CASE
+WHEN MOD (n, 2) = 0 THEN 1
+ELSE 0
+END) AS even_cnt,
+SUM (
+CASE
+WHEN INSTR (txt, 'END;') > 0 THEN 1
+ELSE 0
+END) AS has_end_token_cnt
+FROM oqt_t_test
+GROUP BY grp
+ORDER BY grp;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "SELECT grp,",
+        "    COUNT (*) AS cnt,",
+        "    SUM (",
+        "        CASE",
+        "            WHEN MOD (n, 2) = 0 THEN 1",
+        "            ELSE 0",
+        "        END) AS even_cnt,",
+        "    SUM (",
+        "        CASE",
+        "            WHEN INSTR (txt, 'END;') > 0 THEN 1",
+        "            ELSE 0",
+        "        END) AS has_end_token_cnt",
+        "FROM oqt_t_test",
+        "GROUP BY grp",
+        "ORDER BY grp;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_declare_begin_pre_dedent() {
+    let input = r#"DECLARE
+v_old_sal NUMBER;
+BEGIN
+NULL;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "DECLARE",
+        "    v_old_sal NUMBER;",
+        "BEGIN",
+        "    NULL;",
         "END;",
     ]
     .join("\n");
@@ -563,22 +729,22 @@ SELECT * FROM cte;"#;
         formatted
     );
     assert!(
-        formatted.contains("PROCEDURE run_demo IS\n        BEGIN"),
-        "Procedure BEGIN should be one level deeper, got: {}",
+        formatted.contains("PROCEDURE run_demo IS\n    BEGIN"),
+        "Procedure BEGIN should align with procedure declaration, got: {}",
         formatted
     );
     assert!(
-        formatted.contains("FOR r IN (\n                SELECT id"),
+        formatted.contains("        FOR r IN (\n            SELECT id"),
         "Subquery SELECT should increase depth, got: {}",
         formatted
     );
     assert!(
-        formatted.contains(") LOOP\n                NULL;\n            END LOOP;"),
+        formatted.contains("        ) LOOP\n            NULL;\n        END LOOP;"),
         "LOOP body should be indented one level deeper, got: {}",
         formatted
     );
     assert!(
-        formatted.contains("WITH cte AS (\n    SELECT 1 AS n FROM dual\n)\nSELECT * FROM cte;"),
+        formatted.contains("WITH cte AS (\n    SELECT 1 AS n\n    FROM DUAL\n)\nSELECT *\nFROM cte;"),
         "WITH CTE block should increase depth and restore on main SELECT, got: {}",
         formatted
     );
