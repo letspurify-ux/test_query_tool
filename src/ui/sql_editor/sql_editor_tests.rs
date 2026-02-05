@@ -458,7 +458,6 @@ fn has_stateful_sql_delimiter_detects_comment_and_string_tokens() {
     assert!(!has_stateful_sql_delimiter("SELECT col FROM tab"));
 }
 
-
 #[test]
 fn is_string_or_comment_style_matches_only_comment_or_string() {
     assert!(is_string_or_comment_style(STYLE_COMMENT));
@@ -744,8 +743,33 @@ SELECT * FROM cte;"#;
         formatted
     );
     assert!(
-        formatted.contains("WITH cte AS (\n    SELECT 1 AS n\n    FROM DUAL\n)\nSELECT *\nFROM cte;"),
+        formatted
+            .contains("WITH cte AS (\n    SELECT 1 AS n\n    FROM DUAL\n)\nSELECT *\nFROM cte;"),
         "WITH CTE block should increase depth and restore on main SELECT, got: {}",
+        formatted
+    );
+}
+
+#[test]
+fn format_sql_resets_paren_comma_suppression_after_top_level_semicolon() {
+    let input = "SELECT func(a, b;\nSELECT c, d FROM dual";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("SELECT\n    c,\n    d\nFROM DUAL;"),
+        "Comma wrapping should recover for next top-level statement after ';', got: {}",
+        formatted
+    );
+}
+
+#[test]
+fn format_sql_comment_parenthesis_does_not_affect_comma_newline() {
+    let input = "SELECT a /* (comment) */, b FROM dual";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("/* (comment) */,\n    b"),
+        "Parenthesis inside comments must not keep comma on one line, got: {}",
         formatted
     );
 }
