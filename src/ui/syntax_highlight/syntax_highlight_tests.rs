@@ -438,3 +438,14 @@ fn test_select_highlight_ranges_without_edit_returns_cursor_window() {
         windowed_range_from_buffer(&buffer, cursor_pos, text.len());
     assert_eq!(ranges[0], (expected_start, expected_end));
 }
+
+#[test]
+fn select_highlight_ranges_returns_full_range_when_requested() {
+    let mut buffer = TextBuffer::default();
+    let text = "SELECT col FROM tab;\n".repeat(3000);
+    buffer.set_text(&text);
+
+    let ranges =
+        select_highlight_ranges(&buffer, text.len(), text.len() / 2, Some((0, text.len())));
+    assert_eq!(ranges, vec![(0, text.len())]);
+}
