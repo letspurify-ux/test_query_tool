@@ -21,7 +21,8 @@ use crate::db::{
 use crate::ui::intellisense::{IntellisenseData, IntellisensePopup};
 use crate::ui::query_history::QueryHistoryDialog;
 use crate::ui::syntax_highlight::{
-    create_style_table, HighlightData, SqlHighlighter, STYLE_DEFAULT,
+    create_style_table, HighlightData, SqlHighlighter, STYLE_COMMENT, STYLE_DEFAULT,
+    STYLE_STRING,
 };
 use crate::ui::theme;
 
@@ -1066,6 +1067,22 @@ fn has_stateful_sql_delimiter(text: &str) -> bool {
         || text.contains("NQ'")
         || text.contains("Nq'")
         || text.contains("nQ'")
+}
+
+fn style_before(style_buffer: &TextBuffer, pos: i32) -> Option<char> {
+    if pos <= 0 {
+        return None;
+    }
+
+    let end = pos.min(style_buffer.length());
+    let start = end.saturating_sub(1);
+    style_buffer
+        .text_range(start, end)
+        .and_then(|text| text.chars().next())
+}
+
+fn is_string_or_comment_style(style: char) -> bool {
+    style == STYLE_COMMENT || style == STYLE_STRING
 }
 
 #[cfg(test)]
