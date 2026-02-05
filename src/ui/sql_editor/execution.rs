@@ -1238,7 +1238,9 @@ impl SqlEditorWidget {
                             }
                             pending_package_member_separator = false;
                             routine_decl_pending = false;
-                            if indent_level == 0 {
+                            let should_reset_paren_tracking =
+                                indent_level == 0 || block_stack.is_empty();
+                            if should_reset_paren_tracking {
                                 // Recover newline/comma wrapping behavior for the next top-level section
                                 // even if we encountered an unmatched parenthesis earlier in the statement.
                                 suppress_comma_break_depth = 0;
@@ -5997,5 +5999,27 @@ impl SqlEditorWidget {
         F: FnMut(QueryProgress) + 'static,
     {
         *self.progress_callback.borrow_mut() = Some(Box::new(callback));
+    }
+}
+
+#[cfg(test)]
+mod formatter_regression_tests {
+    use super::SqlEditorWidget;
+
+    #[test]
+    fn resets_paren_tracking_after_malformed_statement_before_next_statement() {
+        let sql = "select fn(a, b;\nselect x, y from dual;";
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+
+        assert!(formatted.contains("SELECT\n    x,\n    y\nFROM\n    dual;"));
+    }
+
+    #[test]
+    fn comments_do_not_change_paren_tracking_state() {
+        let sql = "select a, /* comment with (, ), and , */ b from dual;";
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+
+        assert!(formatted.contains("/* comment with (, ), and , */"));
+        assert!(formatted.contains("SELECT\n    a,\n    /* comment with (, ), and , */\n    b\nFROM\n    dual;"));
     }
 }
