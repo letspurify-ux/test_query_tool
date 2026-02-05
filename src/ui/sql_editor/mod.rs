@@ -15,7 +15,8 @@ use std::sync::mpsc;
 use std::thread;
 
 use crate::db::{
-    lock_connection, ConnectionInfo, QueryExecutor, QueryResult, SharedConnection, TableColumnDetail,
+    lock_connection, ConnectionInfo, QueryExecutor, QueryResult, SharedConnection,
+    TableColumnDetail,
 };
 use crate::ui::intellisense::{IntellisenseData, IntellisensePopup};
 use crate::ui::query_history::QueryHistoryDialog;
@@ -645,13 +646,15 @@ impl SqlEditorWidget {
             }
 
             let cursor_pos = editor.insert_position().max(0) as usize;
-            highlighter
-                .borrow()
-                .highlight_buffer_window(buf, &mut style_buffer, cursor_pos);
+            highlighter.borrow().highlight_buffer_window(
+                buf,
+                &mut style_buffer,
+                cursor_pos,
+                Some((pos.max(0) as usize, (pos + ins.max(0)).max(0) as usize)),
+            );
         });
         self.refresh_highlighting();
     }
-
 
     fn setup_button_callbacks(
         &mut self,
@@ -895,7 +898,6 @@ impl SqlEditorWidget {
         *self.replace_callback.borrow_mut() = Some(Box::new(callback));
     }
 
-
     #[allow(dead_code)]
     pub fn update_highlight_data(&mut self, data: HighlightData) {
         self.highlighter.borrow_mut().set_highlight_data(data);
@@ -905,6 +907,7 @@ impl SqlEditorWidget {
             &self.buffer,
             &mut style_buffer,
             self.editor.insert_position().max(0) as usize,
+            None,
         );
     }
 
@@ -936,6 +939,7 @@ impl SqlEditorWidget {
             &self.buffer,
             &mut self.style_buffer.clone(),
             self.editor.insert_position().max(0) as usize,
+            None,
         );
     }
 

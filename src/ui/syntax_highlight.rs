@@ -136,7 +136,6 @@ impl HighlightData {
             columns: Vec::new(),
         }
     }
-
 }
 
 /// SQL Syntax Highlighter
@@ -147,6 +146,7 @@ pub struct SqlHighlighter {
 
 const HIGHLIGHT_WINDOW_THRESHOLD: usize = 20_000;
 const HIGHLIGHT_WINDOW_RADIUS: usize = 8_000;
+const MAX_HIGHLIGHT_WINDOWS_PER_PASS: usize = 6;
 
 impl SqlHighlighter {
     pub fn new() -> Self {
@@ -181,6 +181,7 @@ impl SqlHighlighter {
         buffer: &TextBuffer,
         style_buffer: &mut TextBuffer,
         cursor_pos: usize,
+        edited_range: Option<(usize, usize)>,
     ) {
         let text_len = buffer.length().max(0) as usize;
         if text_len == 0 {
@@ -195,24 +196,24 @@ impl SqlHighlighter {
         }
 
         if style_buffer.length() != text_len as i32 {
-            let default_styles: String =
-                std::iter::repeat(STYLE_DEFAULT).take(text_len).collect();
+            let default_styles: String = std::iter::repeat(STYLE_DEFAULT).take(text_len).collect();
             style_buffer.set_text(&default_styles);
         }
 
-        let cursor_pos = cursor_pos.min(text_len);
-        let (range_start, range_end) = windowed_range_from_buffer(buffer, cursor_pos, text_len);
-        if range_start >= range_end {
-            return;
+        let ranges = select_highlight_ranges(buffer, text_len, cursor_pos, edited_range);
+        for (range_start, range_end) in ranges {
+            if range_start >= range_end {
+                continue;
+            }
+            let Some(window_text) = buffer.text_range(range_start as i32, range_end as i32) else {
+                continue;
+            };
+            let window_styles = self.generate_styles(&window_text);
+            if window_styles.len() != range_end - range_start {
+                continue;
+            }
+            style_buffer.replace(range_start as i32, range_end as i32, &window_styles);
         }
-        let Some(window_text) = buffer.text_range(range_start as i32, range_end as i32) else {
-            return;
-        };
-        let window_styles = self.generate_styles(&window_text);
-        if window_styles.len() != range_end - range_start {
-            return;
-        }
-        style_buffer.replace(range_start as i32, range_end as i32, &window_styles);
     }
 
     /// Generates the style string for the given text
@@ -229,10 +230,7 @@ impl SqlHighlighter {
             if idx == 0 || bytes.get(idx.saturating_sub(1)) == Some(&b'\n') {
                 let line_start = idx;
                 let mut scan = idx;
-                while bytes
-                    .get(scan)
-                    .map_or(false, |&b| b == b' ' || b == b'\t')
-                {
+                while bytes.get(scan).map_or(false, |&b| b == b' ' || b == b'\t') {
                     scan += 1;
                 }
                 if is_prompt_keyword(bytes, scan) {
@@ -310,12 +308,9 @@ impl SqlHighlighter {
                         _ => delimiter,
                     };
                     let start = idx;
-                    idx += 4; // Skip nq'[
-                    // Find closing delimiter followed by '
+                    idx += 4; // Skip nq'[ and find closing delimiter followed by '
                     while idx < bytes.len() {
-                        if bytes.get(idx) == Some(&closing)
-                            && bytes.get(idx + 1) == Some(&b'\'')
-                        {
+                        if bytes.get(idx) == Some(&closing) && bytes.get(idx + 1) == Some(&b'\'') {
                             idx += 2; // Include ]'
                             break;
                         }
@@ -331,9 +326,7 @@ impl SqlHighlighter {
             }
 
             // Check for q-quoted strings: q'[...]', q'{...}', etc.
-            if (byte == b'q' || byte == b'Q')
-                && bytes.get(idx + 1) == Some(&b'\'')
-            {
+            if (byte == b'q' || byte == b'Q') && bytes.get(idx + 1) == Some(&b'\'') {
                 if let Some(&delimiter) = bytes.get(idx + 2) {
                     let closing = match delimiter {
                         b'[' => b']',
@@ -343,12 +336,9 @@ impl SqlHighlighter {
                         _ => delimiter,
                     };
                     let start = idx;
-                    idx += 3; // Skip q'[
-                    // Find closing delimiter followed by '
+                    idx += 3; // Skip q'[ and find closing delimiter followed by '
                     while idx < bytes.len() {
-                        if bytes.get(idx) == Some(&closing)
-                            && bytes.get(idx + 1) == Some(&b'\'')
-                        {
+                        if bytes.get(idx) == Some(&closing) && bytes.get(idx + 1) == Some(&b'\'') {
                             idx += 2; // Include ]'
                             break;
                         }
@@ -388,8 +378,7 @@ impl SqlHighlighter {
 
             // Check for numbers
             if byte.is_ascii_digit()
-                || (byte == b'.'
-                    && bytes.get(idx + 1).map_or(false, |b| b.is_ascii_digit()))
+                || (byte == b'.' && bytes.get(idx + 1).map_or(false, |b| b.is_ascii_digit()))
             {
                 let start = idx;
                 let mut has_dot = byte == b'.';
@@ -416,7 +405,10 @@ impl SqlHighlighter {
             if is_identifier_start_byte(byte) {
                 let start = idx;
                 idx += 1;
-                while bytes.get(idx).map_or(false, |&b| is_identifier_continue_byte(b)) {
+                while bytes
+                    .get(idx)
+                    .map_or(false, |&b| is_identifier_continue_byte(b))
+                {
                     idx += 1;
                 }
                 let word = text.get(start..idx).unwrap_or("");
@@ -426,7 +418,10 @@ impl SqlHighlighter {
                 if matches!(upper_word.as_str(), "DATE" | "TIMESTAMP" | "INTERVAL") {
                     // Skip whitespace to find potential string literal
                     let mut look_ahead = idx;
-                    while bytes.get(look_ahead).map_or(false, |&b| b == b' ' || b == b'\t') {
+                    while bytes
+                        .get(look_ahead)
+                        .map_or(false, |&b| b == b' ' || b == b'\t')
+                    {
                         look_ahead += 1;
                     }
                     // Check if followed by a single quote (string literal)
@@ -522,11 +517,84 @@ fn windowed_range_from_buffer(
     (start.min(text_len), end.min(text_len))
 }
 
+fn select_highlight_ranges(
+    buffer: &TextBuffer,
+    text_len: usize,
+    cursor_pos: usize,
+    edited_range: Option<(usize, usize)>,
+) -> Vec<(usize, usize)> {
+    let mut anchors = vec![cursor_pos.min(text_len)];
+
+    if let Some((edit_start, edit_end)) = edited_range {
+        let mut start = edit_start.min(text_len);
+        let mut end = edit_end.min(text_len);
+        if start > end {
+            std::mem::swap(&mut start, &mut end);
+        }
+
+        if start == end {
+            anchors.push(start);
+        } else {
+            let span = end - start;
+            let step = (HIGHLIGHT_WINDOW_RADIUS * 2).max(1);
+            let mut windows = span.div_ceil(step).max(1);
+            windows = windows.min(MAX_HIGHLIGHT_WINDOWS_PER_PASS.saturating_sub(1).max(1));
+
+            for i in 0..=windows {
+                let offset = span.saturating_mul(i) / windows;
+                anchors.push(start + offset);
+            }
+        }
+    }
+
+    let mut ranges: Vec<(usize, usize)> = anchors
+        .into_iter()
+        .map(|anchor| windowed_range_from_buffer(buffer, anchor, text_len))
+        .collect();
+
+    ranges.sort_unstable_by_key(|(start, _)| *start);
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        if let Some((_, prev_end)) = merged.last_mut() {
+            if start <= *prev_end {
+                *prev_end = (*prev_end).max(end);
+                continue;
+            }
+        }
+        merged.push((start, end));
+    }
+
+    if merged.len() > MAX_HIGHLIGHT_WINDOWS_PER_PASS {
+        merged.truncate(MAX_HIGHLIGHT_WINDOWS_PER_PASS);
+    }
+
+    merged
+}
+
 fn is_operator_byte(byte: u8) -> bool {
     matches!(
         byte,
-        b'+' | b'-' | b'*' | b'/' | b'=' | b'<' | b'>' | b'!' | b'&' | b'|' | b'^' | b'%'
-            | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b',' | b';' | b':' | b'.'
+        b'+' | b'-'
+            | b'*'
+            | b'/'
+            | b'='
+            | b'<'
+            | b'>'
+            | b'!'
+            | b'&'
+            | b'|'
+            | b'^'
+            | b'%'
+            | b'('
+            | b')'
+            | b'['
+            | b']'
+            | b'{'
+            | b'}'
+            | b','
+            | b';'
+            | b':'
+            | b'.'
     )
 }
 
