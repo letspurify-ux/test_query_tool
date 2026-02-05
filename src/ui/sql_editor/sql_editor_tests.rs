@@ -467,3 +467,38 @@ END;"#;
 
     assert_eq!(formatted, expected);
 }
+
+#[test]
+fn format_sql_pre_dedents_else_elsif_exception_lines() {
+    let input = r#"BEGIN
+IF v_flag = 'Y' THEN
+NULL;
+ELSIF v_flag = 'N' THEN
+NULL;
+ELSE
+NULL;
+END IF;
+EXCEPTION
+WHEN OTHERS THEN
+NULL;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "BEGIN;",
+        "    IF v_flag = 'Y' THEN",
+        "    NULL;",
+        "    ELSIF v_flag = 'N' THEN",
+        "    NULL;",
+        "    ELSE",
+        "    NULL;",
+        "    END IF;",
+        "EXCEPTION",
+        "WHEN OTHERS THEN",
+        "NULL;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}

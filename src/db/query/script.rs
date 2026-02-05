@@ -580,19 +580,30 @@ impl StatementBuilder {
 
 impl QueryExecutor {
     pub fn line_block_depths(sql: &str) -> Vec<usize> {
+        fn leading_word_upper(line: &str) -> Option<String> {
+            line.trim_start()
+                .split_whitespace()
+                .next()
+                .map(|w| w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_'))
+                .filter(|w| !w.is_empty())
+                .map(|w| w.to_uppercase())
+        }
+
+        fn should_pre_dedent(leading_word: &str) -> bool {
+            matches!(leading_word, "END" | "ELSE" | "ELSIF" | "EXCEPTION")
+        }
+
         let mut builder = StatementBuilder::new();
         let mut depths = Vec::new();
 
         for line in sql.lines() {
-            let trimmed = line.trim_start();
-            let starts_with_end = builder.is_idle()
-                && trimmed
-                    .split_whitespace()
-                    .next()
-                    .map(|tok| tok.eq_ignore_ascii_case("END"))
-                    .unwrap_or(false);
+            let leading_word = if builder.is_idle() {
+                leading_word_upper(line)
+            } else {
+                None
+            };
 
-            let depth = if starts_with_end {
+            let depth = if leading_word.as_deref().is_some_and(should_pre_dedent) {
                 builder.block_depth().saturating_sub(1)
             } else {
                 builder.block_depth()
