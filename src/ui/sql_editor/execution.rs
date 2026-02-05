@@ -259,21 +259,27 @@ impl SqlEditorWidget {
             return String::new();
         }
 
+        let mut force_select_list_newline_next = false;
         for (idx, item) in items.iter().enumerate() {
             match item {
                 FormatItem::Statement(statement) => {
-                    let formatted_statement = Self::format_statement(statement);
+                    let formatted_statement =
+                        Self::format_statement(statement, force_select_list_newline_next);
                     let has_code = Self::statement_has_code(statement);
                     formatted.push_str(&formatted_statement);
                     if has_code && !Self::statement_ends_with_semicolon(&formatted_statement) {
                         formatted.push(';');
                     }
+                    force_select_list_newline_next =
+                        Self::statement_has_unbalanced_paren(statement);
                 }
                 FormatItem::ToolCommand(command) => {
                     formatted.push_str(&Self::format_tool_command(command));
+                    force_select_list_newline_next = false;
                 }
                 FormatItem::Slash => {
                     formatted.push('/');
+                    force_select_list_newline_next = false;
                 }
             }
 
@@ -308,6 +314,21 @@ impl SqlEditorWidget {
             }
         }
         false
+    }
+
+    fn statement_has_unbalanced_paren(statement: &str) -> bool {
+        let tokens = Self::tokenize_sql(statement);
+        let mut depth = 0usize;
+        for token in tokens {
+            match token {
+                SqlToken::Symbol(sym) if sym == "(" => depth += 1,
+                SqlToken::Symbol(sym) if sym == ")" => {
+                    depth = depth.saturating_sub(1);
+                }
+                _ => {}
+            }
+        }
+        depth > 0
     }
 
     fn format_tool_command(command: &ToolCommand) -> String {
@@ -473,7 +494,7 @@ impl SqlEditorWidget {
         }
     }
 
-    fn format_statement(statement: &str) -> String {
+    fn format_statement(statement: &str, force_select_list_newline_on_start: bool) -> String {
         if let Some(formatted) = Self::format_create_table(statement) {
             return formatted;
         }
@@ -533,6 +554,10 @@ impl SqlEditorWidget {
         let mut case_branch_started: Vec<bool> = Vec::new();
         let mut between_pending = false;
         let mut last_line_is_comment = false;
+        let mut select_list_anchor: Option<usize> = None;
+        let mut select_list_indent = 0usize;
+        let mut select_list_multiline_forced = false;
+        let mut force_select_list_newline_next = force_select_list_newline_on_start;
 
         let newline_with = |out: &mut String,
                             indent_level: usize,
@@ -567,6 +592,26 @@ impl SqlEditorWidget {
         let trim_trailing_space = |out: &mut String| {
             while out.ends_with(' ') {
                 out.pop();
+            }
+        };
+
+        let force_select_list_newline = |out: &mut String,
+                                         select_list_anchor: &Option<usize>,
+                                         select_list_indent: usize,
+                                         select_list_multiline_forced: &mut bool| {
+            if *select_list_multiline_forced {
+                return;
+            }
+            let Some(pos) = *select_list_anchor else {
+                return;
+            };
+            if pos >= out.len() {
+                return;
+            }
+            if out.as_bytes().get(pos) == Some(&b' ') {
+                let indent = " ".repeat(select_list_indent * 4);
+                out.replace_range(pos..pos + 1, &format!("\n{indent}"));
+                *select_list_multiline_forced = true;
             }
         };
 
@@ -700,6 +745,10 @@ impl SqlEditorWidget {
                             &mut line_indent,
                         );
                         current_clause = Some(upper.clone());
+                        if upper != "SELECT" {
+                            select_list_anchor = None;
+                            select_list_multiline_forced = false;
+                        }
                         if upper == "SELECT" && in_open_cursor_sql {
                             // Keep OPEN ... FOR SELECT inside the cursor SQL context.
                             open_cursor_pending = false;
@@ -1007,6 +1056,31 @@ impl SqlEditorWidget {
                     if started_line {
                         last_line_is_comment = false;
                     }
+                    if upper == "SELECT" {
+                        select_list_anchor = Some(out.len());
+                        select_list_indent = base_indent(
+                            indent_level,
+                            in_open_cursor_sql,
+                            open_cursor_sql_indent,
+                        ) + 1;
+                        select_list_multiline_forced = false;
+                        if force_select_list_newline_next {
+                            newline_with(
+                                &mut out,
+                                base_indent(
+                                    indent_level,
+                                    in_open_cursor_sql,
+                                    open_cursor_sql_indent,
+                                ),
+                                1,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                            select_list_multiline_forced = true;
+                            force_select_list_newline_next = false;
+                        }
+                    }
 
                     if create_table_paren_expected
                         && upper == "AS"
@@ -1129,6 +1203,18 @@ impl SqlEditorWidget {
                         tokens.get(idx + 1),
                         Some(SqlToken::Word(_) | SqlToken::String(_))
                     );
+                    let in_select_list = matches!(current_clause.as_deref(), Some("SELECT"));
+                    let top_level_select_list = in_select_list
+                        && suppress_comma_break_depth == 0
+                        && paren_stack.is_empty();
+                    if top_level_select_list && !has_leading_newline {
+                        force_select_list_newline(
+                            &mut out,
+                            &select_list_anchor,
+                            select_list_indent,
+                            &mut select_list_multiline_forced,
+                        );
+                    }
 
                     if has_leading_newline {
                         newline_with(
@@ -1144,17 +1230,17 @@ impl SqlEditorWidget {
                     }
 
                     let comment_starts_line = at_line_start;
-                    if is_block_comment {
-                        if at_line_start {
-                            at_line_start = false;
-                        }
-                    } else {
-                        if comment_starts_line {
-                            line_indent = base_indent(
-                                indent_level,
-                                in_open_cursor_sql,
-                                open_cursor_sql_indent,
-                            );
+                    if comment_starts_line {
+                        let base =
+                            base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent);
+                        if has_leading_newline {
+                            line_indent = base;
+                        } else if in_select_list
+                            || column_list_stack.last().copied().unwrap_or(false)
+                        {
+                            line_indent = base + 1;
+                        } else if line_indent == 0 {
+                            line_indent = base;
                         }
                         ensure_indent(&mut out, &mut at_line_start, line_indent);
                     }
@@ -1168,11 +1254,25 @@ impl SqlEditorWidget {
                         if comment_starts_line {
                             last_line_is_comment = true;
                         }
+                        if in_select_list || column_list_stack.last().copied().unwrap_or(false) {
+                            line_indent = base_indent(
+                                indent_level,
+                                in_open_cursor_sql,
+                                open_cursor_sql_indent,
+                            ) + 1;
+                        }
                     } else if is_block_comment && next_is_word_like {
+                        let list_extra = if in_select_list
+                            || column_list_stack.last().copied().unwrap_or(false)
+                        {
+                            1
+                        } else {
+                            0
+                        };
                         newline_with(
                             &mut out,
-                            indent_level,
-                            0,
+                            base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent),
+                            list_extra,
                             &mut at_line_start,
                             &mut needs_space,
                             &mut line_indent,
@@ -1221,9 +1321,14 @@ impl SqlEditorWidget {
                             }
                         }
                         ";" => {
+                            let had_unbalanced_paren = suppress_comma_break_depth > 0
+                                || !paren_stack.is_empty()
+                                || !column_list_stack.is_empty();
                             trim_trailing_space(&mut out);
                             out.push(';');
                             current_clause = None;
+                            select_list_anchor = None;
+                            select_list_multiline_forced = false;
                             open_cursor_pending = false;
                             in_open_cursor_sql = false;
                             open_cursor_sql_indent = 0;
@@ -1246,6 +1351,9 @@ impl SqlEditorWidget {
                                 suppress_comma_break_depth = 0;
                                 paren_stack.clear();
                                 column_list_stack.clear();
+                                if had_unbalanced_paren {
+                                    force_select_list_newline_next = true;
+                                }
                             }
                             newline_with(
                                 &mut out,
@@ -6011,7 +6119,7 @@ mod formatter_regression_tests {
         let sql = "select fn(a, b;\nselect x, y from dual;";
         let formatted = SqlEditorWidget::format_sql_basic(sql);
 
-        assert!(formatted.contains("SELECT\n    x,\n    y\nFROM\n    dual;"));
+        assert!(formatted.contains("SELECT\n    x,\n    y\nFROM DUAL;"));
     }
 
     #[test]
@@ -6020,6 +6128,8 @@ mod formatter_regression_tests {
         let formatted = SqlEditorWidget::format_sql_basic(sql);
 
         assert!(formatted.contains("/* comment with (, ), and , */"));
-        assert!(formatted.contains("SELECT\n    a,\n    /* comment with (, ), and , */\n    b\nFROM\n    dual;"));
+        assert!(
+            formatted.contains("SELECT\n    a,\n    /* comment with (, ), and , */\n    b\nFROM DUAL;")
+        );
     }
 }
