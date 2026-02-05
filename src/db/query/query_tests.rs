@@ -2324,3 +2324,52 @@ SHOW ERRORS TYPE BODY oqt_obj"#;
         "Should have 1 tool command (SHOW ERRORS)"
     );
 }
+
+#[test]
+fn test_package_body_with_comments_does_not_break_depth() {
+    let sql = r#"CREATE OR REPLACE PACKAGE BODY oqt_comment_pkg AS
+  /* package-level comment with keywords: BEGIN END IF LOOP */
+  PROCEDURE p_test (p_id NUMBER) IS
+    /* procedure comment */
+  BEGIN
+    /* begin-block comment */
+    NULL;
+  END p_test;
+
+  -- another comment mentioning END;
+  PROCEDURE p_test2 IS
+  BEGIN
+    NULL;
+  END p_test2;
+END oqt_comment_pkg;
+/
+SELECT 1 FROM dual;"#;
+
+    let items = QueryExecutor::split_script_items(sql);
+    let statements: Vec<&str> = items
+        .iter()
+        .filter_map(|item| match item {
+            ScriptItem::Statement(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        statements.len(),
+        2,
+        "Comments should not affect depth/splitting; expected package body + select, got: {:?}",
+        statements
+    );
+    assert!(
+        statements[0].contains("CREATE OR REPLACE PACKAGE BODY oqt_comment_pkg"),
+        "First statement should be package body"
+    );
+    assert!(
+        statements[0].contains("END oqt_comment_pkg"),
+        "Package body should end correctly"
+    );
+    assert!(
+        statements[1].contains("SELECT 1 FROM dual"),
+        "Second statement should be trailing SELECT"
+    );
+}
