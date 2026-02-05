@@ -892,10 +892,25 @@ impl SqlEditorWidget {
                     }
                     ensure_indent(&mut out, &mut at_line_start, line_indent);
                     out.push_str(&comment);
+                    let is_block_comment = comment.starts_with("/*") && comment.ends_with("*/");
+                    let next_is_word_like = matches!(
+                        tokens.get(idx + 1),
+                        Some(SqlToken::Word(_) | SqlToken::String(_))
+                    );
+
                     needs_space = true;
                     if comment.ends_with('\n') || comment.contains('\n') {
                         at_line_start = true;
                         needs_space = false;
+                    } else if is_block_comment && next_is_word_like {
+                        newline_with(
+                            &mut out,
+                            indent_level,
+                            0,
+                            &mut at_line_start,
+                            &mut needs_space,
+                            &mut line_indent,
+                        );
                     }
                 }
                 SqlToken::Symbol(sym) => {

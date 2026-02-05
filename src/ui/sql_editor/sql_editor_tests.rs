@@ -283,3 +283,15 @@ fn tokenize_sql_handles_nq_quotes() {
         tokens
     );
 }
+
+#[test]
+fn format_sql_places_newline_after_inline_block_comment() {
+    let input = "/* 헤더 주석 */SELECT 1 FROM dual";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("/* 헤더 주석 */\nSELECT 1 FROM dual;"),
+        "Inline block comment should be followed by newline before SQL, got: {}",
+        formatted
+    );
+}
