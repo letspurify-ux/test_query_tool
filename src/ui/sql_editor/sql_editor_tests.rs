@@ -119,20 +119,14 @@ fn format_sql_preserves_oracle_labels() {
 fn format_sql_preserves_q_quoted_strings() {
     // Test q'[...]' quote literal preservation
     let cases = [
-        (
-            "SELECT q'[It's a test]' FROM dual",
-            "q'[It's a test]'",
-        ),
-        (
-            "SELECT q'{Hello World}' FROM dual",
-            "q'{Hello World}'",
-        ),
+        ("SELECT q'[It's a test]' FROM dual", "q'[It's a test]'"),
+        ("SELECT q'{Hello World}' FROM dual", "q'{Hello World}'"),
         (
             "SELECT q'(Text with 'quotes')' FROM dual",
             "q'(Text with 'quotes')'",
         ),
         (
-            "SELECT q'<Value with <brackets>>'" ,
+            "SELECT q'<Value with <brackets>>'",
             "q'<Value with <brackets>>'",
         ),
         (
@@ -296,7 +290,6 @@ fn format_sql_places_newline_after_inline_block_comment() {
     );
 }
 
-
 #[test]
 fn format_sql_does_not_merge_end_statement_with_following_if() {
     let input = "BEGIN\nNULL;\nEND;\nIF 1 = 1 THEN\nNULL;\nEND IF;";
@@ -307,4 +300,41 @@ fn format_sql_does_not_merge_end_statement_with_following_if() {
         "END; and following IF must remain separate, got: {}",
         formatted
     );
+}
+
+#[test]
+fn compute_edited_range_handles_insert_delete_and_replace() {
+    assert_eq!(compute_edited_range(5, 3, 0, 20), Some((5, 8)));
+    assert_eq!(compute_edited_range(5, 0, 4, 20), Some((5, 9)));
+    assert_eq!(compute_edited_range(5, 2, 6, 20), Some((5, 11)));
+}
+
+#[test]
+fn compute_edited_range_clamps_and_handles_invalid_pos() {
+    assert_eq!(compute_edited_range(-1, 3, 0, 20), None);
+    assert_eq!(compute_edited_range(50, 3, 0, 20), Some((20, 20)));
+    assert_eq!(compute_edited_range(18, 10, 0, 20), Some((18, 20)));
+}
+
+#[test]
+fn has_stateful_sql_delimiter_detects_comment_and_string_tokens() {
+    assert!(has_stateful_sql_delimiter("/* comment"));
+    assert!(has_stateful_sql_delimiter("end */"));
+    assert!(has_stateful_sql_delimiter("-- line"));
+    assert!(has_stateful_sql_delimiter("'text'"));
+    assert!(has_stateful_sql_delimiter("q'[x]'"));
+    assert!(has_stateful_sql_delimiter("NQ'[x]'"));
+    assert!(!has_stateful_sql_delimiter("SELECT col FROM tab"));
+}
+
+#[test]
+fn needs_full_rehighlight_when_edit_creates_stateful_token_with_neighbor_char() {
+    let mut buffer = TextBuffer::default();
+    buffer.set_text("SELECT 1 * FROM dual");
+
+    // Simulate typing '/' right after '*' to form '*/'.
+    let pos = buffer.text().find('*').unwrap() as i32 + 1;
+    buffer.insert(pos, "/");
+
+    assert!(needs_full_rehighlight(&buffer, pos, 1, ""));
 }

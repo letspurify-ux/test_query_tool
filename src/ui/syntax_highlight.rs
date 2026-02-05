@@ -532,6 +532,10 @@ fn select_highlight_ranges(
             std::mem::swap(&mut start, &mut end);
         }
 
+        if start == 0 && end == text_len {
+            return vec![(0, text_len)];
+        }
+
         if start == end {
             anchors.push(start);
         } else {

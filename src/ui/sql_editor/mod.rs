@@ -596,7 +596,7 @@ impl SqlEditorWidget {
         let mut style_buffer = self.style_buffer.clone();
         let mut buffer = self.buffer.clone();
         let editor = self.editor.clone();
-        buffer.add_modify_callback2(move |buf, pos, ins, del, _restyled, _deleted_text| {
+        buffer.add_modify_callback2(move |buf, pos, ins, del, _restyled, deleted_text| {
             // Synchronize style_buffer length with text buffer
             // highlight_buffer_window will reset if lengths differ, but we do incremental
             // updates here to maintain consistency for small edits
@@ -646,11 +646,18 @@ impl SqlEditorWidget {
             }
 
             let cursor_pos = editor.insert_position().max(0) as usize;
+            let text_len = buf.length().max(0) as usize;
+            let mut edited_range = compute_edited_range(pos, ins, del, text_len);
+
+            if needs_full_rehighlight(buf, pos, ins, deleted_text) {
+                edited_range = Some((0, text_len));
+            }
+
             highlighter.borrow().highlight_buffer_window(
                 buf,
                 &mut style_buffer,
                 cursor_pos,
-                Some((pos.max(0) as usize, (pos + ins.max(0)).max(0) as usize)),
+                edited_range,
             );
         });
         self.refresh_highlighting();
@@ -960,6 +967,69 @@ impl SqlEditorWidget {
     pub fn is_query_running(&self) -> bool {
         *self.query_running.borrow()
     }
+}
+
+fn compute_edited_range(pos: i32, ins: i32, del: i32, text_len: usize) -> Option<(usize, usize)> {
+    if pos < 0 {
+        return None;
+    }
+
+    let start = (pos as usize).min(text_len);
+    let inserted = ins.max(0) as usize;
+    let deleted = del.max(0) as usize;
+    let changed_len = inserted.max(deleted);
+    let end = start.saturating_add(changed_len).min(text_len);
+
+    Some((start, end))
+}
+
+fn needs_full_rehighlight(buf: &TextBuffer, pos: i32, ins: i32, deleted_text: &str) -> bool {
+    let mut changed_text = String::new();
+
+    if !deleted_text.is_empty() {
+        changed_text.push_str(deleted_text);
+    }
+
+    if ins > 0 && pos >= 0 {
+        let insert_end = pos.saturating_add(ins).min(buf.length());
+        if let Some(inserted_text) = buf.text_range(pos, insert_end) {
+            changed_text.push_str(&inserted_text);
+        }
+    }
+
+    if changed_text.is_empty() {
+        return false;
+    }
+
+    if has_stateful_sql_delimiter(&changed_text) {
+        return true;
+    }
+
+    if pos < 0 {
+        return false;
+    }
+
+    let sample_start = pos.saturating_sub(2);
+    let sample_end = pos
+        .saturating_add(ins.max(0))
+        .saturating_add(2)
+        .min(buf.length());
+    let nearby = buf.text_range(sample_start, sample_end).unwrap_or_default();
+
+    has_stateful_sql_delimiter(&nearby)
+}
+
+fn has_stateful_sql_delimiter(text: &str) -> bool {
+    text.contains("/*")
+        || text.contains("*/")
+        || text.contains("--")
+        || text.contains("'")
+        || text.contains("q'")
+        || text.contains("Q'")
+        || text.contains("nq'")
+        || text.contains("NQ'")
+        || text.contains("Nq'")
+        || text.contains("nQ'")
 }
 
 #[cfg(test)]
