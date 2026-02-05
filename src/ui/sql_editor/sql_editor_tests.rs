@@ -340,6 +340,30 @@ fn format_sql_preserves_newline_before_block_comment() {
 }
 
 #[test]
+fn format_sql_indents_select_list_item_starting_with_parenthesis() {
+    let input = "SELECT (a + b) AS sum_value, c FROM dual";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("SELECT\n    (a + b) AS sum_value,"),
+        "Select list item starting with '(' should be indented under SELECT, got: {}",
+        formatted
+    );
+}
+
+#[test]
+fn format_sql_indents_case_expression_inside_select_clause() {
+    let input = "SELECT CASE WHEN a = 1 THEN 'Y' ELSE 'N' END AS flag FROM dual";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("SELECT\n    CASE\n        WHEN a = 1 THEN 'Y'"),
+        "CASE inside SELECT should start deeper than SELECT and WHEN should be deeper than CASE, got: {}",
+        formatted
+    );
+}
+
+#[test]
 fn compute_edited_range_handles_insert_delete_and_replace() {
     assert_eq!(compute_edited_range(5, 3, 0, 20), Some((5, 8)));
     assert_eq!(compute_edited_range(5, 0, 4, 20), Some((5, 9)));

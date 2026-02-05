@@ -513,6 +513,7 @@ impl SqlEditorWidget {
         let mut routine_decl_pending = false;
         let mut create_table_paren_expected = false;
         let mut column_list_stack: Vec<bool> = Vec::new();
+        let mut current_clause: Option<String> = None;
 
         let newline_with = |out: &mut String,
                             indent_level: usize,
@@ -640,6 +641,7 @@ impl SqlEditorWidget {
                             &mut needs_space,
                             &mut line_indent,
                         );
+                        current_clause = Some(upper.clone());
                     } else if condition_keywords.contains(&upper.as_str()) && !is_or_in_create {
                         newline_with(
                             &mut out,
@@ -770,6 +772,15 @@ impl SqlEditorWidget {
                                 &mut out,
                                 indent_level,
                                 0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        } else if matches!(current_clause.as_deref(), Some("SELECT")) {
+                            newline_with(
+                                &mut out,
+                                indent_level,
+                                1,
                                 &mut at_line_start,
                                 &mut needs_space,
                                 &mut line_indent,
@@ -1017,6 +1028,20 @@ impl SqlEditorWidget {
                             }
                         }
                         "(" => {
+                            if matches!(current_clause.as_deref(), Some("SELECT"))
+                                && matches!(prev_word_upper.as_deref(), Some("SELECT"))
+                            {
+                                newline_with(
+                                    &mut out,
+                                    indent_level,
+                                    1,
+                                    &mut at_line_start,
+                                    &mut needs_space,
+                                    &mut line_indent,
+                                );
+                            }
+
+                            ensure_indent(&mut out, &mut at_line_start, line_indent);
                             let is_subquery = matches!(
                                 next_word_upper.as_deref(),
                                 Some("SELECT" | "WITH" | "INSERT" | "UPDATE" | "DELETE" | "MERGE")
