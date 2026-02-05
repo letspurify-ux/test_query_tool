@@ -304,6 +304,42 @@ fn format_sql_does_not_merge_end_statement_with_following_if() {
 }
 
 #[test]
+fn format_sql_preserves_newline_after_block_comment_end() {
+    let input = "SELECT 1 /* trailing */\nFROM dual";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("/* trailing */\nFROM dual;"),
+        "newline after */ should be preserved, got: {}",
+        formatted
+    );
+}
+
+#[test]
+fn format_sql_preserves_newline_before_line_comment() {
+    let input = "SELECT 1\n-- comment\nFROM dual";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("SELECT 1\n-- comment\nFROM dual;"),
+        "newline before -- should be preserved, got: {}",
+        formatted
+    );
+}
+
+#[test]
+fn format_sql_preserves_newline_before_block_comment() {
+    let input = "SELECT 1\n/* comment */\nFROM dual";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("SELECT 1\n/* comment */\nFROM dual;"),
+        "newline before /* should be preserved, got: {}",
+        formatted
+    );
+}
+
+#[test]
 fn compute_edited_range_handles_insert_delete_and_replace() {
     assert_eq!(compute_edited_range(5, 3, 0, 20), Some((5, 8)));
     assert_eq!(compute_edited_range(5, 0, 4, 20), Some((5, 9)));
