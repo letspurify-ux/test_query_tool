@@ -1,6 +1,5 @@
 use super::*;
 
-
 fn windowed_range_for_test(text: &str, cursor_pos: usize) -> (usize, usize) {
     let start_candidate = cursor_pos.saturating_sub(HIGHLIGHT_WINDOW_RADIUS);
     let end_candidate = (cursor_pos + HIGHLIGHT_WINDOW_RADIUS).min(text.len());
@@ -83,9 +82,7 @@ fn test_prompt_highlighting_with_leading_whitespace() {
     let styles = highlighter.generate_styles(text);
 
     let first_line_end = text.find('\n').unwrap();
-    assert!(styles[..first_line_end]
-        .chars()
-        .all(|c| c == STYLE_COMMENT));
+    assert!(styles[..first_line_end].chars().all(|c| c == STYLE_COMMENT));
     assert!(styles[first_line_end + 1..]
         .chars()
         .any(|c| c != STYLE_COMMENT));
@@ -177,7 +174,9 @@ fn test_nq_quote_case_insensitive_highlighting() {
     let nq_start1 = text1.find("NQ'[").unwrap();
     let nq_end1 = text1.find("]'").unwrap() + 2;
     assert!(
-        styles1[nq_start1..nq_end1].chars().all(|c| c == STYLE_STRING),
+        styles1[nq_start1..nq_end1]
+            .chars()
+            .all(|c| c == STYLE_STRING),
         "NQ'[...]' should be string style"
     );
 
@@ -187,7 +186,9 @@ fn test_nq_quote_case_insensitive_highlighting() {
     let nq_start2 = text2.find("Nq'[").unwrap();
     let nq_end2 = text2.find("]'").unwrap() + 2;
     assert!(
-        styles2[nq_start2..nq_end2].chars().all(|c| c == STYLE_STRING),
+        styles2[nq_start2..nq_end2]
+            .chars()
+            .all(|c| c == STYLE_STRING),
         "Nq'[...]' should be string style"
     );
 }
@@ -253,7 +254,9 @@ fn test_hint_highlighting() {
     let hint_end = text.find("*/").unwrap() + 2;
 
     assert!(
-        styles[hint_start..hint_end].chars().all(|c| c == STYLE_HINT),
+        styles[hint_start..hint_end]
+            .chars()
+            .all(|c| c == STYLE_HINT),
         "Hint /*+ ... */ should be styled as hint, got: {}",
         &styles[hint_start..hint_end]
     );
@@ -269,7 +272,9 @@ fn test_hint_vs_regular_comment() {
     let comment_start = text1.find("/*").unwrap();
     let comment_end = text1.find("*/").unwrap() + 2;
     assert!(
-        styles1[comment_start..comment_end].chars().all(|c| c == STYLE_COMMENT),
+        styles1[comment_start..comment_end]
+            .chars()
+            .all(|c| c == STYLE_COMMENT),
         "Regular comment should be comment style"
     );
 
@@ -279,7 +284,9 @@ fn test_hint_vs_regular_comment() {
     let hint_start = text2.find("/*+").unwrap();
     let hint_end = text2.find("*/").unwrap() + 2;
     assert!(
-        styles2[hint_start..hint_end].chars().all(|c| c == STYLE_HINT),
+        styles2[hint_start..hint_end]
+            .chars()
+            .all(|c| c == STYLE_HINT),
         "Hint should be hint style"
     );
 }
@@ -293,7 +300,9 @@ fn test_complex_hint_highlighting() {
     let hint_start = text.find("/*+").unwrap();
     let hint_end = text.find("*/").unwrap() + 2;
     assert!(
-        styles[hint_start..hint_end].chars().all(|c| c == STYLE_HINT),
+        styles[hint_start..hint_end]
+            .chars()
+            .all(|c| c == STYLE_HINT),
         "Complex hint should be fully styled as hint"
     );
 }
@@ -309,7 +318,9 @@ fn test_date_literal_highlighting() {
     let date_end = text.find("'2024-01-01'").unwrap() + "'2024-01-01'".len();
 
     assert!(
-        styles[date_start..date_end].chars().all(|c| c == STYLE_DATETIME_LITERAL),
+        styles[date_start..date_end]
+            .chars()
+            .all(|c| c == STYLE_DATETIME_LITERAL),
         "DATE literal should be styled as datetime literal, got: {}",
         &styles[date_start..date_end]
     );
@@ -325,7 +336,9 @@ fn test_timestamp_literal_highlighting() {
     let ts_end = text.find("'2024-01-01 12:30:00'").unwrap() + "'2024-01-01 12:30:00'".len();
 
     assert!(
-        styles[ts_start..ts_end].chars().all(|c| c == STYLE_DATETIME_LITERAL),
+        styles[ts_start..ts_end]
+            .chars()
+            .all(|c| c == STYLE_DATETIME_LITERAL),
         "TIMESTAMP literal should be styled as datetime literal"
     );
 }
@@ -340,7 +353,9 @@ fn test_interval_literal_highlighting() {
     let int_end = text.find("'5'").unwrap() + "'5'".len();
 
     assert!(
-        styles[int_start..int_end].chars().all(|c| c == STYLE_DATETIME_LITERAL),
+        styles[int_start..int_end]
+            .chars()
+            .all(|c| c == STYLE_DATETIME_LITERAL),
         "INTERVAL literal should be styled as datetime literal"
     );
 }
@@ -358,7 +373,9 @@ fn test_date_keyword_without_literal() {
     let hire_date_end = hire_date_start + "hire_date".len();
     // hire_date is not a keyword or function, should be default
     assert!(
-        styles[hire_date_start..hire_date_end].chars().all(|c| c == STYLE_DEFAULT),
+        styles[hire_date_start..hire_date_end]
+            .chars()
+            .all(|c| c == STYLE_DEFAULT),
         "hire_date should be default style"
     );
 }
@@ -373,7 +390,51 @@ fn test_lowercase_date_literal() {
     let date_end = text.find("'2024-01-01'").unwrap() + "'2024-01-01'".len();
 
     assert!(
-        styles[date_start..date_end].chars().all(|c| c == STYLE_DATETIME_LITERAL),
+        styles[date_start..date_end]
+            .chars()
+            .all(|c| c == STYLE_DATETIME_LITERAL),
         "Lowercase date literal should be styled as datetime literal"
     );
+}
+
+#[test]
+fn test_select_highlight_ranges_includes_edit_span() {
+    let mut buffer = TextBuffer::default();
+    let text = "SELECT col FROM table;\n".repeat(2500);
+    buffer.set_text(&text);
+    assert!(text.len() > HIGHLIGHT_WINDOW_THRESHOLD);
+
+    let edit_start = text.len() / 4;
+    let edit_end = edit_start + (HIGHLIGHT_WINDOW_RADIUS * 3);
+    let ranges = select_highlight_ranges(
+        &buffer,
+        text.len(),
+        text.len() / 2,
+        Some((edit_start, edit_end)),
+    );
+
+    assert!(!ranges.is_empty());
+    assert!(ranges.len() <= MAX_HIGHLIGHT_WINDOWS_PER_PASS);
+    assert!(ranges
+        .iter()
+        .any(|(start, end)| *start <= edit_start && *end >= edit_start));
+    assert!(ranges
+        .iter()
+        .any(|(start, end)| *start <= edit_end && *end >= edit_end));
+}
+
+#[test]
+fn test_select_highlight_ranges_without_edit_returns_cursor_window() {
+    let mut buffer = TextBuffer::default();
+    let text = "SELECT col FROM table;\n".repeat(2200);
+    buffer.set_text(&text);
+    assert!(text.len() > HIGHLIGHT_WINDOW_THRESHOLD);
+
+    let cursor_pos = text.len() / 2;
+    let ranges = select_highlight_ranges(&buffer, text.len(), cursor_pos, None);
+
+    assert_eq!(ranges.len(), 1);
+    let (expected_start, expected_end) =
+        windowed_range_from_buffer(&buffer, cursor_pos, text.len());
+    assert_eq!(ranges[0], (expected_start, expected_end));
 }

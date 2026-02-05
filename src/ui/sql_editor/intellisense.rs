@@ -181,6 +181,7 @@ impl SqlEditorWidget {
                                         &buffer_for_handle,
                                         &mut style_buffer_for_handle,
                                         cursor_pos,
+                                        None,
                                     );
                                 }
                                 if matches!(key, Key::Enter | Key::KPEnter) {
