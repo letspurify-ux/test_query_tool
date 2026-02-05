@@ -511,8 +511,89 @@ fn windowed_range_from_buffer(
     let start_candidate = cursor_pos.saturating_sub(HIGHLIGHT_WINDOW_RADIUS);
     let end_candidate = (cursor_pos + HIGHLIGHT_WINDOW_RADIUS).min(text_len);
 
-    let start = buffer.line_start(start_candidate as i32).max(0) as usize;
-    let end = buffer.line_end(end_candidate as i32).max(0) as usize;
+    let mut start = buffer.line_start(start_candidate as i32).max(0) as usize;
+    let mut end = buffer.line_end(end_candidate as i32).max(0) as usize;
+
+    if let Some(text) = buffer.text_range(0, text_len as i32) {
+        let bytes = text.as_bytes();
+        let mut idx = 0usize;
+        let mut last_ws_before_start: Option<usize> = None;
+        let mut first_ws_after_end: Option<usize> = None;
+
+        while idx < bytes.len() {
+            let byte = bytes[idx];
+
+            if byte == b'-' && bytes.get(idx + 1) == Some(&b'-') {
+                idx += 2;
+                while idx < bytes.len() && bytes[idx] != b'\n' {
+                    idx += 1;
+                }
+                continue;
+            }
+
+            if byte == b'/' && bytes.get(idx + 1) == Some(&b'*') {
+                idx += 2;
+                while idx + 1 < bytes.len() {
+                    if bytes[idx] == b'*' && bytes[idx + 1] == b'/' {
+                        idx += 2;
+                        break;
+                    }
+                    idx += 1;
+                }
+                continue;
+            }
+
+            if byte == b'\'' {
+                idx += 1;
+                while idx < bytes.len() {
+                    if bytes[idx] == b'\'' {
+                        if bytes.get(idx + 1) == Some(&b'\'') {
+                            idx += 2;
+                            continue;
+                        }
+                        idx += 1;
+                        break;
+                    }
+                    idx += 1;
+                }
+                continue;
+            }
+
+            if byte == b'"' {
+                idx += 1;
+                while idx < bytes.len() {
+                    if bytes[idx] == b'"' {
+                        if bytes.get(idx + 1) == Some(&b'"') {
+                            idx += 2;
+                            continue;
+                        }
+                        idx += 1;
+                        break;
+                    }
+                    idx += 1;
+                }
+                continue;
+            }
+
+            if byte.is_ascii_whitespace() {
+                if idx <= start_candidate {
+                    last_ws_before_start = Some(idx);
+                }
+                if idx >= end_candidate && first_ws_after_end.is_none() {
+                    first_ws_after_end = Some(idx);
+                }
+            }
+
+            idx += 1;
+        }
+
+        if let Some(ws_start) = last_ws_before_start {
+            start = ws_start;
+        }
+        if let Some(ws_end) = first_ws_after_end {
+            end = ws_end.saturating_add(1);
+        }
+    }
 
     (start.min(text_len), end.min(text_len))
 }
