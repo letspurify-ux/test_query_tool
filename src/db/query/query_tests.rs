@@ -2373,3 +2373,22 @@ SELECT 1 FROM dual;"#;
         "Second statement should be trailing SELECT"
     );
 }
+
+#[test]
+fn test_line_block_depths_increase_for_if_and_case() {
+    let sql = r#"BEGIN
+IF v_flag = 'Y' THEN
+CASE
+WHEN v_num = 1 THEN
+NULL;
+ELSE
+NULL;
+END CASE;
+END IF;
+END;"#;
+
+    let depths = QueryExecutor::line_block_depths(sql);
+    let expected = vec![0, 1, 2, 3, 3, 3, 3, 2, 1];
+
+    assert_eq!(depths, expected, "IF/CASE depth tracking mismatch");
+}

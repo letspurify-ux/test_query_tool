@@ -64,16 +64,25 @@ impl SplitState {
 
         self.track_create_plsql(&upper);
 
-        // Check if this is "END CASE" before processing pending_end
+        // Check if this is "END CASE" / "END IF" before processing pending_end
         let is_end_case = self.pending_end && upper == "CASE";
+        let is_end_if = self.pending_end && upper == "IF";
 
         if self.pending_end {
             if upper == "CASE" {
                 // END CASE - PL/SQL CASE statement 종료
-                // stack에서 해당 CASE를 제거
+                // stack에서 해당 CASE를 제거하고 depth 감소
                 self.case_depth_stack.pop();
-            } else if matches!(upper.as_str(), "IF" | "LOOP") {
-                // END IF, END LOOP - 이들은 별도 depth 관리 없음
+                if self.block_depth > 0 {
+                    self.block_depth -= 1;
+                }
+            } else if upper == "IF" {
+                // END IF
+                if self.block_depth > 0 {
+                    self.block_depth -= 1;
+                }
+            } else if upper == "LOOP" {
+                // END LOOP - LOOP depth는 아직 별도 관리하지 않음
             } else if matches!(upper.as_str(), "BEFORE" | "AFTER") && self.in_compound_trigger {
                 // END BEFORE ..., END AFTER ... - COMPOUND TRIGGER timing point 종료
                 // depth 감소 (타이밍 포인트 블록 종료)
@@ -84,8 +93,15 @@ impl SplitState {
                 // 일반 END - CASE expression END 또는 PL/SQL block END
                 // stack.last()가 현재 block_depth와 같으면 CASE expression의 END;
                 // 아니면 (더 깊은 block_depth) PL/SQL 블록의 END
-                if self.case_depth_stack.last() == Some(&self.block_depth) {
+                if self
+                    .case_depth_stack
+                    .last()
+                    .is_some_and(|depth| *depth + 1 == self.block_depth)
+                {
                     self.case_depth_stack.pop();
+                    if self.block_depth > 0 {
+                        self.block_depth -= 1;
+                    }
                 } else if self.block_depth > 0 {
                     self.block_depth -= 1;
                 }
@@ -97,6 +113,11 @@ impl SplitState {
         // END CASE의 CASE는 제외 (is_end_case로 체크)
         if upper == "CASE" && !is_end_case {
             self.case_depth_stack.push(self.block_depth);
+            self.block_depth += 1;
+        }
+
+        if upper == "IF" && !is_end_if {
+            self.block_depth += 1;
         }
 
         // Handle TYPE declarations that don't create a block:
@@ -223,9 +244,14 @@ impl SplitState {
     fn resolve_pending_end_on_terminator(&mut self) {
         if self.pending_end {
             // END followed by terminator (;) - determine what it closes
-            if self.case_depth_stack.last() == Some(&self.block_depth) {
+            if self
+                .case_depth_stack
+                .last()
+                .is_some_and(|depth| *depth + 1 == self.block_depth)
+            {
                 // CASE expression 종료 (stack.last() == block_depth)
                 self.case_depth_stack.pop();
+                self.block_depth = self.block_depth.saturating_sub(1);
             } else if self.block_depth > 0 {
                 // PL/SQL block 종료
                 self.block_depth -= 1;
@@ -241,9 +267,14 @@ impl SplitState {
     fn resolve_pending_end_on_eof(&mut self) {
         if self.pending_end {
             // END at EOF - determine what it closes
-            if self.case_depth_stack.last() == Some(&self.block_depth) {
+            if self
+                .case_depth_stack
+                .last()
+                .is_some_and(|depth| *depth + 1 == self.block_depth)
+            {
                 // CASE expression 종료 (stack.last() == block_depth)
                 self.case_depth_stack.pop();
+                self.block_depth = self.block_depth.saturating_sub(1);
             } else if self.block_depth > 0 {
                 // PL/SQL block 종료
                 self.block_depth -= 1;

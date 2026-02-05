@@ -502,3 +502,34 @@ END;"#;
 
     assert_eq!(formatted, expected);
 }
+
+#[test]
+fn format_sql_parser_depth_indents_if_and_case_one_level_more() {
+    let input = r#"BEGIN
+IF v_flag = 'Y' THEN
+CASE
+WHEN v_num = 1 THEN
+NULL;
+ELSE
+NULL;
+END CASE;
+END IF;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "BEGIN;",
+        "    IF v_flag = 'Y' THEN",
+        "        CASE",
+        "            WHEN v_num = 1 THEN",
+        "                NULL;",
+        "            ELSE",
+        "                NULL;",
+        "        END CASE;",
+        "    END IF;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
