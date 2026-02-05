@@ -533,3 +533,53 @@ END;"#;
 
     assert_eq!(formatted, expected);
 }
+
+#[test]
+fn format_sql_parser_depth_covers_loop_subquery_with_and_package_body() {
+    let input = r#"CREATE OR REPLACE PACKAGE BODY pkg_demo AS
+PROCEDURE run_demo IS
+BEGIN
+FOR r IN (
+SELECT id
+FROM (
+SELECT id FROM dual
+)
+) LOOP
+NULL;
+END LOOP;
+END run_demo;
+END pkg_demo;
+
+WITH cte AS (
+SELECT 1 AS n FROM dual
+)
+SELECT * FROM cte;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("PACKAGE BODY pkg_demo AS\n    PROCEDURE run_demo IS"),
+        "Package body scope should increase depth, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("PROCEDURE run_demo IS\n        BEGIN"),
+        "Procedure BEGIN should be one level deeper, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("FOR r IN (\n                SELECT id"),
+        "Subquery SELECT should increase depth, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains(") LOOP\n                NULL;\n            END LOOP;"),
+        "LOOP body should be indented one level deeper, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("WITH cte AS (\n    SELECT 1 AS n FROM dual\n)\nSELECT * FROM cte;"),
+        "WITH CTE block should increase depth and restore on main SELECT, got: {}",
+        formatted
+    );
+}

@@ -1,6 +1,5 @@
 use super::*;
 
-
 /// Helper to extract statements from ScriptItems
 fn get_statements(items: &[ScriptItem]) -> Vec<&str> {
     items
@@ -977,7 +976,13 @@ SHOW ERRORS";
                 } else {
                     s.clone()
                 };
-                println!("\n[{}] Statement (len={}, lines={}):\n...last lines:\n{}", i, s.len(), lines.len(), last_lines);
+                println!(
+                    "\n[{}] Statement (len={}, lines={}):\n...last lines:\n{}",
+                    i,
+                    s.len(),
+                    lines.len(),
+                    last_lines
+                );
             }
             ScriptItem::ToolCommand(cmd) => {
                 println!("\n[{}] ToolCommand: {:?}", i, cmd);
@@ -986,8 +991,18 @@ SHOW ERRORS";
     }
 
     // Should have 1 statement and 1 tool command
-    assert_eq!(stmts.len(), 1, "Should have 1 statement (package body), got {}", stmts.len());
-    assert_eq!(tool_cmds.len(), 1, "Should have 1 tool command (SHOW ERRORS), got {}", tool_cmds.len());
+    assert_eq!(
+        stmts.len(),
+        1,
+        "Should have 1 statement (package body), got {}",
+        stmts.len()
+    );
+    assert_eq!(
+        tool_cmds.len(),
+        1,
+        "Should have 1 tool command (SHOW ERRORS), got {}",
+        tool_cmds.len()
+    );
 
     // Verify package body doesn't contain SHOW ERRORS
     assert!(
@@ -1054,8 +1069,18 @@ SHOW ERRORS"#;
     }
 
     // Should have 1 statement (package spec) and 1 tool command (SHOW ERRORS)
-    assert_eq!(stmts.len(), 1, "Should have 1 statement (package spec), got {}", stmts.len());
-    assert_eq!(tool_cmds.len(), 1, "Should have 1 tool command (SHOW ERRORS), got {}", tool_cmds.len());
+    assert_eq!(
+        stmts.len(),
+        1,
+        "Should have 1 statement (package spec), got {}",
+        stmts.len()
+    );
+    assert_eq!(
+        tool_cmds.len(),
+        1,
+        "Should have 1 tool command (SHOW ERRORS), got {}",
+        tool_cmds.len()
+    );
 
     // Verify package spec doesn't contain SHOW ERRORS
     assert!(
@@ -1188,7 +1213,10 @@ fn test_select_with_case_when_expression() {
     let items = QueryExecutor::split_script_items(sql);
     let stmts = get_statements(&items);
     assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
-    assert!(stmts[0].contains("CASE WHEN"), "Statement should contain CASE WHEN");
+    assert!(
+        stmts[0].contains("CASE WHEN"),
+        "Statement should contain CASE WHEN"
+    );
 }
 
 #[test]
@@ -1219,8 +1247,16 @@ fn test_plsql_block_with_case_expression_select() {
 END;"#;
     let items = QueryExecutor::split_script_items(sql);
     let stmts = get_statements(&items);
-    assert_eq!(stmts.len(), 1, "Should have 1 statement (entire PL/SQL block), got: {:?}", stmts);
-    assert!(stmts[0].contains("NULL"), "Statement should contain NULL (proving block wasn't split)");
+    assert_eq!(
+        stmts.len(),
+        1,
+        "Should have 1 statement (entire PL/SQL block), got: {:?}",
+        stmts
+    );
+    assert!(
+        stmts[0].contains("NULL"),
+        "Statement should contain NULL (proving block wasn't split)"
+    );
 }
 
 #[test]
@@ -1240,7 +1276,8 @@ END;"#;
 #[test]
 fn test_nested_case_expressions() {
     // Test case: Nested CASE expressions
-    let sql = "SELECT CASE WHEN a=1 THEN CASE WHEN b=2 THEN 'A' ELSE 'B' END ELSE 'C' END FROM dual;";
+    let sql =
+        "SELECT CASE WHEN a=1 THEN CASE WHEN b=2 THEN 'A' ELSE 'B' END ELSE 'C' END FROM dual;";
     let items = QueryExecutor::split_script_items(sql);
     let stmts = get_statements(&items);
     assert_eq!(stmts.len(), 1, "Should have 1 statement, got: {:?}", stmts);
@@ -1503,7 +1540,11 @@ SHOW ERRORS"#;
         .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
         .collect();
     assert_eq!(stmts.len(), 1, "Should have 1 statement");
-    assert_eq!(tool_cmds.len(), 1, "Should have 1 tool command (SHOW ERRORS)");
+    assert_eq!(
+        tool_cmds.len(),
+        1,
+        "Should have 1 tool command (SHOW ERRORS)"
+    );
     assert!(
         !stmts[0].contains("SHOW ERRORS"),
         "COMPOUND TRIGGER should NOT contain SHOW ERRORS"
@@ -1663,7 +1704,12 @@ BEGIN
 END;"#;
     let names = QueryExecutor::extract_bind_names(sql);
     // :NEW and :OLD should be skipped, only :user_id should be extracted
-    assert_eq!(names.len(), 1, "Should have 1 bind variable, got: {:?}", names);
+    assert_eq!(
+        names.len(),
+        1,
+        "Should have 1 bind variable, got: {:?}",
+        names
+    );
     assert!(
         names.iter().any(|n| n.to_uppercase() == "USER_ID"),
         "Should contain USER_ID, got: {:?}",
@@ -1690,7 +1736,12 @@ fn test_extract_bind_names_normal_plsql_includes_new_old() {
 END;"#;
     let names = QueryExecutor::extract_bind_names(sql);
     // Both :NEW and :OLD should be extracted as they are regular bind variables here
-    assert_eq!(names.len(), 2, "Should have 2 bind variables, got: {:?}", names);
+    assert_eq!(
+        names.len(),
+        2,
+        "Should have 2 bind variables, got: {:?}",
+        names
+    );
     assert!(
         names.iter().any(|n| n.to_uppercase() == "NEW"),
         "Should contain NEW, got: {:?}",
@@ -1706,12 +1757,24 @@ END;"#;
 #[test]
 fn test_is_create_trigger() {
     // Positive cases
-    assert!(QueryExecutor::is_create_trigger("CREATE TRIGGER trg_test BEFORE INSERT"));
-    assert!(QueryExecutor::is_create_trigger("CREATE OR REPLACE TRIGGER trg_test"));
-    assert!(QueryExecutor::is_create_trigger("create or replace trigger trg_test"));
-    assert!(QueryExecutor::is_create_trigger("CREATE EDITIONABLE TRIGGER trg_test"));
-    assert!(QueryExecutor::is_create_trigger("CREATE OR REPLACE EDITIONABLE TRIGGER trg_test"));
-    assert!(QueryExecutor::is_create_trigger("CREATE NONEDITIONABLE TRIGGER trg_test"));
+    assert!(QueryExecutor::is_create_trigger(
+        "CREATE TRIGGER trg_test BEFORE INSERT"
+    ));
+    assert!(QueryExecutor::is_create_trigger(
+        "CREATE OR REPLACE TRIGGER trg_test"
+    ));
+    assert!(QueryExecutor::is_create_trigger(
+        "create or replace trigger trg_test"
+    ));
+    assert!(QueryExecutor::is_create_trigger(
+        "CREATE EDITIONABLE TRIGGER trg_test"
+    ));
+    assert!(QueryExecutor::is_create_trigger(
+        "CREATE OR REPLACE EDITIONABLE TRIGGER trg_test"
+    ));
+    assert!(QueryExecutor::is_create_trigger(
+        "CREATE NONEDITIONABLE TRIGGER trg_test"
+    ));
     assert!(QueryExecutor::is_create_trigger(
         "  -- comment\n  CREATE OR REPLACE TRIGGER trg_test"
     ));
@@ -1720,8 +1783,12 @@ fn test_is_create_trigger() {
     ));
 
     // Negative cases
-    assert!(!QueryExecutor::is_create_trigger("CREATE PROCEDURE proc_test"));
-    assert!(!QueryExecutor::is_create_trigger("CREATE FUNCTION func_test"));
+    assert!(!QueryExecutor::is_create_trigger(
+        "CREATE PROCEDURE proc_test"
+    ));
+    assert!(!QueryExecutor::is_create_trigger(
+        "CREATE FUNCTION func_test"
+    ));
     assert!(!QueryExecutor::is_create_trigger("CREATE PACKAGE pkg_test"));
     assert!(!QueryExecutor::is_create_trigger("CREATE TABLE tbl_test"));
     assert!(!QueryExecutor::is_create_trigger("SELECT * FROM dual"));
@@ -1743,7 +1810,12 @@ END IF;
 END test_compound_trg;"#;
     let names = QueryExecutor::extract_bind_names(sql);
     // Only :audit_user should be extracted
-    assert_eq!(names.len(), 1, "Should have 1 bind variable, got: {:?}", names);
+    assert_eq!(
+        names.len(),
+        1,
+        "Should have 1 bind variable, got: {:?}",
+        names
+    );
     assert!(
         names.iter().any(|n| n.to_uppercase() == "AUDIT_USER"),
         "Should contain AUDIT_USER, got: {:?}",
@@ -1780,9 +1852,21 @@ CONNECT BY level <= 20;"#;
         .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
         .collect();
 
-    assert_eq!(statements.len(), 1, "Should be 1 statement, got: {:?}", statements);
-    assert!(statements[0].contains("CONNECT BY"), "Statement should contain CONNECT BY");
-    assert!(tool_commands.is_empty(), "Should have no tool commands, got: {:?}", tool_commands);
+    assert_eq!(
+        statements.len(),
+        1,
+        "Should be 1 statement, got: {:?}",
+        statements
+    );
+    assert!(
+        statements[0].contains("CONNECT BY"),
+        "Statement should contain CONNECT BY"
+    );
+    assert!(
+        tool_commands.is_empty(),
+        "Should have no tool commands, got: {:?}",
+        tool_commands
+    );
 }
 
 #[test]
@@ -1791,10 +1875,14 @@ fn test_connect_tool_command_still_works() {
     let sql = "CONNECT user/pass@localhost:1521/ORCL";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_connect_command = items.iter().any(|item| {
-        matches!(item, ScriptItem::ToolCommand(ToolCommand::Connect { .. }))
-    });
-    assert!(has_connect_command, "CONNECT tool command should be recognized, got: {:?}", items);
+    let has_connect_command = items
+        .iter()
+        .any(|item| matches!(item, ScriptItem::ToolCommand(ToolCommand::Connect { .. })));
+    assert!(
+        has_connect_command,
+        "CONNECT tool command should be recognized, got: {:?}",
+        items
+    );
 }
 
 #[test]
@@ -1821,7 +1909,12 @@ END;"#;
         })
         .collect();
 
-    assert_eq!(statements.len(), 1, "Should be 1 statement, got: {:?}", statements);
+    assert_eq!(
+        statements.len(),
+        1,
+        "Should be 1 statement, got: {:?}",
+        statements
+    );
     assert!(statements[0].contains("CREATE OR REPLACE TRIGGER oqt_nm_trg"));
     assert!(statements[0].contains("DECLARE"));
     assert!(statements[0].contains("END"));
@@ -1840,7 +1933,12 @@ fn test_nq_quote_string_parsing() {
         })
         .collect();
 
-    assert_eq!(statements.len(), 1, "Should be 1 statement, got: {:?}", statements);
+    assert_eq!(
+        statements.len(),
+        1,
+        "Should be 1 statement, got: {:?}",
+        statements
+    );
     assert!(
         statements[0].contains("nq'[한글 문자열]'"),
         "Statement should contain nq'[...]', got: {}",
@@ -1861,7 +1959,12 @@ fn test_nq_quote_with_semicolon_inside() {
         })
         .collect();
 
-    assert_eq!(statements.len(), 1, "Should be 1 statement, got: {:?}", statements);
+    assert_eq!(
+        statements.len(),
+        1,
+        "Should be 1 statement, got: {:?}",
+        statements
+    );
     assert!(
         statements[0].contains("nq'[text with ; semicolon]'"),
         "Statement should preserve semicolon inside nq'...', got: {}",
@@ -1926,7 +2029,12 @@ END;"#;
         })
         .collect();
 
-    assert_eq!(statements.len(), 1, "Should be 1 PL/SQL block, got: {:?}", statements);
+    assert_eq!(
+        statements.len(),
+        1,
+        "Should be 1 PL/SQL block, got: {:?}",
+        statements
+    );
     assert!(
         statements[0].contains("nq'[Hello; World; End;]'"),
         "PL/SQL block should contain nq'...' string intact"
@@ -1946,7 +2054,11 @@ fn test_nq_quote_mixed_with_q_quote() {
         })
         .collect();
 
-    assert_eq!(statements.len(), 1, "Should be 1 statement with both q'...' and nq'...'");
+    assert_eq!(
+        statements.len(),
+        1,
+        "Should be 1 statement with both q'...' and nq'...'"
+    );
     assert!(statements[0].contains("q'[regular q-quote]'"));
     assert!(statements[0].contains("nq'[national q-quote]'"));
 }
@@ -1957,7 +2069,12 @@ fn test_nq_quote_bind_variable_extraction() {
     let sql = r#"SELECT nq'[:not_a_bind]', :real_bind FROM dual"#;
     let names = QueryExecutor::extract_bind_names(sql);
 
-    assert_eq!(names.len(), 1, "Should have 1 bind variable, got: {:?}", names);
+    assert_eq!(
+        names.len(),
+        1,
+        "Should have 1 bind variable, got: {:?}",
+        names
+    );
     assert!(
         names.iter().any(|n| n.to_uppercase() == "REAL_BIND"),
         "Should contain REAL_BIND, got: {:?}",
@@ -2089,7 +2206,8 @@ fn test_interval_year_to_month_literal() {
 #[test]
 fn test_multiple_datetime_literals() {
     // Multiple datetime literals in one statement
-    let sql = "SELECT DATE '2024-01-01', TIMESTAMP '2024-01-01 12:00:00', INTERVAL '1' DAY FROM dual;";
+    let sql =
+        "SELECT DATE '2024-01-01', TIMESTAMP '2024-01-01 12:00:00', INTERVAL '1' DAY FROM dual;";
     let items = QueryExecutor::split_script_items(sql);
     let statements: Vec<&str> = items
         .iter()
@@ -2391,4 +2509,51 @@ END;"#;
     let expected = vec![0, 1, 2, 3, 3, 3, 3, 2, 1];
 
     assert_eq!(depths, expected, "IF/CASE depth tracking mismatch");
+}
+
+#[test]
+fn test_line_block_depths_increase_for_loop_subquery_with_and_package() {
+    let sql = r#"CREATE OR REPLACE PACKAGE BODY pkg_demo AS
+  PROCEDURE run_demo IS
+  BEGIN
+    FOR r IN (
+      SELECT id
+      FROM (
+        SELECT id FROM dual
+      )
+    ) LOOP
+      NULL;
+    END LOOP;
+  END run_demo;
+END pkg_demo;
+
+WITH cte AS (
+  SELECT 1 AS n FROM dual
+)
+SELECT * FROM cte;"#;
+
+    let depths = QueryExecutor::line_block_depths(sql);
+
+    // PACKAGE BODY +1
+    assert!(depths[1] >= 1, "Package body should increase depth");
+    // PROCEDURE/FUNCTION BEGIN +1
+    assert!(
+        depths[3] > depths[2],
+        "Procedure BEGIN should increase depth"
+    );
+    // Subquery (SELECT ...) +1
+    assert!(
+        depths[6] > depths[5],
+        "Nested subquery should increase depth"
+    );
+    // LOOP ... END LOOP +1
+    assert!(
+        depths[9] > depths[8],
+        "LOOP body should be deeper than LOOP line"
+    );
+    // WITH CTE block +1
+    assert!(
+        depths[15] > depths[14],
+        "CTE body should be indented under WITH"
+    );
 }

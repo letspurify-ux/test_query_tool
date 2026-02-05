@@ -64,9 +64,10 @@ impl SplitState {
 
         self.track_create_plsql(&upper);
 
-        // Check if this is "END CASE" / "END IF" before processing pending_end
+        // Check if this is "END CASE" / "END IF" / "END LOOP" before processing pending_end
         let is_end_case = self.pending_end && upper == "CASE";
         let is_end_if = self.pending_end && upper == "IF";
+        let is_end_loop = self.pending_end && upper == "LOOP";
 
         if self.pending_end {
             if upper == "CASE" {
@@ -82,7 +83,7 @@ impl SplitState {
                     self.block_depth -= 1;
                 }
             } else if upper == "LOOP" {
-                // END LOOP - LOOP depth는 아직 별도 관리하지 않음
+                // END LOOP
             } else if matches!(upper.as_str(), "BEFORE" | "AFTER") && self.in_compound_trigger {
                 // END BEFORE ..., END AFTER ... - COMPOUND TRIGGER timing point 종료
                 // depth 감소 (타이밍 포인트 블록 종료)
@@ -117,6 +118,10 @@ impl SplitState {
         }
 
         if upper == "IF" && !is_end_if {
+            self.block_depth += 1;
+        }
+
+        if upper == "LOOP" && !is_end_loop {
             self.block_depth += 1;
         }
 
@@ -611,35 +616,174 @@ impl StatementBuilder {
 
 impl QueryExecutor {
     pub fn line_block_depths(sql: &str) -> Vec<usize> {
-        fn leading_word_upper(line: &str) -> Option<String> {
+        fn leading_words_upper(line: &str) -> Vec<String> {
             line.trim_start()
                 .split_whitespace()
-                .next()
-                .map(|w| w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_'))
+                .map(|w| {
+                    w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                        .to_uppercase()
+                })
                 .filter(|w| !w.is_empty())
-                .map(|w| w.to_uppercase())
+                .collect()
         }
 
         fn should_pre_dedent(leading_word: &str) -> bool {
             matches!(leading_word, "END" | "ELSE" | "ELSIF" | "EXCEPTION")
         }
 
+        fn is_end_variant(words: &[String], variant: &str) -> bool {
+            words.first().is_some_and(|w| w == "END") && words.get(1).is_some_and(|w| w == variant)
+        }
+
         let mut builder = StatementBuilder::new();
         let mut depths = Vec::new();
 
+        // Extra indentation state for SQL formatting depth that should not affect splitting.
+        let mut subquery_paren_depth = 0usize;
+        let mut with_cte_depth = 0usize;
+        let mut with_cte_paren = 0isize;
+        let mut pending_with = false;
+        let mut pending_subprogram_begin = false;
+        let mut subprogram_begin_depth = 0usize;
+        let mut pending_package_body = false;
+        let mut package_body_depth = 0usize;
+
         for line in sql.lines() {
-            let leading_word = if builder.is_idle() {
-                leading_word_upper(line)
+            let words = if builder.is_idle() {
+                leading_words_upper(line)
             } else {
-                None
+                Vec::new()
             };
 
-            let depth = if leading_word.as_deref().is_some_and(should_pre_dedent) {
+            let leading_word = words.first().map(String::as_str);
+            let mut depth = if leading_word.is_some_and(should_pre_dedent) {
                 builder.block_depth().saturating_sub(1)
             } else {
                 builder.block_depth()
             };
+
+            // Pre-dedent additional virtual depths for closing lines.
+            if line.trim_start().starts_with(')') && subquery_paren_depth > 0 {
+                depth = depth.saturating_add(subquery_paren_depth.saturating_sub(1));
+            } else {
+                depth = depth.saturating_add(subquery_paren_depth);
+            }
+
+            if is_end_variant(&words, "LOOP") || is_end_variant(&words, "CASE") {
+                depth = depth.saturating_sub(1);
+            }
+
+            if with_cte_depth > 0 {
+                let starts_main_select =
+                    words.first().is_some_and(|w| w == "SELECT") && with_cte_paren <= 0;
+                if starts_main_select {
+                    depth = depth.saturating_sub(1);
+                } else {
+                    depth = depth.saturating_add(with_cte_depth);
+                }
+            }
+
+            if words.first().is_some_and(|w| w == "END")
+                && !is_end_variant(&words, "IF")
+                && !is_end_variant(&words, "LOOP")
+                && !is_end_variant(&words, "CASE")
+                && (subprogram_begin_depth > 0 || package_body_depth > 0)
+            {
+                depth = depth.saturating_sub(1);
+            }
+
+            depth = depth
+                .saturating_add(subprogram_begin_depth)
+                .saturating_add(package_body_depth);
+
             depths.push(depth);
+
+            // Update additional depth state with a very lightweight token pass.
+            let raw = line;
+            let upper = raw.to_uppercase();
+
+            if upper.trim_start().starts_with("WITH ") {
+                pending_with = true;
+                with_cte_depth = with_cte_depth.max(1);
+                with_cte_paren = 0;
+            }
+
+            let chars: Vec<char> = raw.chars().collect();
+            let mut i = 0usize;
+            while i < chars.len() {
+                let c = chars[i];
+
+                if c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' {
+                    break;
+                }
+
+                if c == '(' {
+                    let mut j = i + 1;
+                    while j < chars.len() && chars[j].is_whitespace() {
+                        j += 1;
+                    }
+                    let mut k = j;
+                    while k < chars.len() && (chars[k].is_ascii_alphanumeric() || chars[k] == '_') {
+                        k += 1;
+                    }
+                    if k > j {
+                        let word: String = chars[j..k].iter().collect();
+                        let word = word.to_uppercase();
+                        if word == "SELECT" {
+                            subquery_paren_depth += 1;
+                        }
+                    }
+                    if with_cte_depth > 0 {
+                        with_cte_paren += 1;
+                    }
+                } else if c == ')' {
+                    if subquery_paren_depth > 0 {
+                        subquery_paren_depth -= 1;
+                    }
+                    if with_cte_depth > 0 {
+                        with_cte_paren -= 1;
+                    }
+                }
+                i += 1;
+            }
+
+            let mut idx = 0usize;
+            while idx < words.len() {
+                let word = words[idx].as_str();
+                let next = words.get(idx + 1).map(String::as_str);
+
+                if word == "PACKAGE" && next == Some("BODY") {
+                    pending_package_body = true;
+                    idx += 1;
+                } else if pending_package_body && matches!(word, "AS" | "IS") {
+                    package_body_depth += 1;
+                    pending_package_body = false;
+                }
+
+                if matches!(word, "PROCEDURE" | "FUNCTION") {
+                    pending_subprogram_begin = true;
+                } else if pending_subprogram_begin && word == "BEGIN" {
+                    subprogram_begin_depth += 1;
+                    pending_subprogram_begin = false;
+                } else if word == "END"
+                    && next != Some("IF")
+                    && next != Some("LOOP")
+                    && next != Some("CASE")
+                {
+                    if subprogram_begin_depth > 0 {
+                        subprogram_begin_depth -= 1;
+                    } else if package_body_depth > 0 {
+                        package_body_depth -= 1;
+                    }
+                }
+
+                idx += 1;
+            }
+
+            if pending_with && words.first().is_some_and(|w| w == "SELECT") && with_cte_paren <= 0 {
+                with_cte_depth = 0;
+                pending_with = false;
+            }
 
             let mut line_with_newline = String::from(line);
             line_with_newline.push('\n');
