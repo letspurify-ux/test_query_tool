@@ -21,7 +21,7 @@ use crate::db::{
 use crate::ui::intellisense::{IntellisenseData, IntellisensePopup};
 use crate::ui::query_history::QueryHistoryDialog;
 use crate::ui::syntax_highlight::{
-    create_style_table, HighlightData, SqlHighlighter, STYLE_DEFAULT,
+    create_style_table, HighlightData, SqlHighlighter, STYLE_COMMENT, STYLE_DEFAULT, STYLE_STRING,
 };
 use crate::ui::theme;
 
@@ -651,6 +651,21 @@ impl SqlEditorWidget {
 
             if needs_full_rehighlight(buf, pos, ins, deleted_text) {
                 edited_range = Some((0, text_len));
+            } else if let Some((start, end)) = edited_range {
+                let inserted_text = inserted_text(buf, pos, ins);
+                if !has_stateful_sql_delimiter(&inserted_text) {
+                    if let Some(inherited_style) = style_before(&style_buffer, start) {
+                        if is_string_or_comment_style(inherited_style) {
+                            let inherited: String = std::iter::repeat(inherited_style)
+                                .take(end.saturating_sub(start))
+                                .collect();
+                            style_buffer.replace(start as i32, end as i32, &inherited);
+                            return;
+                        }
+                    }
+
+                    edited_range = Some(expand_connected_word_range(buf, start, end));
+                }
             }
 
             highlighter.borrow().highlight_buffer_window(
@@ -967,6 +982,52 @@ impl SqlEditorWidget {
     pub fn is_query_running(&self) -> bool {
         *self.query_running.borrow()
     }
+}
+
+fn inserted_text(buf: &TextBuffer, pos: i32, ins: i32) -> String {
+    if ins <= 0 || pos < 0 {
+        return String::new();
+    }
+
+    let insert_end = pos.saturating_add(ins).min(buf.length());
+    buf.text_range(pos, insert_end).unwrap_or_default()
+}
+
+fn style_before(style_buffer: &TextBuffer, start: usize) -> Option<char> {
+    if start == 0 {
+        return None;
+    }
+
+    let idx = start.saturating_sub(1) as i32;
+    style_buffer
+        .text_range(idx, idx + 1)
+        .and_then(|text| text.chars().next())
+}
+
+fn is_string_or_comment_style(style: char) -> bool {
+    style == STYLE_COMMENT || style == STYLE_STRING
+}
+
+
+fn is_identifier_continue_byte_for_expand(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
+}
+
+fn expand_connected_word_range(buf: &TextBuffer, start: usize, end: usize) -> (usize, usize) {
+    let text = buf.text();
+    let bytes = text.as_bytes();
+    let mut expanded_start = start.min(bytes.len());
+    let mut expanded_end = end.min(bytes.len());
+
+    while expanded_start > 0 && is_identifier_continue_byte_for_expand(bytes[expanded_start - 1]) {
+        expanded_start -= 1;
+    }
+
+    while expanded_end < bytes.len() && is_identifier_continue_byte_for_expand(bytes[expanded_end]) {
+        expanded_end += 1;
+    }
+
+    (expanded_start, expanded_end)
 }
 
 fn compute_edited_range(pos: i32, ins: i32, del: i32, text_len: usize) -> Option<(usize, usize)> {

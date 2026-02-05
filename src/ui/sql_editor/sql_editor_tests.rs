@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::syntax_highlight::{STYLE_COMMENT, STYLE_KEYWORD, STYLE_STRING};
 
 use std::fs;
 use std::path::PathBuf;
@@ -337,4 +338,47 @@ fn needs_full_rehighlight_when_edit_creates_stateful_token_with_neighbor_char() 
     buffer.insert(pos, "/");
 
     assert!(needs_full_rehighlight(&buffer, pos, 1, ""));
+}
+
+#[test]
+fn style_before_returns_previous_style_char() {
+    let mut style_buffer = TextBuffer::default();
+    style_buffer.set_text("AABCDE");
+
+    assert_eq!(style_before(&style_buffer, 0), None);
+    assert_eq!(style_before(&style_buffer, 1), Some('A'));
+    assert_eq!(style_before(&style_buffer, 5), Some('D'));
+}
+
+#[test]
+fn expand_connected_word_range_expands_to_identifier_boundaries() {
+    let mut buffer = TextBuffer::default();
+    buffer.set_text("SELECT employee_name FROM dual");
+
+    let start = "SELECT ".len() + "employee".len();
+    let end = start + 1;
+    let expanded = expand_connected_word_range(&buffer, start, end);
+
+    let text = buffer.text();
+    assert_eq!(&text[expanded.0..expanded.1], "employee_name");
+}
+
+#[test]
+fn inserted_text_reads_current_insert_span() {
+    let mut buffer = TextBuffer::default();
+    buffer.set_text("SELECT FROM dual");
+
+    let insert_pos = "SELECT ".len() as i32;
+    buffer.insert(insert_pos, "col ");
+
+    assert_eq!(inserted_text(&buffer, insert_pos, 4), "col ");
+    assert_eq!(inserted_text(&buffer, insert_pos, 0), "");
+}
+
+#[test]
+fn is_string_or_comment_style_matches_only_comment_or_string() {
+    assert!(is_string_or_comment_style(STYLE_COMMENT));
+    assert!(is_string_or_comment_style(STYLE_STRING));
+    assert!(!is_string_or_comment_style(STYLE_DEFAULT));
+    assert!(!is_string_or_comment_style(STYLE_KEYWORD));
 }
