@@ -126,6 +126,39 @@ fn format_sql_preserves_mega_torture_script() {
 }
 
 #[test]
+fn format_sql_preserves_whenever_sqlerror_options() {
+    let input = [
+        "WHENEVER SQLERROR EXIT SQL.SQLCODE",
+        "WHENEVER SQLERROR EXIT FAILURE ROLLBACK",
+        "WHENEVER SQLERROR EXIT SUCCESS",
+        "WHENEVER SQLERROR EXIT WARNING",
+        "WHENEVER SQLERROR EXIT 1",
+        "WHENEVER SQLERROR CONTINUE",
+        "WHENEVER SQLERROR CONTINUE ROLLBACK",
+    ]
+    .join("\n");
+
+    let formatted = SqlEditorWidget::format_sql_basic(&input);
+    let expected_lines = vec![
+        "WHENEVER SQLERROR EXIT SQL.SQLCODE",
+        "WHENEVER SQLERROR EXIT FAILURE ROLLBACK",
+        "WHENEVER SQLERROR EXIT SUCCESS",
+        "WHENEVER SQLERROR EXIT WARNING",
+        "WHENEVER SQLERROR EXIT 1",
+        "WHENEVER SQLERROR CONTINUE",
+        "WHENEVER SQLERROR CONTINUE ROLLBACK",
+    ];
+
+    assert_contains_all(&formatted, &expected_lines);
+
+    let formatted_again = SqlEditorWidget::format_sql_basic(&formatted);
+    assert_eq!(
+        formatted, formatted_again,
+        "Formatting should be idempotent for WHENEVER SQLERROR variants"
+    );
+}
+
+#[test]
 fn format_sql_preserves_oracle_labels() {
     // Test <<loop_label>> preservation
     let input = "<<outer_loop>>\nFOR i IN 1..10 LOOP\n<<inner_loop>>\nFOR j IN 1..5 LOOP\nNULL;\nEND LOOP inner_loop;\nEND LOOP outer_loop;";
