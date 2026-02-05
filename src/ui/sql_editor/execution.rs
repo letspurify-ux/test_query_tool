@@ -459,11 +459,13 @@ impl SqlEditorWidget {
                 Some(path) => format!("SPOOL {}", path),
                 None => "SPOOL OFF".to_string(),
             },
-            ToolCommand::WheneverSqlError { exit } => {
-                if *exit {
-                    "WHENEVER SQLERROR EXIT".to_string()
-                } else {
-                    "WHENEVER SQLERROR CONTINUE".to_string()
+            ToolCommand::WheneverSqlError { exit, action } => {
+                let mode = if *exit { "EXIT" } else { "CONTINUE" };
+                match action.as_deref() {
+                    Some(extra) if !extra.trim().is_empty() => {
+                        format!("WHENEVER SQLERROR {} {}", mode, extra.trim())
+                    }
+                    _ => format!("WHENEVER SQLERROR {}", mode),
                 }
             }
             ToolCommand::Exit => "EXIT".to_string(),
@@ -3653,7 +3655,7 @@ impl SqlEditorWidget {
                                         );
                                     }
                                 },
-                                ToolCommand::WheneverSqlError { exit } => {
+                                ToolCommand::WheneverSqlError { exit, .. } => {
                                     {
                                         let mut guard = match session.lock() {
                                             Ok(guard) => guard,

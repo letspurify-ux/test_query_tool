@@ -1696,10 +1696,17 @@ impl QueryExecutor {
                 is_error: true,
             };
         }
-        let token = rest.split_whitespace().next().unwrap_or("").to_uppercase();
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        let token_raw = parts.next().unwrap_or("");
+        let token = token_raw.to_uppercase();
+        let action = parts
+            .next()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string());
         match token.as_str() {
-            "EXIT" => ToolCommand::WheneverSqlError { exit: true },
-            "CONTINUE" => ToolCommand::WheneverSqlError { exit: false },
+            "EXIT" => ToolCommand::WheneverSqlError { exit: true, action },
+            "CONTINUE" => ToolCommand::WheneverSqlError { exit: false, action },
             _ => ToolCommand::Unsupported {
                 raw: raw.to_string(),
                 message: "WHENEVER SQLERROR supports EXIT or CONTINUE.".to_string(),

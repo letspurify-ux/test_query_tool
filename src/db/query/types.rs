@@ -132,6 +132,7 @@ pub enum ToolCommand {
     },
     WheneverSqlError {
         exit: bool,
+        action: Option<String>,
     },
     Exit,
     Quit,

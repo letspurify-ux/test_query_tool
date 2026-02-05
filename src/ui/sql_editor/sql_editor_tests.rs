@@ -91,6 +91,41 @@ fn format_sql_preserves_script_commands_and_slashes() {
 }
 
 #[test]
+fn format_sql_preserves_mega_torture_script() {
+    let input = load_test_file("mega_torture.txt");
+    let formatted = SqlEditorWidget::format_sql_basic(&input);
+
+    let expected_lines = vec![
+        "PROMPT [0] bind/substitution setup",
+        "WHENEVER SQLERROR EXIT SQL.SQLCODE",
+        "SHOW ERRORS PACKAGE BODY oqt_mega_pkg",
+        "PROMPT [6] trigger (extra nesting surface)",
+        "PROMPT [DONE]",
+    ];
+    let comment_snippets = vec![
+        "q'[ | tokens: END; / ; /* */ -- ]'",
+        "q'[ |trg tokens: END; / ; /* */ -- ]'",
+        "q'[ |q-quote: END; / ; /* */ -- ]'",
+    ];
+
+    assert_contains_all(&formatted, &expected_lines);
+    assert_contains_all(&formatted, &comment_snippets);
+
+    let input_slashes = count_slash_lines(&input);
+    let output_slashes = count_slash_lines(&formatted);
+    assert_eq!(
+        input_slashes, output_slashes,
+        "Slash terminator count differs for mega_torture.txt"
+    );
+
+    let formatted_again = SqlEditorWidget::format_sql_basic(&formatted);
+    assert_eq!(
+        formatted, formatted_again,
+        "Formatting should be idempotent for mega_torture.txt"
+    );
+}
+
+#[test]
 fn format_sql_preserves_oracle_labels() {
     // Test <<loop_label>> preservation
     let input = "<<outer_loop>>\nFOR i IN 1..10 LOOP\n<<inner_loop>>\nFOR j IN 1..5 LOOP\nNULL;\nEND LOOP inner_loop;\nEND LOOP outer_loop;";
