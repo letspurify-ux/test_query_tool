@@ -16,7 +16,7 @@ use crate::db::{
     lock_connection, ConstraintInfo, IndexInfo, ObjectBrowser, ProcedureArgument, SequenceInfo,
     SharedConnection, TableColumnDetail,
 };
-use crate::ui::{sql_editor::SqlEditorWidget, theme};
+use crate::ui::theme;
 
 #[derive(Clone)]
 pub enum SqlAction {
@@ -384,12 +384,6 @@ impl ObjectBrowserWidget {
                         },
                         ObjectActionResult::Ddl(result) => match result {
                             Ok(ddl) => {
-                                let formatted = SqlEditorWidget::format_sql_basic(&ddl);
-                                let ddl = if formatted.trim().is_empty() {
-                                    ddl
-                                } else {
-                                    formatted
-                                };
                                 let cb_opt = sql_callback.borrow_mut().take();
                                 if let Some(mut cb) = cb_opt {
                                     cb(SqlAction::Append(ddl));
