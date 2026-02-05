@@ -295,3 +295,16 @@ fn format_sql_places_newline_after_inline_block_comment() {
         formatted
     );
 }
+
+
+#[test]
+fn format_sql_does_not_merge_end_statement_with_following_if() {
+    let input = "BEGIN\nNULL;\nEND;\nIF 1 = 1 THEN\nNULL;\nEND IF;";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("END;\n\nIF 1 = 1 THEN"),
+        "END; and following IF must remain separate, got: {}",
+        formatted
+    );
+}

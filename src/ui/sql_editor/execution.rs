@@ -545,6 +545,25 @@ impl SqlEditorWidget {
                 SqlToken::Word(w) => Some(w.to_uppercase()),
                 _ => None,
             });
+            let end_qualifier = {
+                let mut qualifier = None;
+                for t in &tokens[idx + 1..] {
+                    match t {
+                        SqlToken::Comment(comment) => {
+                            if comment.contains('\n') {
+                                break;
+                            }
+                        }
+                        SqlToken::Word(w) => {
+                            qualifier = Some(w.to_uppercase());
+                            break;
+                        }
+                        SqlToken::Symbol(sym) if sym == ";" => break,
+                        _ => break,
+                    }
+                }
+                qualifier
+            };
 
             match token {
                 SqlToken::Word(word) => {
@@ -555,7 +574,7 @@ impl SqlEditorWidget {
                         && matches!(next_word_upper.as_deref(), Some("REPLACE"));
                     if upper == "END" {
                         // Check if this is END LOOP, END IF, END CASE, etc.
-                        let qualifier = next_word_upper.as_deref();
+                        let qualifier = end_qualifier.as_deref();
                         let is_qualified_end = matches!(qualifier, Some("LOOP" | "IF" | "CASE"));
 
                         if is_qualified_end {
