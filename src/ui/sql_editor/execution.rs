@@ -1118,7 +1118,52 @@ impl SqlEditorWidget {
             idx += 1;
         }
 
-        out.trim_end().to_string()
+        let formatted = out.trim_end().to_string();
+        Self::apply_parser_depth_indentation(&formatted)
+    }
+
+    fn apply_parser_depth_indentation(formatted: &str) -> String {
+        if formatted.is_empty() || !Self::is_plsql_like_statement(formatted) {
+            return formatted.to_string();
+        }
+
+        let depths = QueryExecutor::line_block_depths(formatted);
+        if depths.len() != formatted.lines().count() {
+            return formatted.to_string();
+        }
+
+        let mut out = String::new();
+        for (idx, (line, depth)) in formatted.lines().zip(depths.iter()).enumerate() {
+            if idx > 0 {
+                out.push('\n');
+            }
+
+            let trimmed = line.trim_start();
+            if trimmed.is_empty()
+                || trimmed.starts_with("--")
+                || trimmed.starts_with("/*")
+                || trimmed == "*/"
+            {
+                out.push_str(trimmed);
+                continue;
+            }
+
+            out.push_str(&" ".repeat(depth * 4));
+            out.push_str(trimmed);
+        }
+
+        out
+    }
+
+    fn is_plsql_like_statement(statement: &str) -> bool {
+        let upper = statement.to_uppercase();
+        upper.contains("BEGIN")
+            || upper.contains("DECLARE")
+            || upper.contains("CREATE OR REPLACE")
+            || upper.contains("CREATE PACKAGE")
+            || upper.contains("CREATE PROCEDURE")
+            || upper.contains("CREATE FUNCTION")
+            || upper.contains("CREATE TRIGGER")
     }
 
     fn format_create_table(statement: &str) -> Option<String> {

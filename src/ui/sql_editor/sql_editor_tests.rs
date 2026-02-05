@@ -442,3 +442,63 @@ fn is_string_or_comment_style_matches_only_comment_or_string() {
     assert!(!is_string_or_comment_style(STYLE_DEFAULT));
     assert!(!is_string_or_comment_style(STYLE_KEYWORD));
 }
+
+#[test]
+fn format_sql_uses_parser_depth_for_plsql_blocks() {
+    let input = r#"BEGIN
+IF 1 = 1 THEN
+BEGIN
+NULL;
+END;
+END IF;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "BEGIN;",
+        "    IF 1 = 1 THEN",
+        "        BEGIN",
+        "            NULL;",
+        "        END;",
+        "    END IF;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_pre_dedents_else_elsif_exception_lines() {
+    let input = r#"BEGIN
+IF v_flag = 'Y' THEN
+NULL;
+ELSIF v_flag = 'N' THEN
+NULL;
+ELSE
+NULL;
+END IF;
+EXCEPTION
+WHEN OTHERS THEN
+NULL;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "BEGIN;",
+        "    IF v_flag = 'Y' THEN",
+        "    NULL;",
+        "    ELSIF v_flag = 'N' THEN",
+        "    NULL;",
+        "    ELSE",
+        "    NULL;",
+        "    END IF;",
+        "EXCEPTION",
+        "WHEN OTHERS THEN",
+        "NULL;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
