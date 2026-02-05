@@ -159,6 +159,23 @@ fn format_sql_preserves_whenever_sqlerror_options() {
 }
 
 #[test]
+fn format_sql_breaks_minified_package_body_members() {
+    let input = "CREATE OR REPLACE PACKAGE BODY pkg AS PROCEDURE p IS BEGIN NULL; END; FUNCTION f RETURN NUMBER IS BEGIN RETURN 1; END; END pkg;";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("PACKAGE BODY pkg AS\n    PROCEDURE p IS"),
+        "Package body should break before first procedure, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("END;\n\n    FUNCTION f RETURN NUMBER IS"),
+        "Package body members should be separated by blank line, got: {}",
+        formatted
+    );
+}
+
+#[test]
 fn format_sql_preserves_oracle_labels() {
     // Test <<loop_label>> preservation
     let input = "<<outer_loop>>\nFOR i IN 1..10 LOOP\n<<inner_loop>>\nFOR j IN 1..5 LOOP\nNULL;\nEND LOOP inner_loop;\nEND LOOP outer_loop;";

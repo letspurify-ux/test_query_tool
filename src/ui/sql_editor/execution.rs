@@ -811,6 +811,20 @@ impl SqlEditorWidget {
                     } else if matches!(upper.as_str(), "PROCEDURE" | "FUNCTION")
                         && block_stack.iter().any(|s| s == "PACKAGE_BODY")
                     {
+                        if !at_line_start {
+                            newline_with(
+                                &mut out,
+                                base_indent(
+                                    indent_level,
+                                    in_open_cursor_sql,
+                                    open_cursor_sql_indent,
+                                ),
+                                0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        }
                         routine_decl_pending = true;
                     } else if upper == "ELSE" || upper == "ELSIF" {
                         // ELSE/ELSIF in IF block: same level as IF
