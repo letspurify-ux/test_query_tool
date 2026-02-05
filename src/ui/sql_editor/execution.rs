@@ -1238,7 +1238,9 @@ impl SqlEditorWidget {
                             }
                             pending_package_member_separator = false;
                             routine_decl_pending = false;
-                            if indent_level == 0 {
+                            let should_reset_paren_tracking =
+                                indent_level == 0 || (!in_plsql_block && block_stack.is_empty());
+                            if should_reset_paren_tracking {
                                 // Recover newline/comma wrapping behavior for the next top-level section
                                 // even if we encountered an unmatched parenthesis earlier in the statement.
                                 suppress_comma_break_depth = 0;
