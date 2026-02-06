@@ -183,6 +183,7 @@ impl SqlEditorWidget {
         timeout_input.set_color(theme::input_bg());
         timeout_input.set_text_color(theme::text_primary());
         timeout_input.set_tooltip("Call timeout in seconds (empty = no timeout)");
+        timeout_input.set_value("60");
 
         button_pack.end();
         group.fixed(&button_pack, 34);
@@ -197,8 +198,13 @@ impl SqlEditorWidget {
         editor.set_text_font(Font::Courier);
         editor.set_text_size(14);
         editor.set_cursor_color(theme::text_primary());
-        editor.wrap_mode(WrapMode::AtBounds, 0);
+        editor.wrap_mode(WrapMode::None, 0);
         editor.super_handle_first(false);
+        editor.set_linenumber_width(48);
+        editor.set_linenumber_fgcolor(theme::text_muted());
+        editor.set_linenumber_bgcolor(theme::panel_bg());
+        editor.set_linenumber_font(Font::Courier);
+        editor.set_linenumber_size(12);
 
         // Windows 11 selection color
         editor.set_selection_color(theme::selection_soft());
@@ -751,8 +757,8 @@ impl SqlEditorWidget {
 
         let mut dialog = Window::default()
             .with_size(800, 500)
-            .with_label("Explain Plan")
-            .center_screen();
+            .with_label("Explain Plan");
+        crate::ui::center_on_main(&mut dialog);
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
         dialog.begin();
