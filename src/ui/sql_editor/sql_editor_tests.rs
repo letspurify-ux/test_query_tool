@@ -848,6 +848,19 @@ fn format_sql_resets_paren_comma_suppression_after_top_level_semicolon() {
 }
 
 #[test]
+fn format_sql_recovers_when_slash_appears_in_comment() {
+    let input = "SELECT 1 FROM dual;
+-- /
+SELECT a, b FROM dual;";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("SELECT\n    a,\n    b\nFROM DUAL;"),
+        "Formatter should recover top-level statement splitting after comment slash, got: {}",
+        formatted
+    );
+}
+#[test]
 fn format_sql_comment_parenthesis_does_not_affect_comma_newline() {
     let input = "SELECT a /* (comment) */, b FROM dual";
     let formatted = SqlEditorWidget::format_sql_basic(input);

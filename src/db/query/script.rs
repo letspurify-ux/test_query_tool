@@ -591,6 +591,16 @@ impl StatementBuilder {
         self.state.flush_token();
         self.state.resolve_pending_end_on_eof();
         self.state.reset_create_state();
+        self.state.in_single_quote = false;
+        self.state.in_double_quote = false;
+        self.state.in_line_comment = false;
+        self.state.in_block_comment = false;
+        self.state.in_q_quote = false;
+        self.state.q_quote_end = None;
+        self.state.pending_end = false;
+        self.state.token.clear();
+        self.state.block_depth = 0;
+        self.state.case_depth_stack.clear();
         let trimmed = self.current.trim();
         if !trimmed.is_empty() {
             self.statements.push(trimmed.to_string());
@@ -660,7 +670,8 @@ impl QueryExecutor {
 
             if pending_subquery_paren > 0 && !is_comment_or_blank {
                 if words.first().is_some_and(|w| w == "SELECT") {
-                    subquery_paren_depth = subquery_paren_depth.saturating_add(pending_subquery_paren);
+                    subquery_paren_depth =
+                        subquery_paren_depth.saturating_add(pending_subquery_paren);
                 }
                 pending_subquery_paren = 0;
             }
@@ -673,8 +684,8 @@ impl QueryExecutor {
                 case_branch_stack.truncate(open_cases);
             }
             let innermost_case_depth = builder.state.case_depth_stack.last().copied();
-            let at_case_header_level = innermost_case_depth
-                .is_some_and(|depth| depth + 1 == builder.block_depth());
+            let at_case_header_level =
+                innermost_case_depth.is_some_and(|depth| depth + 1 == builder.block_depth());
             let exception_end_line = exception_depth_stack
                 .last()
                 .is_some_and(|depth| *depth == builder.block_depth())
@@ -1051,7 +1062,7 @@ impl QueryExecutor {
                 }
             }
 
-            if builder.is_idle() && trimmed == "/" {
+            if trimmed == "/" && builder.block_depth() == 0 {
                 if !builder.current_is_empty() {
                     builder.force_terminate();
                     for stmt in builder.take_statements() {
@@ -1175,7 +1186,7 @@ impl QueryExecutor {
                 }
             }
 
-            if builder.is_idle() && trimmed == "/" {
+            if trimmed == "/" && builder.block_depth() == 0 {
                 if !builder.current_is_empty() {
                     builder.force_terminate();
                     for stmt in builder.take_statements() {
@@ -1706,7 +1717,10 @@ impl QueryExecutor {
             .map(|value| value.to_string());
         match token.as_str() {
             "EXIT" => ToolCommand::WheneverSqlError { exit: true, action },
-            "CONTINUE" => ToolCommand::WheneverSqlError { exit: false, action },
+            "CONTINUE" => ToolCommand::WheneverSqlError {
+                exit: false,
+                action,
+            },
             _ => ToolCommand::Unsupported {
                 raw: raw.to_string(),
                 message: "WHENEVER SQLERROR supports EXIT or CONTINUE.".to_string(),
