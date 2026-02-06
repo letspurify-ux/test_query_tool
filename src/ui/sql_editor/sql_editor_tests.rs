@@ -869,6 +869,31 @@ fn format_sql_package_body_with_nested_case_keeps_block_newlines() {
 }
 
 #[test]
+fn format_sql_package_body_case_inside_parentheses_keeps_newlines() {
+    let input = "CREATE OR REPLACE PACKAGE BODY pkg_case_paren AS PROCEDURE run_demo IS v_val NUMBER; BEGIN v_val := fn_calc((CASE WHEN v_mode = 1 THEN CASE WHEN v_flag = 'Y' THEN 100 ELSE 200 END ELSE 0 END)); END run_demo; END pkg_case_paren;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains(
+            "v_val := fn_calc ((
+                CASE
+                    WHEN v_mode = 1 THEN CASE"
+        ),
+        "CASE expression inside parentheses should still expand to multiline layout, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains(
+            "WHEN v_flag = 'Y' THEN 100
+                        ELSE 200
+                    END"
+        ),
+        "Nested CASE branches inside parenthesis should stay on separate lines, got: {}",
+        formatted
+    );
+}
+#[test]
 fn format_sql_declare_begin_pre_dedent() {
     let input = r#"DECLARE
 v_old_sal NUMBER;
