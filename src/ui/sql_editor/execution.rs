@@ -571,7 +571,6 @@ impl SqlEditorWidget {
         let mut open_cursor_sql_indent = 0usize;
         let mut case_branch_started: Vec<bool> = Vec::new();
         let mut between_pending = false;
-        let mut last_line_is_comment = false;
         let mut select_list_anchor: Option<usize> = None;
         let mut select_list_indent = 0usize;
         let mut select_list_multiline_forced = false;
@@ -794,15 +793,6 @@ impl SqlEditorWidget {
                             && block_stack.last().is_some_and(|s| s == "CASE")
                             && case_branch_started.last().is_some()
                         {
-                            let started = case_branch_started.last().copied().unwrap_or(false);
-                            if started && !last_line_is_comment {
-                                if !out.ends_with('\n') {
-                                    out.push('\n');
-                                }
-                                if !out.ends_with("\n\n") {
-                                    out.push('\n');
-                                }
-                            }
                             if let Some(last) = case_branch_started.last_mut() {
                                 *last = true;
                             }
@@ -866,15 +856,6 @@ impl SqlEditorWidget {
                             && case_branch_started.last().is_some()
                             && !in_if_block
                         {
-                            let started = case_branch_started.last().copied().unwrap_or(false);
-                            if started && !last_line_is_comment {
-                                if !out.ends_with('\n') {
-                                    out.push('\n');
-                                }
-                                if !out.ends_with("\n\n") {
-                                    out.push('\n');
-                                }
-                            }
                             if let Some(last) = case_branch_started.last_mut() {
                                 *last = true;
                             }
@@ -1111,7 +1092,6 @@ impl SqlEditorWidget {
                     }
                     needs_space = true;
                     if started_line {
-                        last_line_is_comment = false;
                     }
                     if upper == "SELECT" {
                         select_list_anchor = Some(out.len());
@@ -1241,7 +1221,6 @@ impl SqlEditorWidget {
                         at_line_start = true;
                     }
                     if started_line {
-                        last_line_is_comment = false;
                     }
                 }
                 SqlToken::Comment(comment) => {
@@ -1306,7 +1285,6 @@ impl SqlEditorWidget {
                         at_line_start = true;
                         needs_space = false;
                         if comment_starts_line {
-                            last_line_is_comment = true;
                         }
                         if in_select_list || column_list_stack.last().copied().unwrap_or(false) {
                             line_indent = base_indent(
@@ -1331,9 +1309,7 @@ impl SqlEditorWidget {
                             &mut needs_space,
                             &mut line_indent,
                         );
-                        last_line_is_comment = false;
                     } else if comment_starts_line {
-                        last_line_is_comment = true;
                     }
                 }
                 SqlToken::Symbol(sym) => {
@@ -1521,7 +1497,6 @@ impl SqlEditorWidget {
                         }
                     }
                     if started_line {
-                        last_line_is_comment = false;
                     }
                 }
             }

@@ -449,6 +449,25 @@ fn format_sql_indents_case_expression_inside_select_clause() {
 }
 
 #[test]
+fn format_sql_case_when_does_not_insert_extra_blank_lines() {
+    let input = "SELECT CASE WHEN a = 1 THEN 'A' WHEN a = 2 THEN 'B' ELSE 'C' END AS flag FROM dual";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    let expected = [
+        "SELECT",
+        "    CASE",
+        "        WHEN a = 1 THEN 'A'",
+        "        WHEN a = 2 THEN 'B'",
+        "        ELSE 'C'",
+        "    END AS flag",
+        "FROM dual;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn format_sql_open_cursor_for_select_indentation() {
     let input = r#"BEGIN
 OPEN p_rc
