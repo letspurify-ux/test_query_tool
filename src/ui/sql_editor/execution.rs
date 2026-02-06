@@ -597,25 +597,26 @@ impl SqlEditorWidget {
             }
         };
 
-        let force_select_list_newline = |out: &mut String,
-                                         select_list_anchor: &Option<usize>,
-                                         select_list_indent: usize,
-                                         select_list_multiline_forced: &mut bool| {
-            if *select_list_multiline_forced {
-                return;
-            }
-            let Some(pos) = *select_list_anchor else {
-                return;
+        let force_select_list_newline =
+            |out: &mut String,
+             select_list_anchor: &Option<usize>,
+             select_list_indent: usize,
+             select_list_multiline_forced: &mut bool| {
+                if *select_list_multiline_forced {
+                    return;
+                }
+                let Some(pos) = *select_list_anchor else {
+                    return;
+                };
+                if pos >= out.len() {
+                    return;
+                }
+                if out.as_bytes().get(pos) == Some(&b' ') {
+                    let indent = " ".repeat(select_list_indent * 4);
+                    out.replace_range(pos..pos + 1, &format!("\n{indent}"));
+                    *select_list_multiline_forced = true;
+                }
             };
-            if pos >= out.len() {
-                return;
-            }
-            if out.as_bytes().get(pos) == Some(&b' ') {
-                let indent = " ".repeat(select_list_indent * 4);
-                out.replace_range(pos..pos + 1, &format!("\n{indent}"));
-                *select_list_multiline_forced = true;
-            }
-        };
 
         let mut idx = 0;
         while idx < tokens.len() {
@@ -1074,11 +1075,9 @@ impl SqlEditorWidget {
                     }
                     if upper == "SELECT" {
                         select_list_anchor = Some(out.len());
-                        select_list_indent = base_indent(
-                            indent_level,
-                            in_open_cursor_sql,
-                            open_cursor_sql_indent,
-                        ) + 1;
+                        select_list_indent =
+                            base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent)
+                                + 1;
                         select_list_multiline_forced = false;
                         if force_select_list_newline_next {
                             newline_with(
@@ -1220,9 +1219,8 @@ impl SqlEditorWidget {
                         Some(SqlToken::Word(_) | SqlToken::String(_))
                     );
                     let in_select_list = matches!(current_clause.as_deref(), Some("SELECT"));
-                    let top_level_select_list = in_select_list
-                        && suppress_comma_break_depth == 0
-                        && paren_stack.is_empty();
+                    let top_level_select_list =
+                        in_select_list && suppress_comma_break_depth == 0 && paren_stack.is_empty();
                     if top_level_select_list && !has_leading_newline {
                         force_select_list_newline(
                             &mut out,
@@ -1501,9 +1499,13 @@ impl SqlEditorWidget {
         }
 
         let depths = QueryExecutor::line_block_depths(formatted);
-        if depths.len() != formatted.lines().count() {
+        let line_count = formatted.lines().count();
+        if depths.len() != line_count {
             return formatted.to_string();
         }
+
+        let multiline_string_continuation_lines =
+            Self::multiline_string_continuation_lines(formatted, line_count);
 
         let mut out = String::new();
         let mut into_list_active = false;
@@ -1511,6 +1513,15 @@ impl SqlEditorWidget {
         for (idx, (line, depth)) in formatted.lines().zip(depths.iter()).enumerate() {
             if idx > 0 {
                 out.push('\n');
+            }
+
+            if multiline_string_continuation_lines
+                .get(idx)
+                .copied()
+                .unwrap_or(false)
+            {
+                out.push_str(line);
+                continue;
             }
 
             let trimmed = line.trim_start();
@@ -1604,6 +1615,176 @@ impl SqlEditorWidget {
         }
 
         out
+    }
+
+    fn multiline_string_continuation_lines(formatted: &str, line_count: usize) -> Vec<bool> {
+        let mut continuation_lines = vec![false; line_count];
+        if line_count == 0 {
+            return continuation_lines;
+        }
+
+        let chars: Vec<char> = formatted.chars().collect();
+        let mut i = 0usize;
+        let mut line = 0usize;
+
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut in_line_comment = false;
+        let mut in_block_comment = false;
+        let mut in_q_quote = false;
+        let mut q_quote_end: Option<char> = None;
+
+        while i < chars.len() {
+            let c = chars[i];
+            let next = chars.get(i + 1).copied();
+
+            if in_line_comment {
+                if c == '\n' {
+                    in_line_comment = false;
+                    line += 1;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_block_comment {
+                if c == '*' && next == Some('/') {
+                    in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+                if c == '\n' {
+                    line += 1;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_q_quote {
+                if Some(c) == q_quote_end && next == Some('\'') {
+                    in_q_quote = false;
+                    q_quote_end = None;
+                    i += 2;
+                    continue;
+                }
+                if c == '\n' {
+                    if line + 1 < line_count {
+                        continuation_lines[line + 1] = true;
+                    }
+                    line += 1;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_single_quote {
+                if c == '\'' {
+                    if next == Some('\'') {
+                        i += 2;
+                        continue;
+                    }
+                    in_single_quote = false;
+                    i += 1;
+                    continue;
+                }
+                if c == '\n' {
+                    if line + 1 < line_count {
+                        continuation_lines[line + 1] = true;
+                    }
+                    line += 1;
+                }
+                i += 1;
+                continue;
+            }
+
+            if in_double_quote {
+                if c == '"' {
+                    if next == Some('"') {
+                        i += 2;
+                        continue;
+                    }
+                    in_double_quote = false;
+                    i += 1;
+                    continue;
+                }
+                if c == '\n' {
+                    if line + 1 < line_count {
+                        continuation_lines[line + 1] = true;
+                    }
+                    line += 1;
+                }
+                i += 1;
+                continue;
+            }
+
+            if c == '\n' {
+                line += 1;
+                i += 1;
+                continue;
+            }
+
+            if c == '-' && next == Some('-') {
+                in_line_comment = true;
+                i += 2;
+                continue;
+            }
+
+            if c == '/' && next == Some('*') {
+                in_block_comment = true;
+                i += 2;
+                continue;
+            }
+
+            if (c == 'n' || c == 'N')
+                && matches!(next, Some('q') | Some('Q'))
+                && chars.get(i + 2) == Some(&'\'')
+                && chars.get(i + 3).is_some()
+            {
+                let delimiter = chars[i + 3];
+                let closing = match delimiter {
+                    '[' => ']',
+                    '{' => '}',
+                    '(' => ')',
+                    '<' => '>',
+                    _ => delimiter,
+                };
+                in_q_quote = true;
+                q_quote_end = Some(closing);
+                i += 4;
+                continue;
+            }
+
+            if (c == 'q' || c == 'Q') && next == Some('\'') && chars.get(i + 2).is_some() {
+                let delimiter = chars[i + 2];
+                let closing = match delimiter {
+                    '[' => ']',
+                    '{' => '}',
+                    '(' => ')',
+                    '<' => '>',
+                    _ => delimiter,
+                };
+                in_q_quote = true;
+                q_quote_end = Some(closing);
+                i += 3;
+                continue;
+            }
+
+            if c == '\'' {
+                in_single_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if c == '"' {
+                in_double_quote = true;
+                i += 1;
+                continue;
+            }
+
+            i += 1;
+        }
+
+        continuation_lines
     }
 
     fn is_plsql_like_statement(statement: &str) -> bool {
@@ -6144,8 +6325,19 @@ mod formatter_regression_tests {
         let formatted = SqlEditorWidget::format_sql_basic(sql);
 
         assert!(formatted.contains("/* comment with (, ), and , */"));
-        assert!(
-            formatted.contains("SELECT\n    a,\n    /* comment with (, ), and , */\n    b\nFROM DUAL;")
-        );
+        assert!(formatted
+            .contains("SELECT\n    a,\n    /* comment with (, ), and , */\n    b\nFROM DUAL;"));
+    }
+
+    #[test]
+    fn keeps_multiline_string_continuation_lines_without_depth_reindent() {
+        let sql = "BEGIN
+DBMS_OUTPUT.PUT_LINE('first line
+second line
+third line');
+END;";
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+
+        assert!(formatted.contains("DBMS_OUTPUT.PUT_LINE('first line\nsecond line\nthird line');"));
     }
 }
