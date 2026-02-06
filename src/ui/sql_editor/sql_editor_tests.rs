@@ -809,6 +809,38 @@ ORDER BY grp;"#;
 }
 
 #[test]
+fn format_sql_nested_case_expression_in_select_keeps_newlines() {
+    let input = r#"SELECT
+CASE
+WHEN a = 1 THEN CASE WHEN b = 2 THEN 'X' ELSE 'Y' END
+ELSE CASE WHEN c = 3 THEN 'Z' ELSE 'W' END
+END AS result_value,
+col2
+FROM dual;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "SELECT",
+        "    CASE",
+        "        WHEN a = 1 THEN CASE",
+        "            WHEN b = 2 THEN 'X'",
+        "            ELSE 'Y'",
+        "        END",
+        "",
+        "        ELSE CASE",
+        "            WHEN c = 3 THEN 'Z'",
+        "            ELSE 'W'",
+        "        END",
+        "    END AS result_value,",
+        "    col2",
+        "FROM dual;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn format_sql_declare_begin_pre_dedent() {
     let input = r#"DECLARE
 v_old_sal NUMBER;
