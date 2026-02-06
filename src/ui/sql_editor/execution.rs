@@ -284,10 +284,13 @@ impl SqlEditorWidget {
             }
 
             if idx + 1 < items.len() {
-                if matches!(items[idx + 1], FormatItem::Slash) {
+                let next_item = &items[idx + 1];
+                if matches!(next_item, FormatItem::Slash) {
                     formatted.push('\n');
                 } else if matches!(item, FormatItem::Slash) {
                     formatted.push_str("\n\n");
+                } else if Self::keeps_tight_spacing(item, next_item) {
+                    formatted.push('\n');
                 } else {
                     formatted.push_str("\n\n");
                 }
@@ -295,6 +298,19 @@ impl SqlEditorWidget {
         }
 
         formatted
+    }
+
+    fn keeps_tight_spacing(current: &FormatItem, next: &FormatItem) -> bool {
+        match (current, next) {
+            (FormatItem::Statement(left), FormatItem::Statement(right)) => {
+                left.trim_start().starts_with("--") && right.trim_start().starts_with("--")
+            }
+            (
+                FormatItem::ToolCommand(ToolCommand::Prompt { .. }),
+                FormatItem::ToolCommand(ToolCommand::Prompt { .. }),
+            ) => true,
+            _ => false,
+        }
     }
 
     fn statement_has_code(statement: &str) -> bool {

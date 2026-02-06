@@ -700,6 +700,26 @@ END;"#;
 }
 
 #[test]
+fn format_sql_does_not_insert_blank_line_between_line_comments() {
+    let input = "-- first\n-- second\nSELECT 1 FROM dual;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = ["-- first", "-- second", "", "SELECT 1", "FROM dual;"].join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_does_not_insert_blank_line_between_prompt_commands() {
+    let input = "PROMPT one\nPROMPT two\nSELECT 1 FROM dual;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = ["PROMPT one", "PROMPT two", "", "SELECT 1", "FROM dual;"].join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn format_sql_indents_line_comments_to_depth() {
     let input = r#"BEGIN
 IF 1 = 1 THEN
