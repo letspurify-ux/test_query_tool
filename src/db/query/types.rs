@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::db::session::BindDataType;
+use crate::db::session::{BindDataType, ComputeMode};
 
 #[derive(Debug, Clone)]
 pub struct ColumnInfo {
@@ -97,6 +97,19 @@ pub enum ToolCommand {
         column_name: String,
         variable_name: String,
     },
+    BreakOn {
+        column_name: String,
+    },
+    BreakOff,
+    ClearBreaks,
+    ClearComputes,
+    ClearBreaksComputes,
+    Compute {
+        mode: ComputeMode,
+        of_column: Option<String>,
+        on_column: Option<String>,
+    },
+    ComputeOff,
     SetErrorContinue {
         enabled: bool,
     },

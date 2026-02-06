@@ -1173,9 +1173,12 @@ impl MainWindow {
                             } else {
                                 "Auto-commit disabled"
                             };
+                            let connection = {
+                                let s = state_for_menu.borrow();
+                                s.connection.clone()
+                            };
                             {
-                                let s = state_for_menu.borrow_mut();
-                                let mut connection = lock_connection(&s.connection);
+                                let mut connection = lock_connection(&connection);
                                 connection.set_auto_commit(enabled);
                             }
                             let mut s = state_for_menu.borrow_mut();

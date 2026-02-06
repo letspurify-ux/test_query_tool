@@ -711,10 +711,13 @@ fn is_identifier_continue_byte(byte: u8) -> bool {
 }
 
 fn is_prompt_keyword(bytes: &[u8], start: usize) -> bool {
-    if bytes.len() < start + 6 {
+    let Some(end) = start.checked_add(6) else {
+        return false;
+    };
+    if bytes.len() < end {
         return false;
     }
-    if !bytes[start..start + 6]
+    if !bytes[start..end]
         .iter()
         .zip(b"PROMPT")
         .all(|(b, c)| b.to_ascii_uppercase() == *c)
@@ -722,16 +725,19 @@ fn is_prompt_keyword(bytes: &[u8], start: usize) -> bool {
         return false;
     }
     matches!(
-        bytes.get(start + 6),
+        bytes.get(end),
         None | Some(b' ') | Some(b'\t') | Some(b'\n')
     )
 }
 
 fn is_connect_keyword(bytes: &[u8], start: usize) -> bool {
-    if bytes.len() < start + 7 {
+    let Some(end) = start.checked_add(7) else {
+        return false;
+    };
+    if bytes.len() < end {
         return false;
     }
-    if !bytes[start..start + 7]
+    if !bytes[start..end]
         .iter()
         .zip(b"CONNECT")
         .all(|(b, c)| b.to_ascii_uppercase() == *c)
@@ -739,7 +745,7 @@ fn is_connect_keyword(bytes: &[u8], start: usize) -> bool {
         return false;
     }
     matches!(
-        bytes.get(start + 7),
+        bytes.get(end),
         None | Some(b' ') | Some(b'\t') | Some(b'\n')
     )
 }

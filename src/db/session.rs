@@ -43,6 +43,19 @@ pub struct CompiledObject {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComputeMode {
+    Sum,
+    Count,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputeConfig {
+    pub mode: ComputeMode,
+    pub of_column: Option<String>,
+    pub on_column: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionState {
     pub binds: HashMap<String, BindVar>,
@@ -64,6 +77,8 @@ pub struct SessionState {
     pub trimspool_enabled: bool,
     pub colsep: String,
     pub null_text: String,
+    pub break_column: Option<String>,
+    pub compute: Option<ComputeConfig>,
     pub spool_path: Option<PathBuf>,
     pub spool_truncate: bool,
 }
@@ -99,6 +114,8 @@ impl Default for SessionState {
             trimspool_enabled: false,
             colsep: " | ".to_string(),
             null_text: "NULL".to_string(),
+            break_column: None,
+            compute: None,
             spool_path: None,
             spool_truncate: false,
         }

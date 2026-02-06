@@ -1,4 +1,4 @@
-use crate::db::session::BindDataType;
+use crate::db::session::{BindDataType, ComputeMode};
 
 use super::{FormatItem, QueryExecutor, ScriptItem, ToolCommand};
 
@@ -1346,6 +1346,18 @@ impl QueryExecutor {
             return Some(Self::parse_column_new_value_command(trimmed));
         }
 
+        if upper.starts_with("CLEAR") {
+            return Some(Self::parse_clear_command(trimmed));
+        }
+
+        if upper.starts_with("BREAK") {
+            return Some(Self::parse_break_command(trimmed));
+        }
+
+        if upper.starts_with("COMPUTE") {
+            return Some(Self::parse_compute_command(trimmed));
+        }
+
         if upper.starts_with("SPOOL") {
             return Some(Self::parse_spool_command(trimmed));
         }
@@ -1762,6 +1774,142 @@ impl QueryExecutor {
         }
     }
 
+    fn parse_break_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 2 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "BREAK requires ON <column> or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        if tokens[1].eq_ignore_ascii_case("OFF") {
+            return ToolCommand::BreakOff;
+        }
+
+        if tokens.len() == 3 && tokens[1].eq_ignore_ascii_case("ON") {
+            let column_name = tokens[2].trim();
+            if column_name.is_empty() {
+                return ToolCommand::Unsupported {
+                    raw: raw.to_string(),
+                    message: "BREAK ON requires a column name.".to_string(),
+                    is_error: true,
+                };
+            }
+            return ToolCommand::BreakOn {
+                column_name: column_name.to_string(),
+            };
+        }
+
+        ToolCommand::Unsupported {
+            raw: raw.to_string(),
+            message: "BREAK supports only: BREAK ON <column> or BREAK OFF.".to_string(),
+            is_error: true,
+        }
+    }
+
+    fn parse_clear_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 2 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message:
+                    "CLEAR supports: CLEAR BREAKS, CLEAR COMPUTES, CLEAR BREAKS CLEAR COMPUTES."
+                        .to_string(),
+                is_error: true,
+            };
+        }
+
+        if tokens.len() == 2 && tokens[1].eq_ignore_ascii_case("BREAKS") {
+            return ToolCommand::ClearBreaks;
+        }
+
+        if tokens.len() == 2 && tokens[1].eq_ignore_ascii_case("COMPUTES") {
+            return ToolCommand::ClearComputes;
+        }
+
+        let is_breaks_computes = tokens.len() == 4
+            && tokens[1].eq_ignore_ascii_case("BREAKS")
+            && tokens[2].eq_ignore_ascii_case("CLEAR")
+            && tokens[3].eq_ignore_ascii_case("COMPUTES");
+        let is_computes_breaks = tokens.len() == 4
+            && tokens[1].eq_ignore_ascii_case("COMPUTES")
+            && tokens[2].eq_ignore_ascii_case("CLEAR")
+            && tokens[3].eq_ignore_ascii_case("BREAKS");
+
+        if is_breaks_computes || is_computes_breaks {
+            return ToolCommand::ClearBreaksComputes;
+        }
+
+        ToolCommand::Unsupported {
+            raw: raw.to_string(),
+            message:
+                "CLEAR supports: CLEAR BREAKS, CLEAR COMPUTES, CLEAR BREAKS CLEAR COMPUTES."
+                    .to_string(),
+            is_error: true,
+        }
+    }
+
+    fn parse_compute_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 2 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "COMPUTE requires SUM, COUNT, or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        match tokens[1].to_uppercase().as_str() {
+            "SUM" | "COUNT" => {
+                let mode = if tokens[1].eq_ignore_ascii_case("SUM") {
+                    ComputeMode::Sum
+                } else {
+                    ComputeMode::Count
+                };
+                if tokens.len() == 2 {
+                    return ToolCommand::Compute {
+                        mode,
+                        of_column: None,
+                        on_column: None,
+                    };
+                }
+                if tokens.len() == 6
+                    && tokens[2].eq_ignore_ascii_case("OF")
+                    && tokens[4].eq_ignore_ascii_case("ON")
+                {
+                    let of_column = tokens[3].trim();
+                    let on_column = tokens[5].trim();
+                    if of_column.is_empty() || on_column.is_empty() {
+                        return ToolCommand::Unsupported {
+                            raw: raw.to_string(),
+                            message: "COMPUTE <SUM|COUNT> OF <column> ON <group_column>."
+                                .to_string(),
+                            is_error: true,
+                        };
+                    }
+                    return ToolCommand::Compute {
+                        mode,
+                        of_column: Some(of_column.to_string()),
+                        on_column: Some(on_column.to_string()),
+                    };
+                }
+                ToolCommand::Unsupported {
+                    raw: raw.to_string(),
+                    message: "COMPUTE supports: COMPUTE SUM, COMPUTE COUNT, COMPUTE OFF, COMPUTE <SUM|COUNT> OF <column> ON <group_column>.".to_string(),
+                    is_error: true,
+                }
+            }
+            "OFF" => ToolCommand::ComputeOff,
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "COMPUTE requires SUM, COUNT, or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
     fn parse_spool_command(raw: &str) -> ToolCommand {
         let rest = raw[5..].trim();
         if rest.is_empty() {
@@ -2022,19 +2170,20 @@ impl QueryExecutor {
             _ => {
                 // Accept a single character, optionally wrapped in single quotes: '^' or ^
                 let raw_arg = tokens[2];
-                let ch = if raw_arg.starts_with('\'') && raw_arg.ends_with('\'') {
-                    let inner: Vec<char> = raw_arg[1..raw_arg.len() - 1].chars().collect();
-                    if inner.len() == 1 {
-                        Some(inner[0])
-                    } else {
-                        None
+                let ch = if let Some(inner) = raw_arg
+                    .strip_prefix('\'')
+                    .and_then(|value| value.strip_suffix('\''))
+                {
+                    let mut chars = inner.chars();
+                    match (chars.next(), chars.next()) {
+                        (Some(ch), None) => Some(ch),
+                        _ => None,
                     }
                 } else {
-                    let chars: Vec<char> = raw_arg.chars().collect();
-                    if chars.len() == 1 {
-                        Some(chars[0])
-                    } else {
-                        None
+                    let mut chars = raw_arg.chars();
+                    match (chars.next(), chars.next()) {
+                        (Some(ch), None) => Some(ch),
+                        _ => None,
                     }
                 };
 

@@ -27,6 +27,20 @@ use crate::ui::SQL_KEYWORDS;
 
 use super::*;
 
+#[derive(Default)]
+struct SelectTransformState {
+    break_index: Option<usize>,
+    previous_break_value: Option<String>,
+    compute_of_index: Option<usize>,
+    compute_on_index: Option<usize>,
+    compute_group_value: Option<String>,
+    compute_count: usize,
+    compute_sum: f64,
+    compute_sum_seen: bool,
+    compute_sums: Vec<f64>,
+    compute_seen_numeric: Vec<bool>,
+}
+
 impl SqlEditorWidget {
     pub fn execute_sql_text(&self, sql: &str) {
         self.execute_sql(sql, false);
@@ -260,7 +274,11 @@ impl SqlEditorWidget {
         }
 
         let mut force_select_list_newline_next = false;
-        for (idx, item) in items.iter().enumerate() {
+        let mut idx = 0usize;
+        while idx < items.len() {
+            let item = &items[idx];
+            let consumed = 1usize;
+
             match item {
                 FormatItem::Statement(statement) => {
                     let formatted_statement =
@@ -283,8 +301,8 @@ impl SqlEditorWidget {
                 }
             }
 
-            if idx + 1 < items.len() {
-                let next_item = &items[idx + 1];
+            if idx + consumed < items.len() {
+                let next_item = &items[idx + consumed];
                 if matches!(next_item, FormatItem::Slash) {
                     formatted.push('\n');
                 } else if matches!(item, FormatItem::Slash) {
@@ -295,6 +313,8 @@ impl SqlEditorWidget {
                     formatted.push_str("\n\n");
                 }
             }
+
+            idx += consumed;
         }
 
         formatted
@@ -308,6 +328,14 @@ impl SqlEditorWidget {
             (
                 FormatItem::ToolCommand(ToolCommand::Prompt { .. }),
                 FormatItem::ToolCommand(ToolCommand::Prompt { .. }),
+            ) => true,
+            (
+                FormatItem::ToolCommand(ToolCommand::ClearBreaks),
+                FormatItem::ToolCommand(ToolCommand::ClearComputes),
+            ) => true,
+            (
+                FormatItem::ToolCommand(ToolCommand::ClearComputes),
+                FormatItem::ToolCommand(ToolCommand::ClearBreaks),
             ) => true,
             _ => false,
         }
@@ -405,6 +433,28 @@ impl SqlEditorWidget {
                 column_name,
                 variable_name,
             } => format!("COLUMN {} NEW_VALUE {}", column_name, variable_name),
+            ToolCommand::BreakOn { column_name } => format!("BREAK ON {}", column_name),
+            ToolCommand::BreakOff => "BREAK OFF".to_string(),
+            ToolCommand::ClearBreaks => "CLEAR BREAKS".to_string(),
+            ToolCommand::ClearComputes => "CLEAR COMPUTES".to_string(),
+            ToolCommand::ClearBreaksComputes => "CLEAR BREAKS\nCLEAR COMPUTES".to_string(),
+            ToolCommand::Compute {
+                mode,
+                of_column,
+                on_column,
+            } => {
+                let mode_text = match mode {
+                    crate::db::ComputeMode::Sum => "SUM",
+                    crate::db::ComputeMode::Count => "COUNT",
+                };
+                match (of_column.as_deref(), on_column.as_deref()) {
+                    (Some(of_col), Some(on_col)) => {
+                        format!("COMPUTE {} OF {} ON {}", mode_text, of_col, on_col)
+                    }
+                    _ => format!("COMPUTE {}", mode_text),
+                }
+            }
+            ToolCommand::ComputeOff => "COMPUTE OFF".to_string(),
             ToolCommand::SetErrorContinue { enabled } => {
                 if *enabled {
                     "SET ERRORCONTINUE ON".to_string()
@@ -3213,6 +3263,8 @@ impl SqlEditorWidget {
                                         trimspool_enabled,
                                         colsep,
                                         null_text,
+                                        break_column,
+                                        compute_config,
                                         continue_on_error,
                                         spool_path,
                                     ) = match session.lock() {
@@ -3231,6 +3283,8 @@ impl SqlEditorWidget {
                                             guard.trimspool_enabled,
                                             guard.colsep.clone(),
                                             guard.null_text.clone(),
+                                            guard.break_column.clone(),
+                                            guard.compute.clone(),
                                             guard.continue_on_error,
                                             guard.spool_path.clone(),
                                         ),
@@ -3254,6 +3308,8 @@ impl SqlEditorWidget {
                                                 guard.trimspool_enabled,
                                                 guard.colsep.clone(),
                                                 guard.null_text.clone(),
+                                                guard.break_column.clone(),
+                                                guard.compute.clone(),
                                                 guard.continue_on_error,
                                                 guard.spool_path.clone(),
                                             )
@@ -3317,6 +3373,29 @@ impl SqlEditorWidget {
                                         ),
                                         format!("COLSEP {}", colsep),
                                         format!("NULL {}", null_text),
+                                        match break_column {
+                                            Some(column) => format!("BREAK ON {}", column),
+                                            None => "BREAK OFF".to_string(),
+                                        },
+                                        match compute_config {
+                                            Some(config) => {
+                                                let mode_text = match config.mode {
+                                                    crate::db::ComputeMode::Sum => "SUM",
+                                                    crate::db::ComputeMode::Count => "COUNT",
+                                                };
+                                                match (
+                                                    config.of_column.as_deref(),
+                                                    config.on_column.as_deref(),
+                                                ) {
+                                                    (Some(of_col), Some(on_col)) => format!(
+                                                        "COMPUTE {} OF {} ON {}",
+                                                        mode_text, of_col, on_col
+                                                    ),
+                                                    _ => format!("COMPUTE {}", mode_text),
+                                                }
+                                            }
+                                            None => "COMPUTE OFF".to_string(),
+                                        },
                                         format!(
                                             "ERRORCONTINUE {}",
                                             if continue_on_error { "ON" } else { "OFF" }
@@ -3714,6 +3793,171 @@ impl SqlEditorWidget {
                                             "Registered NEW_VALUE mapping: {} -> {}",
                                             column_key, variable_key
                                         ),
+                                    );
+                                }
+                                ToolCommand::BreakOn { column_name } => {
+                                    let key = SessionState::normalize_name(&column_name);
+                                    match session.lock() {
+                                        Ok(mut guard) => {
+                                            guard.break_column = Some(key.clone());
+                                        }
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                            "Warning: session state lock was poisoned; recovering."
+                                        );
+                                            let mut guard = poisoned.into_inner();
+                                            guard.break_column = Some(key.clone());
+                                        }
+                                    }
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "BREAK",
+                                        &format!("BREAK ON {}", key),
+                                    );
+                                }
+                                ToolCommand::BreakOff => {
+                                    match session.lock() {
+                                        Ok(mut guard) => {
+                                            guard.break_column = None;
+                                        }
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                            "Warning: session state lock was poisoned; recovering."
+                                        );
+                                            let mut guard = poisoned.into_inner();
+                                            guard.break_column = None;
+                                        }
+                                    }
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "BREAK",
+                                        "BREAK OFF",
+                                    );
+                                }
+                                ToolCommand::ClearBreaks => {
+                                    match session.lock() {
+                                        Ok(mut guard) => {
+                                            guard.break_column = None;
+                                        }
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                            "Warning: session state lock was poisoned; recovering."
+                                        );
+                                            let mut guard = poisoned.into_inner();
+                                            guard.break_column = None;
+                                        }
+                                    }
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "CLEAR",
+                                        "BREAKS cleared",
+                                    );
+                                }
+                                ToolCommand::ClearComputes => {
+                                    match session.lock() {
+                                        Ok(mut guard) => {
+                                            guard.compute = None;
+                                        }
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                            "Warning: session state lock was poisoned; recovering."
+                                        );
+                                            let mut guard = poisoned.into_inner();
+                                            guard.compute = None;
+                                        }
+                                    }
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "CLEAR",
+                                        "COMPUTES cleared",
+                                    );
+                                }
+                                ToolCommand::ClearBreaksComputes => {
+                                    match session.lock() {
+                                        Ok(mut guard) => {
+                                            guard.break_column = None;
+                                            guard.compute = None;
+                                        }
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                            "Warning: session state lock was poisoned; recovering."
+                                        );
+                                            let mut guard = poisoned.into_inner();
+                                            guard.break_column = None;
+                                            guard.compute = None;
+                                        }
+                                    }
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "CLEAR",
+                                        "BREAKS and COMPUTES cleared",
+                                    );
+                                }
+                                ToolCommand::Compute {
+                                    mode,
+                                    of_column,
+                                    on_column,
+                                } => {
+                                    match session.lock() {
+                                        Ok(mut guard) => {
+                                            guard.compute = Some(crate::db::ComputeConfig {
+                                                mode,
+                                                of_column: of_column.clone(),
+                                                on_column: on_column.clone(),
+                                            });
+                                        }
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                            "Warning: session state lock was poisoned; recovering."
+                                        );
+                                            let mut guard = poisoned.into_inner();
+                                            guard.compute = Some(crate::db::ComputeConfig {
+                                                mode,
+                                                of_column: of_column.clone(),
+                                                on_column: on_column.clone(),
+                                            });
+                                        }
+                                    }
+                                    let mode_text = match mode {
+                                        crate::db::ComputeMode::Sum => "COMPUTE SUM",
+                                        crate::db::ComputeMode::Count => "COMPUTE COUNT",
+                                    };
+                                    let label = match (of_column.as_deref(), on_column.as_deref()) {
+                                        (Some(of_col), Some(on_col)) => {
+                                            format!("{} OF {} ON {}", mode_text, of_col, on_col)
+                                        }
+                                        _ => mode_text.to_string(),
+                                    };
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "COMPUTE",
+                                        &label,
+                                    );
+                                }
+                                ToolCommand::ComputeOff => {
+                                    match session.lock() {
+                                        Ok(mut guard) => {
+                                            guard.compute = None;
+                                        }
+                                        Err(poisoned) => {
+                                            eprintln!(
+                                            "Warning: session state lock was poisoned; recovering."
+                                        );
+                                            let mut guard = poisoned.into_inner();
+                                            guard.compute = None;
+                                        }
+                                    }
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "COMPUTE",
+                                        "COMPUTE OFF",
                                     );
                                 }
                                 ToolCommand::SetErrorContinue { enabled } => {
@@ -5216,12 +5460,25 @@ impl SqlEditorWidget {
                                     SqlEditorWidget::current_output_settings(&session);
                                 let mut buffered_rows: Vec<Vec<String>> = Vec::new();
                                 let mut select_column_names: Vec<String> = Vec::new();
+                                let select_column_count = std::cell::Cell::new(0usize);
                                 let mut last_select_row: Option<Vec<String>> = None;
                                 let mut last_flush = Instant::now();
                                 let statement_start = Instant::now();
                                 let mut timed_out = false;
                                 let (colsep, null_text, _trimspool_enabled) =
                                     SqlEditorWidget::current_text_output_settings(&session);
+                                let (break_column, compute_config) = match session.lock() {
+                                    Ok(guard) => (guard.break_column.clone(), guard.compute.clone()),
+                                    Err(poisoned) => {
+                                        eprintln!(
+                                            "Warning: session state lock was poisoned; recovering."
+                                        );
+                                        let guard = poisoned.into_inner();
+                                        (guard.break_column.clone(), guard.compute.clone())
+                                    }
+                                };
+                                let transform_state =
+                                    std::cell::RefCell::new(SelectTransformState::default());
 
                                 let result =
                                     match QueryExecutor::execute_select_streaming_with_binds(
@@ -5234,6 +5491,71 @@ impl SqlEditorWidget {
                                                 .map(|col| col.name.clone())
                                                 .collect::<Vec<String>>();
                                             select_column_names = names.clone();
+                                            select_column_count.set(names.len());
+                                            {
+                                                let mut state = transform_state.borrow_mut();
+                                                state.break_index =
+                                                    break_column.as_ref().and_then(|target| {
+                                                        let target_key =
+                                                            SessionState::normalize_name(target);
+                                                        names.iter().position(|column_name| {
+                                                            SessionState::normalize_name(
+                                                                column_name,
+                                                            ) == target_key
+                                                        })
+                                                    });
+                                                state.compute_of_index =
+                                                    compute_config
+                                                        .as_ref()
+                                                        .and_then(|config| {
+                                                            config.of_column.as_ref().and_then(
+                                                                |target| {
+                                                                    let target_key =
+                                                                        SessionState::normalize_name(
+                                                                            target,
+                                                                        );
+                                                                    names.iter().position(
+                                                                        |column_name| {
+                                                                            SessionState::normalize_name(column_name)
+                                                                                == target_key
+                                                                        },
+                                                                    )
+                                                                },
+                                                            )
+                                                        });
+                                                state.compute_on_index =
+                                                    compute_config
+                                                        .as_ref()
+                                                        .and_then(|config| {
+                                                            config.on_column.as_ref().and_then(
+                                                                |target| {
+                                                                    let target_key =
+                                                                        SessionState::normalize_name(
+                                                                            target,
+                                                                        );
+                                                                    names.iter().position(
+                                                                        |column_name| {
+                                                                            SessionState::normalize_name(column_name)
+                                                                                == target_key
+                                                                        },
+                                                                    )
+                                                                },
+                                                            )
+                                                        });
+                                                if compute_config
+                                                    .as_ref()
+                                                    .map(|config| {
+                                                        config.mode
+                                                            == crate::db::ComputeMode::Sum
+                                                            && config.of_column.is_none()
+                                                    })
+                                                    .unwrap_or(false)
+                                                {
+                                                    state.compute_sums = vec![0.0; names.len()];
+                                                    state.compute_seen_numeric =
+                                                        vec![false; names.len()];
+                                                }
+                                            }
                                             let display_columns =
                                                 SqlEditorWidget::apply_heading_setting(
                                                     names,
@@ -5259,7 +5581,77 @@ impl SqlEditorWidget {
                                                 }
                                             }
 
+                                            let mut row = row;
                                             last_select_row = Some(row.clone());
+                                            {
+                                                let mut state = transform_state.borrow_mut();
+                                                if let Some(config) = compute_config.as_ref() {
+                                                    let grouped_compute = config.of_column.is_some()
+                                                        && config.on_column.is_some()
+                                                        && state.compute_of_index.is_some()
+                                                        && state.compute_on_index.is_some();
+                                                    if grouped_compute {
+                                                        if let Some(on_idx) = state.compute_on_index {
+                                                            if let Some(current_group_value) =
+                                                                row.get(on_idx).cloned()
+                                                            {
+                                                                if let Some(previous_group_value) =
+                                                                    state.compute_group_value.clone()
+                                                                {
+                                                                    if previous_group_value
+                                                                        != current_group_value
+                                                                    {
+                                                                        if let Some(summary_row) =
+                                                                            SqlEditorWidget::build_compute_summary_row(
+                                                                                select_column_count.get(),
+                                                                                Some(config),
+                                                                                &state,
+                                                                            )
+                                                                        {
+                                                                            let display_summary = SqlEditorWidget::display_row_values(
+                                                                                &summary_row,
+                                                                                &null_text,
+                                                                            );
+                                                                            buffered_rows
+                                                                                .push(display_summary);
+                                                                        }
+                                                                        state.compute_count = 0;
+                                                                        state.compute_sum = 0.0;
+                                                                        state.compute_sum_seen =
+                                                                            false;
+                                                                    }
+                                                                }
+                                                                state.compute_group_value =
+                                                                    Some(current_group_value);
+                                                            }
+                                                        }
+                                                    }
+                                                    SqlEditorWidget::accumulate_compute(
+                                                        config,
+                                                        &row,
+                                                        &mut state,
+                                                    );
+                                                }
+                                                if let Some(idx) = state.break_index {
+                                                    if let Some(current_break_value) =
+                                                        row.get(idx).cloned()
+                                                    {
+                                                        if state
+                                                            .previous_break_value
+                                                            .as_ref()
+                                                            .map(|prev| prev == &current_break_value)
+                                                            .unwrap_or(false)
+                                                        {
+                                                            if let Some(cell) = row.get_mut(idx) {
+                                                                *cell = String::new();
+                                                            }
+                                                        } else {
+                                                            state.previous_break_value =
+                                                                Some(current_break_value);
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             let display_row = SqlEditorWidget::display_row_values(
                                                 &row, &null_text,
                                             );
@@ -5318,6 +5710,7 @@ impl SqlEditorWidget {
                                             error_result
                                         }
                                     };
+                                let transform_state = transform_state.into_inner();
 
                                 if !buffered_rows.is_empty() {
                                     let rows = std::mem::take(&mut buffered_rows);
@@ -5333,6 +5726,40 @@ impl SqlEditorWidget {
                                     );
                                 }
                                 if result.success {
+                                    let grouped_compute = compute_config
+                                        .as_ref()
+                                        .map(|config| {
+                                            config.of_column.is_some()
+                                                && config.on_column.is_some()
+                                                && transform_state.compute_of_index.is_some()
+                                                && transform_state.compute_on_index.is_some()
+                                        })
+                                        .unwrap_or(false);
+                                    if grouped_compute {
+                                        if transform_state.compute_group_value.is_some() {
+                                            if let Some(summary_row) = SqlEditorWidget::build_compute_summary_row(
+                                                select_column_names.len(),
+                                                compute_config.as_ref(),
+                                                &transform_state,
+                                            ) {
+                                                let rows = vec![summary_row];
+                                                SqlEditorWidget::append_spool_rows(&session, &rows);
+                                                let _ = sender.send(QueryProgress::Rows { index, rows });
+                                                app::awake();
+                                            }
+                                        }
+                                    } else if let Some(summary_row) =
+                                        SqlEditorWidget::build_compute_summary_row(
+                                            select_column_names.len(),
+                                            compute_config.as_ref(),
+                                            &transform_state,
+                                        )
+                                    {
+                                        let rows = vec![summary_row];
+                                        SqlEditorWidget::append_spool_rows(&session, &rows);
+                                        let _ = sender.send(QueryProgress::Rows { index, rows });
+                                        app::awake();
+                                    }
                                     SqlEditorWidget::apply_column_new_value_from_row(
                                         &session,
                                         &select_column_names,
@@ -5854,6 +6281,156 @@ impl SqlEditorWidget {
         row.iter()
             .map(|value| SqlEditorWidget::display_cell_value(value, null_text))
             .collect()
+    }
+
+    fn parse_numeric_value(value: &str) -> Option<f64> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("NULL") {
+            return None;
+        }
+        let normalized = trimmed.replace(',', "");
+        normalized.parse::<f64>().ok()
+    }
+
+    fn format_number(value: f64) -> String {
+        let mut text = format!("{}", value);
+        if text.contains('.') {
+            while text.ends_with('0') {
+                text.pop();
+            }
+            if text.ends_with('.') {
+                text.pop();
+            }
+        }
+        text
+    }
+
+    fn accumulate_compute(
+        config: &crate::db::ComputeConfig,
+        row: &[String],
+        state: &mut SelectTransformState,
+    ) {
+        match config.mode {
+            crate::db::ComputeMode::Count => {
+                if let Some(of_idx) = state.compute_of_index {
+                    let is_not_null = row
+                        .get(of_idx)
+                        .map(|value| !value.eq_ignore_ascii_case("NULL"))
+                        .unwrap_or(false);
+                    if is_not_null {
+                        state.compute_count += 1;
+                    }
+                } else {
+                    state.compute_count += 1;
+                }
+            }
+            crate::db::ComputeMode::Sum => {
+                if let Some(of_idx) = state.compute_of_index {
+                    if let Some(number) =
+                        row.get(of_idx).and_then(|value| SqlEditorWidget::parse_numeric_value(value))
+                    {
+                        state.compute_sum += number;
+                        state.compute_sum_seen = true;
+                    }
+                } else {
+                    for (idx, value) in row.iter().enumerate() {
+                        if let Some(number) = SqlEditorWidget::parse_numeric_value(value) {
+                            if let Some(sum_slot) = state.compute_sums.get_mut(idx) {
+                                *sum_slot += number;
+                            }
+                            if let Some(seen_slot) = state.compute_seen_numeric.get_mut(idx) {
+                                *seen_slot = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn build_compute_summary_row(
+        column_count: usize,
+        compute_config: Option<&crate::db::ComputeConfig>,
+        state: &SelectTransformState,
+    ) -> Option<Vec<String>> {
+        let config = compute_config?;
+        let mode = config.mode;
+        if column_count == 0 {
+            return None;
+        }
+
+        let mut row = vec![String::new(); column_count];
+        if let (Some(of_idx), Some(on_idx)) = (state.compute_of_index, state.compute_on_index) {
+            let label = match mode {
+                crate::db::ComputeMode::Count => "COUNT",
+                crate::db::ComputeMode::Sum => "SUM",
+            };
+            if on_idx < column_count {
+                row[on_idx] = label.to_string();
+            }
+            if of_idx < column_count {
+                row[of_idx] = match mode {
+                    crate::db::ComputeMode::Count => state.compute_count.to_string(),
+                    crate::db::ComputeMode::Sum => {
+                        if state.compute_sum_seen {
+                            SqlEditorWidget::format_number(state.compute_sum)
+                        } else {
+                            "0".to_string()
+                        }
+                    }
+                };
+            }
+            return Some(row);
+        }
+
+        match mode {
+            crate::db::ComputeMode::Count => {
+                if column_count == 1 {
+                    row[0] = state.compute_count.to_string();
+                } else {
+                    row[0] = "COUNT".to_string();
+                    row[column_count - 1] = state.compute_count.to_string();
+                }
+            }
+            crate::db::ComputeMode::Sum => {
+                if let Some(of_idx) = state.compute_of_index {
+                    if column_count == 1 {
+                        row[0] = if state.compute_sum_seen {
+                            SqlEditorWidget::format_number(state.compute_sum)
+                        } else {
+                            "0".to_string()
+                        };
+                    } else {
+                        row[0] = "SUM".to_string();
+                        if of_idx < column_count {
+                            row[of_idx] = if state.compute_sum_seen {
+                                SqlEditorWidget::format_number(state.compute_sum)
+                            } else {
+                                "0".to_string()
+                            };
+                        }
+                    }
+                } else if column_count == 1 {
+                    let total = state.compute_sums.first().copied().unwrap_or(0.0);
+                    row[0] = SqlEditorWidget::format_number(total);
+                } else {
+                    row[0] = "SUM".to_string();
+                    let mut has_any_numeric = false;
+                    for idx in 1..column_count {
+                        if state.compute_seen_numeric.get(idx).copied().unwrap_or(false) {
+                            let total = state.compute_sums.get(idx).copied().unwrap_or(0.0);
+                            row[idx] = SqlEditorWidget::format_number(total);
+                            has_any_numeric = true;
+                        }
+                    }
+                    if !has_any_numeric {
+                        row[column_count - 1] = "0".to_string();
+                    }
+                }
+            }
+        }
+
+        Some(row)
     }
 
     fn format_row_line(row: &[String], colsep: &str, null_text: &str) -> String {

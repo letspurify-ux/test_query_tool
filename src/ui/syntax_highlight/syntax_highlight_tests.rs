@@ -118,6 +118,71 @@ fn test_connect_line_with_leading_whitespace_disables_rest_highlighting() {
 }
 
 #[test]
+fn test_prompt_keyword_with_large_start_is_safe() {
+    assert!(!is_prompt_keyword(b"PROMPT", usize::MAX));
+}
+
+#[test]
+fn test_connect_keyword_with_large_start_is_safe() {
+    assert!(!is_connect_keyword(b"CONNECT", usize::MAX));
+}
+
+#[test]
+fn test_sqlplus_break_compute_highlighting() {
+    let highlighter = SqlHighlighter::new();
+    let text = "BREAK ON deptno\nCOMPUTE SUM\nCOLUMN col NEW_VALUE var";
+    let styles = highlighter.generate_styles(text);
+
+    let break_pos = text.find("BREAK").unwrap();
+    assert!(styles[break_pos..break_pos + 5]
+        .chars()
+        .all(|c| c == STYLE_KEYWORD));
+
+    let compute_pos = text.find("COMPUTE").unwrap();
+    assert!(styles[compute_pos..compute_pos + 7]
+        .chars()
+        .all(|c| c == STYLE_KEYWORD));
+
+    let new_value_pos = text.find("NEW_VALUE").unwrap();
+    assert!(styles[new_value_pos..new_value_pos + 9]
+        .chars()
+        .all(|c| c == STYLE_KEYWORD));
+}
+
+#[test]
+fn test_sqlplus_set_spool_keywords_highlighting() {
+    let highlighter = SqlHighlighter::new();
+    let text = "SET TRIMSPOOL ON\nSET COLSEP ||\nSET NULL (null)\nSPOOL APPEND\nSPOOL OFF";
+    let styles = highlighter.generate_styles(text);
+
+    let trimspool_pos = text.find("TRIMSPOOL").unwrap();
+    assert!(styles[trimspool_pos..trimspool_pos + 9]
+        .chars()
+        .all(|c| c == STYLE_KEYWORD));
+
+    let colsep_pos = text.find("COLSEP").unwrap();
+    assert!(styles[colsep_pos..colsep_pos + 6]
+        .chars()
+        .all(|c| c == STYLE_KEYWORD));
+
+    let spool_append_pos = text.find("SPOOL APPEND").unwrap();
+    assert!(styles[spool_append_pos..spool_append_pos + 5]
+        .chars()
+        .all(|c| c == STYLE_KEYWORD));
+    assert!(styles[spool_append_pos + 6..spool_append_pos + 12]
+        .chars()
+        .all(|c| c == STYLE_KEYWORD));
+
+    let spool_off_pos = text.rfind("SPOOL OFF").unwrap();
+    assert!(styles[spool_off_pos..spool_off_pos + 5]
+        .chars()
+        .all(|c| c == STYLE_KEYWORD));
+    assert!(styles[spool_off_pos + 6..spool_off_pos + 9]
+        .chars()
+        .all(|c| c == STYLE_KEYWORD));
+}
+
+#[test]
 fn test_windowed_highlighting_limits_scope() {
     let highlighter = SqlHighlighter::new();
     let text = "SELECT col FROM table;\n".repeat(2000);

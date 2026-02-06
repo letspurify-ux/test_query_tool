@@ -1944,6 +1944,48 @@ fn test_set_trimspool_command_parsed() {
 }
 
 #[test]
+fn test_set_define_single_quoted_char_parsed() {
+    let sql = "SET DEFINE '^'";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_set_define = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::SetDefine {
+                enabled: true,
+                define_char: Some('^')
+            })
+        ),
+    );
+    assert!(
+        has_set_define,
+        "SET DEFINE '^' should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_set_define_single_quote_only_does_not_panic() {
+    let sql = "SET DEFINE '";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_quoted_define_char = items.iter().any(|item| {
+        matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::SetDefine {
+                enabled: true,
+                define_char: Some('\'')
+            })
+        )
+    });
+    assert!(
+        has_quoted_define_char,
+        "SET DEFINE with single quote should be handled safely, got: {:?}",
+        items
+    );
+}
+
+#[test]
 fn test_set_colsep_command_parsed() {
     let sql = "SET COLSEP ||";
     let items = QueryExecutor::split_script_items(sql);
@@ -2030,6 +2072,184 @@ fn test_spool_off_command_parsed() {
     assert!(
         has_spool_off,
         "SPOOL OFF should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_break_on_command_parsed() {
+    let sql = "BREAK ON deptno";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_break_on = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::BreakOn { column_name }) if column_name == "deptno"
+        ),
+    );
+    assert!(
+        has_break_on,
+        "BREAK ON should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_break_off_command_parsed() {
+    let sql = "BREAK OFF";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_break_off = items
+        .iter()
+        .any(|item| matches!(item, ScriptItem::ToolCommand(ToolCommand::BreakOff)));
+    assert!(
+        has_break_off,
+        "BREAK OFF should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_compute_sum_command_parsed() {
+    let sql = "COMPUTE SUM";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_compute_sum = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::Compute {
+                mode: crate::db::ComputeMode::Sum,
+                of_column: None,
+                on_column: None
+            })
+        ),
+    );
+    assert!(
+        has_compute_sum,
+        "COMPUTE SUM should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_compute_count_command_parsed() {
+    let sql = "COMPUTE COUNT";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_compute_count = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::Compute {
+                mode: crate::db::ComputeMode::Count,
+                of_column: None,
+                on_column: None
+            })
+        ),
+    );
+    assert!(
+        has_compute_count,
+        "COMPUTE COUNT should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_compute_off_command_parsed() {
+    let sql = "COMPUTE OFF";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_compute_off = items
+        .iter()
+        .any(|item| matches!(item, ScriptItem::ToolCommand(ToolCommand::ComputeOff)));
+    assert!(
+        has_compute_off,
+        "COMPUTE OFF should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_compute_count_of_on_command_parsed() {
+    let sql = "COMPUTE COUNT OF id ON grp";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_compute_count_of_on = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::Compute {
+                mode: crate::db::ComputeMode::Count,
+                of_column: Some(of_col),
+                on_column: Some(on_col)
+            }) if of_col == "id" && on_col == "grp"
+        ),
+    );
+    assert!(
+        has_compute_count_of_on,
+        "COMPUTE COUNT OF ... ON ... should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_compute_sum_of_on_command_parsed() {
+    let sql = "COMPUTE SUM OF val ON grp";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_compute_sum_of_on = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::Compute {
+                mode: crate::db::ComputeMode::Sum,
+                of_column: Some(of_col),
+                on_column: Some(on_col)
+            }) if of_col == "val" && on_col == "grp"
+        ),
+    );
+    assert!(
+        has_compute_sum_of_on,
+        "COMPUTE SUM OF ... ON ... should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_clear_breaks_computes_parsed() {
+    let sql = "CLEAR BREAKS CLEAR COMPUTES";
+    let items = QueryExecutor::split_script_items(sql);
+    let has_clear_both = items
+        .iter()
+        .any(|item| matches!(item, ScriptItem::ToolCommand(ToolCommand::ClearBreaksComputes)));
+    assert!(
+        has_clear_both,
+        "CLEAR BREAKS CLEAR COMPUTES should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_clear_breaks_parsed() {
+    let sql = "CLEAR BREAKS";
+    let items = QueryExecutor::split_script_items(sql);
+    let has_clear_breaks = items
+        .iter()
+        .any(|item| matches!(item, ScriptItem::ToolCommand(ToolCommand::ClearBreaks)));
+    assert!(
+        has_clear_breaks,
+        "CLEAR BREAKS should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_clear_computes_parsed() {
+    let sql = "CLEAR COMPUTES";
+    let items = QueryExecutor::split_script_items(sql);
+    let has_clear_computes = items
+        .iter()
+        .any(|item| matches!(item, ScriptItem::ToolCommand(ToolCommand::ClearComputes)));
+    assert!(
+        has_clear_computes,
+        "CLEAR COMPUTES should be recognized, got: {:?}",
         items
     );
 }

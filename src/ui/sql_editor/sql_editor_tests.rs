@@ -737,6 +737,26 @@ fn format_sql_does_not_insert_blank_line_between_prompt_commands() {
 }
 
 #[test]
+fn format_sql_keeps_clear_breaks_and_computes_on_separate_lines() {
+    let input = "CLEAR BREAKS\nCLEAR COMPUTES;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = "CLEAR BREAKS\nCLEAR COMPUTES";
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_splits_combined_clear_breaks_and_computes() {
+    let input = "CLEAR BREAKS CLEAR COMPUTES;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = "CLEAR BREAKS\nCLEAR COMPUTES";
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn format_sql_indents_line_comments_to_depth() {
     let input = r#"BEGIN
 IF 1 = 1 THEN
