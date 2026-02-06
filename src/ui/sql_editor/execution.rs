@@ -6084,8 +6084,8 @@ impl SqlEditorWidget {
 
         let mut dialog = fltk::window::Window::default()
             .with_size(420, 150)
-            .with_label("Input")
-            .center_screen();
+            .with_label("Input");
+        crate::ui::center_on_main(&mut dialog);
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 

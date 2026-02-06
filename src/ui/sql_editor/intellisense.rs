@@ -1037,8 +1037,8 @@ impl SqlEditorWidget {
 
         let mut dialog = Window::default()
             .with_size(600, 400)
-            .with_label(&format!("Describe: {}", object_name.to_uppercase()))
-            .center_screen();
+            .with_label(&format!("Describe: {}", object_name.to_uppercase()));
+        crate::ui::center_on_main(&mut dialog);
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
         dialog.begin();

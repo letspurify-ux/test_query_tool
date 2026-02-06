@@ -10,6 +10,7 @@ use fltk::{
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::ui::center_on_main;
 use crate::utils::config::{QueryHistory, QueryHistoryEntry};
 use crate::ui::theme;
 
@@ -43,8 +44,8 @@ impl QueryHistoryDialog {
         
         let mut dialog = Window::default()
             .with_size(800, 500)
-            .with_label("Query History")
-            .center_screen();
+            .with_label("Query History");
+        center_on_main(&mut dialog);
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 

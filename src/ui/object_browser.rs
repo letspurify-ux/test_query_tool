@@ -1209,8 +1209,8 @@ impl ObjectBrowserWidget {
         
         let mut dialog = Window::default()
             .with_size(700, 500)
-            .with_label(title)
-            .center_screen();
+            .with_label(title);
+        crate::ui::center_on_main(&mut dialog);
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 

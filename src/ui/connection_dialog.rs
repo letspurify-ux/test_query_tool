@@ -14,6 +14,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use crate::db::{ConnectionInfo, DatabaseConnection};
+use crate::ui::center_on_main;
 use crate::utils::AppConfig;
 use crate::ui::theme;
 
@@ -38,8 +39,8 @@ impl ConnectionDialog {
         
         let mut dialog = Window::default()
             .with_size(500, 460)
-            .with_label("Connect to Oracle Database")
-            .center_screen();
+            .with_label("Connect to Oracle Database");
+        center_on_main(&mut dialog);
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 

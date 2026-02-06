@@ -8,6 +8,7 @@ use fltk::{
     window::Window,
 };
 
+use crate::ui::center_on_main;
 use crate::ui::theme;
 
 pub struct MenuBarBuilder;
@@ -23,8 +24,8 @@ fn show_info_dialog(title: &str, content: &str, width: i32, height: i32) {
 
     let mut dialog = Window::default()
         .with_size(width, height)
-        .with_label(title)
-        .center_screen();
+        .with_label(title);
+    center_on_main(&mut dialog);
     dialog.set_color(theme::panel_raised());
     dialog.make_modal(true);
     dialog.begin();
