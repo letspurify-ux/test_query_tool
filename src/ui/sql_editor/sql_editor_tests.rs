@@ -841,6 +841,34 @@ FROM dual;"#;
 }
 
 #[test]
+fn format_sql_package_body_with_nested_case_keeps_block_newlines() {
+    let input = "CREATE OR REPLACE PACKAGE BODY pkg_case AS PROCEDURE run_demo IS BEGIN CASE v_mode WHEN 1 THEN CASE WHEN v_flag = 'Y' THEN NULL; ELSE NULL; END CASE; ELSE NULL; END CASE; END run_demo; END pkg_case;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains(
+            "CASE
+                WHEN 1 THEN
+                    CASE
+                        WHEN v_flag = 'Y' THEN"
+        ),
+        "Nested CASE in package body should keep multi-line layout, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains(
+            "END CASE;
+            ELSE
+                NULL;
+            END CASE;"
+        ),
+        "Outer CASE branches should remain separated by new lines, got: {}",
+        formatted
+    );
+}
+
+#[test]
 fn format_sql_declare_begin_pre_dedent() {
     let input = r#"DECLARE
 v_old_sal NUMBER;

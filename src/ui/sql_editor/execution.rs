@@ -664,6 +664,10 @@ impl SqlEditorWidget {
             match token {
                 SqlToken::Word(word) => {
                     let upper = word.to_uppercase();
+                    let in_sql_case_clause = matches!(
+                        current_clause.as_deref(),
+                        Some("SELECT" | "WHERE" | "ORDER" | "GROUP" | "HAVING")
+                    );
                     let is_keyword = SQL_KEYWORDS.iter().any(|&kw| kw == upper);
                     let is_or_in_create = upper == "OR"
                         && matches!(prev_word_upper.as_deref(), Some("CREATE"))
@@ -900,11 +904,7 @@ impl SqlEditorWidget {
                         {
                             newline_after_keyword = true;
                         } else if upper == "ELSE"
-                            && !in_plsql_block
-                            && matches!(
-                                current_clause.as_deref(),
-                                Some("SELECT" | "WHERE" | "ORDER" | "GROUP" | "HAVING")
-                            )
+                            && in_sql_case_clause
                             && matches!(next_word_upper.as_deref(), Some("CASE"))
                         {
                             // Keep ELSE CASE from collapsing into one long SQL expression line.
@@ -913,11 +913,7 @@ impl SqlEditorWidget {
                     } else if upper == "THEN" {
                         if in_plsql_block && !matches!(current_clause.as_deref(), Some("SELECT")) {
                             newline_after_keyword = true;
-                        } else if !in_plsql_block
-                            && matches!(
-                                current_clause.as_deref(),
-                                Some("SELECT" | "WHERE" | "ORDER" | "GROUP" | "HAVING")
-                            )
+                        } else if in_sql_case_clause
                             && matches!(next_word_upper.as_deref(), Some("CASE"))
                         {
                             // Nested CASE in SQL expressions should start on its own line.
@@ -1019,20 +1015,7 @@ impl SqlEditorWidget {
                         }
                     } else if upper == "CASE" {
                         // CASE in PL/SQL block vs SELECT context
-                        if in_plsql_block {
-                            newline_with(
-                                &mut out,
-                                base_indent(
-                                    indent_level,
-                                    in_open_cursor_sql,
-                                    open_cursor_sql_indent,
-                                ),
-                                0,
-                                &mut at_line_start,
-                                &mut needs_space,
-                                &mut line_indent,
-                            );
-                        } else if matches!(current_clause.as_deref(), Some("SELECT")) {
+                        if in_sql_case_clause {
                             let paren_extra = if suppress_comma_break_depth > 0 { 1 } else { 0 };
                             newline_with(
                                 &mut out,
@@ -1042,6 +1025,19 @@ impl SqlEditorWidget {
                                     open_cursor_sql_indent,
                                 ),
                                 1 + paren_extra,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                        } else if in_plsql_block {
+                            newline_with(
+                                &mut out,
+                                base_indent(
+                                    indent_level,
+                                    in_open_cursor_sql,
+                                    open_cursor_sql_indent,
+                                ),
+                                0,
                                 &mut at_line_start,
                                 &mut needs_space,
                                 &mut line_indent,
