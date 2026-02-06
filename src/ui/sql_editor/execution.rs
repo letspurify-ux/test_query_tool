@@ -1526,6 +1526,7 @@ impl SqlEditorWidget {
         let mut out = String::new();
         let mut into_list_active = false;
         let mut in_dml_statement = false;
+        let mut in_block_comment = false;
         for (idx, (line, depth)) in formatted.lines().zip(depths.iter()).enumerate() {
             if idx > 0 {
                 out.push('\n');
@@ -1546,9 +1547,25 @@ impl SqlEditorWidget {
                 continue;
             }
 
+            if in_block_comment {
+                out.push_str(line);
+                if trimmed.contains("*/") {
+                    in_block_comment = false;
+                }
+                continue;
+            }
+
             let is_comment =
                 trimmed.starts_with("--") || trimmed.starts_with("/*") || trimmed == "*/";
             if is_comment {
+                if trimmed.starts_with("/*") {
+                    out.push_str(line);
+                    if !trimmed.contains("*/") {
+                        in_block_comment = true;
+                    }
+                    continue;
+                }
+
                 let leading_spaces = line.len().saturating_sub(trimmed.len());
                 let existing_indent = leading_spaces / 4;
                 let extra_indent = if into_list_active { 1 } else { 0 };
