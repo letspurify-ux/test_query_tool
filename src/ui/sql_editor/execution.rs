@@ -899,9 +899,28 @@ impl SqlEditorWidget {
                             && !matches!(current_clause.as_deref(), Some("SELECT"))
                         {
                             newline_after_keyword = true;
+                        } else if upper == "ELSE"
+                            && !in_plsql_block
+                            && matches!(
+                                current_clause.as_deref(),
+                                Some("SELECT" | "WHERE" | "ORDER" | "GROUP" | "HAVING")
+                            )
+                            && matches!(next_word_upper.as_deref(), Some("CASE"))
+                        {
+                            // Keep ELSE CASE from collapsing into one long SQL expression line.
+                            newline_after_keyword = true;
                         }
                     } else if upper == "THEN" {
                         if in_plsql_block && !matches!(current_clause.as_deref(), Some("SELECT")) {
+                            newline_after_keyword = true;
+                        } else if !in_plsql_block
+                            && matches!(
+                                current_clause.as_deref(),
+                                Some("SELECT" | "WHERE" | "ORDER" | "GROUP" | "HAVING")
+                            )
+                            && matches!(next_word_upper.as_deref(), Some("CASE"))
+                        {
+                            // Nested CASE in SQL expressions should start on its own line.
                             newline_after_keyword = true;
                         }
                     } else if upper == join_keyword {
