@@ -666,7 +666,16 @@ impl SqlEditorWidget {
                     let upper = word.to_uppercase();
                     let in_sql_case_clause = matches!(
                         current_clause.as_deref(),
-                        Some("SELECT" | "WHERE" | "ORDER" | "GROUP" | "HAVING")
+                        Some(
+                            "SELECT"
+                                | "WHERE"
+                                | "ORDER"
+                                | "GROUP"
+                                | "HAVING"
+                                | "VALUES"
+                                | "SET"
+                                | "INTO"
+                        )
                     );
                     let is_keyword = SQL_KEYWORDS.iter().any(|&kw| kw == upper);
                     let is_or_in_create = upper == "OR"
