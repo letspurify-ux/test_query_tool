@@ -830,12 +830,14 @@ ORDER BY grp;"#;
         "        CASE",
         "            WHEN MOD (n, 2) = 0 THEN 1",
         "            ELSE 0",
-        "        END) AS even_cnt,",
+        "        END",
+        "    ) AS even_cnt,",
         "    SUM (",
         "        CASE",
         "            WHEN INSTR (txt, 'END;') > 0 THEN 1",
         "            ELSE 0",
-        "        END) AS has_end_token_cnt",
+        "        END",
+        "    ) AS has_end_token_cnt",
         "FROM oqt_t_test",
         "GROUP BY grp",
         "ORDER BY grp;",
@@ -913,13 +915,13 @@ fn format_sql_package_body_case_inside_parentheses_keeps_newlines() {
     let formatted = SqlEditorWidget::format_sql_basic(input);
 
     assert!(
-        formatted.contains("v_val := fn_calc ((\n        CASE\n            WHEN v_mode = 1 THEN"),
+        formatted.contains("v_val := fn_calc ((\n            CASE\n                WHEN v_mode = 1 THEN"),
         "CASE expression inside parentheses should still expand to multiline layout, got: {}",
         formatted
     );
     assert!(
         formatted.contains(
-            "WHEN v_flag = 'Y' THEN\n                        100\n                    ELSE\n                        200\n                END"
+            "WHEN v_flag = 'Y' THEN\n                        100\n                        ELSE\n                        200\n                    END"
         ),
         "Nested CASE branches inside parenthesis should stay on separate lines, got: {}",
         formatted
@@ -945,7 +947,7 @@ fn format_sql_package_body_type_table_is_not_misdetected_as_create_table() {
     assert!(
         formatted.contains(
             "BEGIN
-        v_out := fn_calc ((\n        CASE"
+        v_out := fn_calc ((\n            CASE"
         ),
         "Nested CASE inside function body should remain multiline, got: {}",
         formatted
@@ -1082,6 +1084,174 @@ fn format_sql_comment_parenthesis_does_not_affect_comma_newline() {
     assert!(
         formatted.contains("/* (comment) */,\n    b"),
         "Parenthesis inside comments must not keep comma on one line, got: {}",
+        formatted
+    );
+}
+
+#[test]
+fn format_sql_cursor_loop_with_case_and_exit_when_keeps_loop_body_layout() {
+    let input = r#"FOR r IN (
+SELECT id,
+grp,
+n,
+CASE
+WHEN n < 0 THEN 'NEG'
+WHEN n = 0 THEN 'ZERO'
+WHEN MOD (n, 2) = 0 THEN 'EVEN'
+ELSE 'ODD'
+END AS kind
+FROM oqt_t_test
+WHERE grp = p_grp
+ORDER BY id FETCH FIRST 6 ROWS ONLY
+) LOOP v_depth := v_depth + 1;
+log_msg ('RUN', 'loop', v_depth, 'id=' || r.id || ' n=' || r.n || ' kind=' || r.kind);
+EXIT
+WHEN v_depth > 10;
+END LOOP;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains(") LOOP\n    v_depth := v_depth + 1;"),
+        "Loop body should start on a new line after LOOP, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("EXIT WHEN v_depth > 10;"),
+        "EXIT WHEN should stay on one line, got: {}",
+        formatted
+    );
+}
+
+#[test]
+fn format_sql_exit_when_with_label_stays_on_one_line() {
+    let input = r#"FOR i IN 1..10 LOOP
+EXIT outer_loop
+WHEN i > 5;
+END LOOP;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("EXIT outer_loop WHEN i > 5;"),
+        "Labeled EXIT WHEN should stay on one line, got: {}",
+        formatted
+    );
+}
+
+#[test]
+fn format_sql_package_loop_select_case_end_alignment_regression() {
+    let input = r#"CREATE OR REPLACE PACKAGE BODY oqt_mega_pkg AS
+    PROCEDURE run_torture (p_grp IN NUMBER, p_n IN NUMBER, p_txt IN VARCHAR2) IS
+        PROCEDURE jumpy (p IN NUMBER) IS
+            -- 커서 루프 + EXIT WHEN + CASE(expression)
+            FOR r IN (
+                SELECT id,
+                    grp,
+                    n,
+                    CASE
+                        WHEN n < 0 THEN 'NEG'
+                        WHEN n = 0 THEN 'ZERO'
+                        WHEN MOD (n, 2) = 0 THEN 'EVEN'
+                        ELSE 'ODD'
+                     END AS kind
+                FROM oqt_t_test
+                WHERE grp = p_grp
+                ORDER BY id FETCH FIRST 6 ROWS ONLY
+            ) LOOP
+                v_depth := v_depth + 1;
+                log_msg ('RUN', 'loop', v_depth, 'id=' || r.id || ' n=' || r.n || ' kind=' || r.kind);
+                EXIT WHEN v_depth > 10;
+            END LOOP;
+        END run_torture;
+    END oqt_mega_pkg;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("CASE\n                        WHEN n < 0 THEN 'NEG'"),
+        "CASE/WHEN alignment in SELECT list is broken, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("ELSE 'ODD'\n                    END AS kind"),
+        "CASE END should align with CASE in SELECT list, got: {}",
+        formatted
+    );
+}
+
+#[test]
+fn format_sql_open_cursor_nested_case_expression_alignment_regression() {
+    let input = r#"CREATE OR REPLACE PACKAGE BODY oqt_mega_pkg AS
+    PROCEDURE open_rc (p_grp IN NUMBER, p_rc OUT SYS_REFCURSOR) IS
+    BEGIN
+        OPEN p_rc FOR
+            SELECT t.id,
+                t.grp,
+                t.n,
+                CASE
+                WHEN t.grp = 0 THEN
+                CASE
+                    WHEN t.n > 10 THEN 'G0_BIG'
+                    ELSE 'G0_SMALL'
+                END
+                WHEN t.grp IN (1, 2) THEN 'G12'
+                ELSE 'GOTHER'
+            END AS bucket,
+                SUBSTR (t.txt, 1, 200) AS txt
+            FROM oqt_t_test t
+            WHERE t.grp = p_grp
+            ORDER BY t.id;
+    END open_rc;
+END oqt_mega_pkg;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.contains("CASE\n                    WHEN t.grp = 0 THEN"),
+        "Outer CASE/WHEN alignment in OPEN FOR SELECT is broken, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("WHEN t.grp IN (1, 2) THEN 'G12'\n                    ELSE 'GOTHER'"),
+        "CASE branches should align in OPEN FOR SELECT, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("ELSE 'GOTHER'\n                END AS bucket,"),
+        "CASE END should align with CASE in OPEN FOR SELECT, got: {}",
+        formatted
+    );
+}
+
+#[test]
+fn format_sql_case_end_parenthesis_breaks_line_in_plsql_expression() {
+    let input = r#"BEGIN
+FOR i IN 1..3 LOOP
+v_sum := v_sum + (
+CASE
+WHEN MOD (i, 2) = 0 THEN
+i * 10
+ELSE
+i
+END);
+END LOOP;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    assert!(
+        formatted.contains("v_sum := v_sum + (\n            CASE\n                WHEN MOD (i, 2) = 0 THEN"),
+        "CASE block inside parenthesized expression should be one depth deeper, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("END\n            );"),
+        "CASE END and closing parenthesis should be split across lines, got: {}",
+        formatted
+    );
+    assert!(
+        !formatted.contains("END);"),
+        "END); should not stay on one line in this pattern, got: {}",
         formatted
     );
 }
