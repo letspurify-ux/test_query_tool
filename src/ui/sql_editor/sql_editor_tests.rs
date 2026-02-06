@@ -743,6 +743,31 @@ END;"#;
 }
 
 #[test]
+fn format_sql_does_not_apply_depth_indent_to_block_comments() {
+    let input = r#"BEGIN
+IF 1 = 1 THEN
+/* block comment
+still block comment */
+NULL;
+END IF;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "BEGIN",
+        "    IF 1 = 1 THEN",
+        "/* block comment",
+        "still block comment */",
+        "        NULL;",
+        "    END IF;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn format_sql_select_case_inside_sum_is_indented() {
     let input = r#"SELECT grp,
 COUNT (*) AS cnt,
