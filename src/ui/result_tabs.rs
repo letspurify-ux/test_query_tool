@@ -190,7 +190,7 @@ impl ResultTabsWidget {
         group.begin();
         let table = ResultTableWidget::with_size(x, y, w, h);
         let widget = table.get_widget();
-        group.resizable(&*widget);
+        group.resizable(&widget);
         group.end();
         self.tabs.end();
 
@@ -294,12 +294,12 @@ impl ResultTabsWidget {
         // Step 1: Cleanup the table widget (clears callbacks and data buffers)
         tab.table.cleanup();
 
-        // Step 2 & 3: Get the SmartTable widget and remove from group, then delete
+        // Step 2 & 3: Get the Table widget and remove from group, then delete
         let table_widget = tab.table.get_widget();
         let mut group = tab.group;
-        group.remove(&*table_widget);
+        group.remove(&table_widget);
 
-        // Delete the SmartTable widget
+        // Delete the Table widget
         unsafe {
             let widget = Widget::from_widget_ptr(table_widget.as_widget_ptr());
             Widget::delete(widget);

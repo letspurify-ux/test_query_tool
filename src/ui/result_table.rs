@@ -1,11 +1,12 @@
 use fltk::{
     app,
-    enums::{Event, FrameType, Key, Shortcut},
+    draw,
+    enums::{Align, Event, Font, FrameType, Key, Shortcut},
     menu::MenuButton,
     prelude::*,
+    table::{Table, TableContext},
     widget::Widget,
 };
-use fltk_table::{SmartTable, TableOpts};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -28,11 +29,13 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
 /// Minimum interval between UI updates during streaming
 const UI_UPDATE_INTERVAL: Duration = Duration::from_millis(500);
 /// Maximum rows to buffer before forcing a UI update
-const MAX_BUFFERED_ROWS: usize = 1000;
+const MAX_BUFFERED_ROWS: usize = 5000;
+/// Stop computing column widths after this many rows (widths stabilize quickly)
+const WIDTH_SAMPLE_ROWS: usize = 5000;
 
 #[derive(Clone)]
 pub struct ResultTableWidget {
-    table: SmartTable,
+    table: Table,
     headers: Rc<RefCell<Vec<String>>>,
     /// Buffer for pending rows during streaming
     pending_rows: Rc<RefCell<Vec<Vec<String>>>>,
@@ -40,8 +43,11 @@ pub struct ResultTableWidget {
     pending_widths: Rc<RefCell<Vec<i32>>>,
     /// Last UI update time
     last_flush: Rc<RefCell<Instant>>,
-    /// Full original data (non-truncated)
+    /// The sole data store: full original data (non-truncated).
+    /// draw_cell reads from here on demand — no data duplication.
     full_data: Rc<RefCell<Vec<Vec<String>>>>,
+    /// How many rows have been sampled for column width calculation
+    width_sampled_rows: Rc<RefCell<usize>>,
 }
 
 #[derive(Default)]
@@ -57,10 +63,10 @@ impl ResultTableWidget {
     }
 
     pub fn with_size(x: i32, y: i32, w: i32, h: i32) -> Self {
-        let headers = Rc::new(RefCell::new(Vec::new()));
-        let full_data = Rc::new(RefCell::new(Vec::new()));
-        // Create SmartTable with dark theme styling
-        let mut table = SmartTable::new(x, y, w, h, None).with_opts(Self::table_opts(0, 0));
+        let headers: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let full_data: Rc<RefCell<Vec<Vec<String>>>> = Rc::new(RefCell::new(Vec::new()));
+
+        let mut table = Table::new(x, y, w, h, None);
 
         // Apply dark theme colors
         table.set_color(theme::panel_bg());
@@ -69,6 +75,93 @@ impl ResultTableWidget {
         table.set_col_header(true);
         table.set_col_header_height(28);
         table.set_row_height_all(26);
+        table.set_rows(0);
+        table.set_cols(0);
+        table.end();
+
+        // Capture theme colors once for draw_cell (avoids per-cell function calls)
+        let cell_bg = theme::table_cell_bg();
+        let cell_fg = theme::text_primary();
+        let sel_bg = theme::selection_soft();
+        let header_bg = theme::table_header_bg();
+        let header_fg = theme::text_primary();
+        let border_color = theme::table_border();
+
+        // Virtual rendering: draw_cell reads directly from full_data on demand.
+        // Only visible cells are rendered — no per-cell data stored in the Table widget.
+        let headers_for_draw = headers.clone();
+        let full_data_for_draw = full_data.clone();
+        let table_for_draw = table.clone();
+
+        table.draw_cell(move |_t, ctx, row, col, x, y, w, h| {
+            match ctx {
+                TableContext::StartPage => {
+                    draw::set_font(Font::Helvetica, 14);
+                }
+                TableContext::ColHeader => {
+                    draw::push_clip(x, y, w, h);
+                    draw::draw_box(FrameType::FlatBox, x, y, w, h, header_bg);
+                    draw::set_draw_color(header_fg);
+                    draw::set_font(Font::HelveticaBold, 14);
+                    if let Ok(hdrs) = headers_for_draw.try_borrow() {
+                        if let Some(text) = hdrs.get(col as usize) {
+                            draw::draw_text2(text, x + 4, y, w - 8, h, Align::Left);
+                        }
+                    }
+                    draw::set_draw_color(border_color);
+                    draw::draw_line(x, y + h - 1, x + w, y + h - 1);
+                    draw::pop_clip();
+                }
+                TableContext::RowHeader => {
+                    draw::push_clip(x, y, w, h);
+                    draw::draw_box(FrameType::FlatBox, x, y, w, h, header_bg);
+                    draw::set_draw_color(header_fg);
+                    draw::set_font(Font::Helvetica, 14);
+                    let text = (row + 1).to_string();
+                    draw::draw_text2(&text, x, y, w - 4, h, Align::Right);
+                    draw::set_draw_color(border_color);
+                    draw::draw_line(x + w - 1, y, x + w - 1, y + h);
+                    draw::pop_clip();
+                }
+                TableContext::Cell => {
+                    draw::push_clip(x, y, w, h);
+                    let selected = table_for_draw.is_selected(row, col);
+                    let bg = if selected { sel_bg } else { cell_bg };
+                    draw::draw_box(FrameType::FlatBox, x, y, w, h, bg);
+                    draw::set_draw_color(cell_fg);
+                    draw::set_font(Font::Helvetica, 14);
+
+                    if let Ok(data) = full_data_for_draw.try_borrow() {
+                        if let Some(row_data) = data.get(row as usize) {
+                            if let Some(cell_val) = row_data.get(col as usize) {
+                                if cell_val.len() > 50 {
+                                    let end = floor_char_boundary(cell_val, 47);
+                                    let truncated = format!("{}...", &cell_val[..end]);
+                                    draw::draw_text2(
+                                        &truncated,
+                                        x + 4,
+                                        y,
+                                        w - 8,
+                                        h,
+                                        Align::Left,
+                                    );
+                                } else {
+                                    draw::draw_text2(
+                                        cell_val, x + 4, y, w - 8, h, Align::Left,
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    draw::set_draw_color(border_color);
+                    draw::draw_line(x, y + h - 1, x + w, y + h - 1);
+                    draw::draw_line(x + w - 1, y, x + w - 1, y + h);
+                    draw::pop_clip();
+                }
+                _ => {}
+            }
+        });
 
         // Setup event handler for mouse selection and keyboard shortcuts
         let headers_for_handle = headers.clone();
@@ -108,7 +201,8 @@ impl ResultTableWidget {
                 Event::Drag => {
                     let is_dragging = drag_state_for_handle.borrow().is_dragging;
                     if is_dragging {
-                        if let Some((row, col)) = Self::get_cell_at_mouse_for_drag(&table_for_handle)
+                        if let Some((row, col)) =
+                            Self::get_cell_at_mouse_for_drag(&table_for_handle)
                         {
                             let state = drag_state_for_handle.borrow();
                             let r1 = state.start_row.min(row);
@@ -134,13 +228,15 @@ impl ResultTableWidget {
                 Event::KeyDown => {
                     let key = app::event_key();
                     let state = app::event_state();
-                    let ctrl_or_cmd = state.contains(Shortcut::Ctrl) || state.contains(Shortcut::Command);
+                    let ctrl_or_cmd =
+                        state.contains(Shortcut::Ctrl) || state.contains(Shortcut::Command);
                     let shift = state.contains(Shortcut::Shift);
 
                     if ctrl_or_cmd {
                         match key {
-                            k if (k == Key::from_char('c') || k == Key::from_char('C')) && shift => {
-                                // Ctrl+Shift+C - Copy with headers
+                            k if (k == Key::from_char('c') || k == Key::from_char('C'))
+                                && shift =>
+                            {
                                 Self::copy_selected_with_headers(
                                     &table_for_handle,
                                     &headers_for_handle,
@@ -149,7 +245,6 @@ impl ResultTableWidget {
                                 return true;
                             }
                             k if k == Key::from_char('a') || k == Key::from_char('A') => {
-                                // Ctrl+A - Select all
                                 let rows = table_for_handle.rows();
                                 let cols = table_for_handle.cols();
                                 if rows > 0 && cols > 0 {
@@ -159,7 +254,6 @@ impl ResultTableWidget {
                                 return true;
                             }
                             k if k == Key::from_char('c') || k == Key::from_char('C') => {
-                                // Ctrl+C - Copy selected cells
                                 Self::copy_selected_to_clipboard(
                                     &table_for_handle,
                                     &headers_for_handle,
@@ -175,10 +269,14 @@ impl ResultTableWidget {
                 Event::Shortcut => {
                     let key = app::event_key();
                     let state = app::event_state();
-                    let ctrl_or_cmd = state.contains(Shortcut::Ctrl) || state.contains(Shortcut::Command);
+                    let ctrl_or_cmd =
+                        state.contains(Shortcut::Ctrl) || state.contains(Shortcut::Command);
                     let shift = state.contains(Shortcut::Shift);
 
-                    if ctrl_or_cmd && shift && (key == Key::from_char('c') || key == Key::from_char('C')) {
+                    if ctrl_or_cmd
+                        && shift
+                        && (key == Key::from_char('c') || key == Key::from_char('C'))
+                    {
                         Self::copy_selected_with_headers(
                             &table_for_handle,
                             &headers_for_handle,
@@ -186,7 +284,9 @@ impl ResultTableWidget {
                         );
                         return true;
                     }
-                    if ctrl_or_cmd && (key == Key::from_char('c') || key == Key::from_char('C')) {
+                    if ctrl_or_cmd
+                        && (key == Key::from_char('c') || key == Key::from_char('C'))
+                    {
                         Self::copy_selected_to_clipboard(
                             &table_for_handle,
                             &headers_for_handle,
@@ -194,7 +294,9 @@ impl ResultTableWidget {
                         );
                         return true;
                     }
-                    if ctrl_or_cmd && (key == Key::from_char('a') || key == Key::from_char('A')) {
+                    if ctrl_or_cmd
+                        && (key == Key::from_char('a') || key == Key::from_char('A'))
+                    {
                         let rows = table_for_handle.rows();
                         let cols = table_for_handle.cols();
                         if rows > 0 && cols > 0 {
@@ -216,32 +318,12 @@ impl ResultTableWidget {
             pending_widths: Rc::new(RefCell::new(Vec::new())),
             last_flush: Rc::new(RefCell::new(Instant::now())),
             full_data,
+            width_sampled_rows: Rc::new(RefCell::new(0)),
         }
-    }
-
-    fn table_opts(rows: i32, cols: i32) -> TableOpts {
-        TableOpts {
-            rows,
-            cols,
-            editable: false,
-            cell_color: theme::table_cell_bg(),
-            cell_font_color: theme::text_primary(),
-            cell_selection_color: theme::selection_soft(),
-            header_frame: FrameType::FlatBox,
-            header_color: theme::table_header_bg(),
-            header_font_color: theme::text_primary(),
-            cell_border_color: theme::table_border(),
-            ..Default::default()
-        }
-    }
-
-    fn apply_table_opts(&mut self, rows: i32, cols: i32) {
-        let opts = Self::table_opts(rows, cols);
-        self.table.set_opts(opts);
     }
 
     /// Get cell at mouse position (returns None if outside cells)
-    fn get_cell_at_mouse(table: &SmartTable) -> Option<(i32, i32)> {
+    fn get_cell_at_mouse(table: &Table) -> Option<(i32, i32)> {
         let rows = table.rows();
         let cols = table.cols();
         if rows <= 0 || cols <= 0 {
@@ -260,7 +342,10 @@ impl ResultTableWidget {
         let data_right = table_x + table_w;
         let data_bottom = table_y + table_h;
 
-        if mouse_x < data_left || mouse_y < data_top || mouse_x >= data_right || mouse_y >= data_bottom
+        if mouse_x < data_left
+            || mouse_y < data_top
+            || mouse_x >= data_right
+            || mouse_y >= data_bottom
         {
             return None;
         }
@@ -274,7 +359,7 @@ impl ResultTableWidget {
         let mut row = start_row;
         while row < rows {
             if let Some((_, cy, _, ch)) =
-                table.find_cell(fltk::table::TableContext::Cell, row, start_col)
+                table.find_cell(TableContext::Cell, row, start_col)
             {
                 if mouse_y >= cy && mouse_y < cy + ch {
                     row_hit = Some(row);
@@ -297,7 +382,7 @@ impl ResultTableWidget {
         let mut col = start_col;
         while col < cols {
             if let Some((cx, _, cw, _)) =
-                table.find_cell(fltk::table::TableContext::Cell, row_hit, col)
+                table.find_cell(TableContext::Cell, row_hit, col)
             {
                 if mouse_x >= cx && mouse_x < cx + cw {
                     return Some((row_hit, col));
@@ -315,7 +400,7 @@ impl ResultTableWidget {
     }
 
     /// Get cell at mouse position for drag (clamps to boundaries)
-    fn get_cell_at_mouse_for_drag(table: &SmartTable) -> Option<(i32, i32)> {
+    fn get_cell_at_mouse_for_drag(table: &Table) -> Option<(i32, i32)> {
         let rows = table.rows();
         let cols = table.cols();
 
@@ -357,7 +442,7 @@ impl ResultTableWidget {
             (0..rows)
                 .find(|&r| {
                     if let Some((_, cy, _, ch)) =
-                        table.find_cell(fltk::table::TableContext::Cell, r, 0)
+                        table.find_cell(TableContext::Cell, r, 0)
                     {
                         mouse_y >= cy && mouse_y < cy + ch
                     } else {
@@ -376,7 +461,7 @@ impl ResultTableWidget {
             (0..cols)
                 .find(|&c| {
                     if let Some((cx, _, cw, _)) =
-                        table.find_cell(fltk::table::TableContext::Cell, 0, c)
+                        table.find_cell(TableContext::Cell, 0, c)
                     {
                         mouse_x >= cx && mouse_x < cx + cw
                     } else {
@@ -390,7 +475,7 @@ impl ResultTableWidget {
     }
 
     fn show_context_menu(
-        table: &SmartTable,
+        table: &Table,
         headers: &Rc<RefCell<Vec<String>>>,
         full_data: &Rc<RefCell<Vec<Vec<String>>>>,
     ) {
@@ -425,19 +510,17 @@ impl ResultTableWidget {
         if let Some(choice) = menu.popup() {
             let choice_label = choice.label().unwrap_or_default();
             match choice_label.as_str() {
-                "Copy" => { Self::copy_selected_to_clipboard(&table, headers, full_data); }
+                "Copy" => {
+                    Self::copy_selected_to_clipboard(&table, headers, full_data);
+                }
                 "Copy with Headers" => {
                     Self::copy_selected_with_headers(&table, headers, full_data);
                 }
-                "Copy All" => Self::copy_all_to_clipboard(&table, headers, full_data),
+                "Copy All" => Self::copy_all_to_clipboard(headers, full_data),
                 _ => {}
             }
         }
 
-        // FLTK memory management: widgets created without a parent must be explicitly deleted.
-        // hide() alone does not release memory - the widget must be removed from parent
-        // and deleted. Since this MenuButton was created with no parent (current_group=None),
-        // we must delete it explicitly to prevent memory leak.
         unsafe {
             let widget = Widget::from_widget_ptr(menu.as_widget_ptr());
             Widget::delete(widget);
@@ -445,7 +528,7 @@ impl ResultTableWidget {
     }
 
     fn copy_selected_to_clipboard(
-        table: &SmartTable,
+        table: &Table,
         _headers: &Rc<RefCell<Vec<String>>>,
         full_data: &Rc<RefCell<Vec<Vec<String>>>>,
     ) -> usize {
@@ -459,24 +542,22 @@ impl ResultTableWidget {
         let cell_count = rows * cols;
 
         let full_data = full_data.borrow();
-        let mut result = String::new();
+        let mut result = String::with_capacity(rows * cols * 16);
         for row in row_top..=row_bot {
-            let mut row_str = String::new();
-            for col in col_left..=col_right {
-                if !row_str.is_empty() {
-                    row_str.push('\t');
-                }
-                let val = full_data
-                    .get(row as usize)
-                    .and_then(|r| r.get(col as usize))
-                    .cloned()
-                    .unwrap_or_else(|| table.cell_value(row, col));
-                row_str.push_str(&val);
-            }
-            if !result.is_empty() {
+            if row > row_top {
                 result.push('\n');
             }
-            result.push_str(&row_str);
+            for col in col_left..=col_right {
+                if col > col_left {
+                    result.push('\t');
+                }
+                if let Some(val) = full_data
+                    .get(row as usize)
+                    .and_then(|r| r.get(col as usize))
+                {
+                    result.push_str(val);
+                }
+            }
         }
 
         if !result.is_empty() {
@@ -488,7 +569,7 @@ impl ResultTableWidget {
     }
 
     fn copy_selected_with_headers(
-        table: &SmartTable,
+        table: &Table,
         headers: &Rc<RefCell<Vec<String>>>,
         full_data: &Rc<RefCell<Vec<Vec<String>>>>,
     ) -> usize {
@@ -503,36 +584,32 @@ impl ResultTableWidget {
 
         let headers = headers.borrow();
         let full_data = full_data.borrow();
-        let mut result = String::new();
+        let mut result = String::with_capacity((rows + 1) * cols * 16);
 
         // Add headers
-        let mut header_str = String::new();
         for col in col_left..=col_right {
-            if !header_str.is_empty() {
-                header_str.push('\t');
+            if col > col_left {
+                result.push('\t');
             }
             if let Some(h) = headers.get(col as usize) {
-                header_str.push_str(h);
+                result.push_str(h);
             }
         }
-        result.push_str(&header_str);
         result.push('\n');
 
         // Add data
         for row in row_top..=row_bot {
-            let mut row_str = String::new();
             for col in col_left..=col_right {
-                if !row_str.is_empty() {
-                    row_str.push('\t');
+                if col > col_left {
+                    result.push('\t');
                 }
-                let val = full_data
+                if let Some(val) = full_data
                     .get(row as usize)
                     .and_then(|r| r.get(col as usize))
-                    .cloned()
-                    .unwrap_or_else(|| table.cell_value(row, col));
-                row_str.push_str(&val);
+                {
+                    result.push_str(val);
+                }
             }
-            result.push_str(&row_str);
             result.push('\n');
         }
 
@@ -545,37 +622,27 @@ impl ResultTableWidget {
     }
 
     fn copy_all_to_clipboard(
-        table: &SmartTable,
         headers: &Rc<RefCell<Vec<String>>>,
         full_data: &Rc<RefCell<Vec<Vec<String>>>>,
     ) {
         let headers = headers.borrow();
         let full_data = full_data.borrow();
-        let mut result = String::new();
+        let row_count = full_data.len();
+        let col_count = headers.len();
+        let mut result = String::with_capacity((row_count + 1) * col_count * 16);
 
         // Add headers
         result.push_str(&headers.join("\t"));
         result.push('\n');
 
         // Add all data
-        for (row_idx, row) in full_data.iter().enumerate() {
-            let mut row_str = String::new();
-            for cell in row {
-                if !row_str.is_empty() {
-                    row_str.push('\t');
+        for row in full_data.iter() {
+            for (i, cell) in row.iter().enumerate() {
+                if i > 0 {
+                    result.push('\t');
                 }
-                row_str.push_str(cell);
+                result.push_str(cell);
             }
-            // If for some reason full_data is missing columns that are in the table
-            if row.len() < table.cols() as usize {
-                for col in row.len()..table.cols() as usize {
-                    if !row_str.is_empty() {
-                        row_str.push('\t');
-                    }
-                    row_str.push_str(&table.cell_value(row_idx as i32, col as i32));
-                }
-            }
-            result.push_str(&row_str);
             result.push('\n');
         }
 
@@ -586,10 +653,9 @@ impl ResultTableWidget {
 
     pub fn display_result(&mut self, result: &QueryResult) {
         if !result.is_select {
-            self.apply_table_opts(1, 1);
-            self.table.set_col_header_value(0, "Result");
+            self.table.set_rows(1);
+            self.table.set_cols(1);
             self.table.set_col_width(0, (result.message.len() * 8).max(200) as i32);
-            self.table.set_cell_value(0, 0, &result.message);
             *self.headers.borrow_mut() = vec!["Result".to_string()];
             *self.full_data.borrow_mut() = vec![vec![result.message.clone()]];
             self.table.redraw();
@@ -601,10 +667,7 @@ impl ResultTableWidget {
                 result.columns.iter().map(|c| c.name.clone()).collect();
             let col_count = col_names.len() as i32;
             if self.table.cols() < col_count {
-                self.apply_table_opts(self.table.rows(), col_count);
-            }
-            for (i, name) in col_names.iter().enumerate() {
-                self.table.set_col_header_value(i as i32, name);
+                self.table.set_cols(col_count);
             }
             *self.headers.borrow_mut() = col_names;
             self.table.redraw();
@@ -615,21 +678,18 @@ impl ResultTableWidget {
         let row_count = result.rows.len() as i32;
         let col_count = col_names.len() as i32;
 
-        // Update table dimensions
-        self.apply_table_opts(row_count, col_count);
+        // Update table dimensions — no internal CellMatrix to rebuild
+        self.table.set_rows(row_count);
+        self.table.set_cols(col_count);
 
-        // Set column headers
-        for (i, name) in col_names.iter().enumerate() {
-            self.table.set_col_header_value(i as i32, name);
-        }
-
-        // Calculate and set column widths
+        // Calculate column widths (sample first N rows for large datasets)
         let mut widths: Vec<i32> = col_names
             .iter()
             .map(|h| (h.len() * 10).max(80) as i32)
             .collect();
 
-        for row in &result.rows {
+        let sample_count = result.rows.len().min(WIDTH_SAMPLE_ROWS);
+        for row in result.rows[..sample_count].iter() {
             for (i, cell) in row.iter().enumerate() {
                 if i < widths.len() {
                     let cell_width = (cell.len() * 8).max(80).min(300) as i32;
@@ -642,20 +702,9 @@ impl ResultTableWidget {
             self.table.set_col_width(i as i32, *width);
         }
 
-        // Set cell values
+        // Store data directly — draw_cell reads from full_data on demand.
+        // No per-cell set_cell_value calls needed!
         *self.full_data.borrow_mut() = result.rows.clone();
-        for (row_idx, row) in result.rows.iter().enumerate() {
-            for (col_idx, cell) in row.iter().enumerate() {
-                let display_text = if cell.len() > 50 {
-                    let end = floor_char_boundary(cell, 47);
-                    format!("{}...", &cell[..end])
-                } else {
-                    cell.clone()
-                };
-                self.table.set_cell_value(row_idx as i32, col_idx as i32, &display_text);
-            }
-        }
-
         *self.headers.borrow_mut() = col_names;
         self.table.redraw();
     }
@@ -668,6 +717,7 @@ impl ResultTableWidget {
         self.pending_widths.borrow_mut().clear();
         self.full_data.borrow_mut().clear();
         *self.last_flush.borrow_mut() = Instant::now();
+        *self.width_sampled_rows.borrow_mut() = 0;
 
         // Initialize pending widths based on headers
         let initial_widths: Vec<i32> = headers
@@ -676,10 +726,10 @@ impl ResultTableWidget {
             .collect();
         *self.pending_widths.borrow_mut() = initial_widths.clone();
 
-        self.apply_table_opts(0, col_count);
+        self.table.set_rows(0);
+        self.table.set_cols(col_count);
 
-        for (i, name) in headers.iter().enumerate() {
-            self.table.set_col_header_value(i as i32, name);
+        for (i, _name) in headers.iter().enumerate() {
             self.table.set_col_width(i as i32, initial_widths[i]);
         }
 
@@ -690,14 +740,17 @@ impl ResultTableWidget {
 
     /// Append rows to the buffer. UI is updated periodically for performance.
     pub fn append_rows(&mut self, rows: Vec<Vec<String>>) {
-        let max_cols = rows.iter().map(|row| row.len()).max().unwrap_or(0);
-        // Update pending column widths
-        {
+        // Only compute column widths for the first WIDTH_SAMPLE_ROWS rows
+        let sampled = *self.width_sampled_rows.borrow();
+        if sampled < WIDTH_SAMPLE_ROWS {
+            let max_cols = rows.iter().map(|row| row.len()).max().unwrap_or(0);
             let mut widths = self.pending_widths.borrow_mut();
             if widths.len() < max_cols {
                 widths.resize(max_cols, 80);
             }
-            for row in &rows {
+            let remaining = WIDTH_SAMPLE_ROWS - sampled;
+            let sample_count = rows.len().min(remaining);
+            for row in rows[..sample_count].iter() {
                 for (col_idx, cell) in row.iter().enumerate() {
                     if col_idx < widths.len() {
                         let cell_width = (cell.len() * 8).max(80).min(300) as i32;
@@ -707,6 +760,8 @@ impl ResultTableWidget {
                     }
                 }
             }
+            drop(widths);
+            *self.width_sampled_rows.borrow_mut() = sampled + rows.len();
         }
 
         // Add rows to pending buffer
@@ -724,65 +779,41 @@ impl ResultTableWidget {
         }
     }
 
-    /// Flush all pending rows to the UI
+    /// Flush all pending rows to the UI.
+    /// Data is moved (not cloned) from pending_rows into full_data.
+    /// Only the table row count is updated — draw_cell handles rendering on demand.
     pub fn flush_pending(&mut self) {
         let rows_to_add: Vec<Vec<String>> = self.pending_rows.borrow_mut().drain(..).collect();
         if rows_to_add.is_empty() {
             return;
         }
 
+        let new_rows_count = rows_to_add.len() as i32;
         let current_rows = self.table.rows();
-        let new_row_count = current_rows + rows_to_add.len() as i32;
-        let max_cols_in_rows = rows_to_add
-            .iter()
-            .map(|row| row.len())
-            .max()
-            .unwrap_or(0) as i32;
+        let new_total = current_rows + new_rows_count;
 
-        let pending_cols = self.pending_widths.borrow().len() as i32;
-        let cols = self.table.cols().max(max_cols_in_rows).max(pending_cols);
-
-        // Resize table to accommodate new rows and columns
-        let mut headers = self.headers.borrow_mut();
-        if headers.len() < cols as usize {
-            headers.resize(cols as usize, String::new());
-        }
-        drop(headers);
-
-        self.apply_table_opts(new_row_count, cols);
-        let headers = self.headers.borrow();
-        for (i, header) in headers.iter().enumerate() {
-            self.table.set_col_header_value(i as i32, header);
-        }
-
-        // Update column widths first (batch update)
-        let widths = self.pending_widths.borrow();
-        for (col_idx, &width) in widths.iter().enumerate() {
-            if (col_idx as i32) < cols {
-                let current_width = self.table.col_width(col_idx as i32);
-                if width > current_width {
-                    self.table.set_col_width(col_idx as i32, width);
+        // Update column widths
+        {
+            let widths = self.pending_widths.borrow();
+            let max_cols = widths.len().max(self.table.cols() as usize);
+            if max_cols as i32 > self.table.cols() {
+                self.table.set_cols(max_cols as i32);
+            }
+            for (col_idx, &width) in widths.iter().enumerate() {
+                if col_idx < max_cols {
+                    let current_width = self.table.col_width(col_idx as i32);
+                    if width > current_width {
+                        self.table.set_col_width(col_idx as i32, width);
+                    }
                 }
             }
         }
-        drop(widths);
 
-        // Add cell values
-        self.full_data.borrow_mut().extend(rows_to_add.clone());
-        for (row_offset, row) in rows_to_add.iter().enumerate() {
-            let row_idx = current_rows + row_offset as i32;
-            for (col_idx, cell) in row.iter().enumerate() {
-                if (col_idx as i32) < cols {
-                    let display_text = if cell.len() > 50 {
-                        let end = floor_char_boundary(cell, 47);
-                        format!("{}...", &cell[..end])
-                    } else {
-                        cell.clone()
-                    };
-                    self.table.set_cell_value(row_idx, col_idx as i32, &display_text);
-                }
-            }
-        }
+        // Move data into full_data — zero-copy, no clone!
+        self.full_data.borrow_mut().extend(rows_to_add);
+
+        // Just update row count — draw_cell reads from full_data on demand
+        self.table.set_rows(new_total);
 
         *self.last_flush.borrow_mut() = Instant::now();
         self.table.redraw();
@@ -798,11 +829,13 @@ impl ResultTableWidget {
 
     #[allow(dead_code)]
     pub fn clear(&mut self) {
-        self.apply_table_opts(0, 0);
+        self.table.set_rows(0);
+        self.table.set_cols(0);
         self.headers.borrow_mut().clear();
         self.pending_rows.borrow_mut().clear();
         self.pending_widths.borrow_mut().clear();
         self.full_data.borrow_mut().clear();
+        *self.width_sampled_rows.borrow_mut() = 0;
         *self.last_flush.borrow_mut() = Instant::now();
         self.table.redraw();
     }
@@ -812,7 +845,7 @@ impl ResultTableWidget {
         if count > 0 {
             let rows = (self.table.get_selection().2 - self.table.get_selection().0 + 1) as usize;
             let cols = (self.table.get_selection().3 - self.table.get_selection().1 + 1) as usize;
-            println!("Copied {} cells ({} rows × {} cols)", count, rows, cols);
+            println!("Copied {} cells ({} rows x {} cols)", count, rows, cols);
         }
         count
     }
@@ -839,24 +872,24 @@ impl ResultTableWidget {
         }
 
         let full_data = self.full_data.borrow();
-        let mut result = String::new();
+        let rows = (row_bot - row_top + 1) as usize;
+        let cols = (col_right - col_left + 1) as usize;
+        let mut result = String::with_capacity(rows * cols * 16);
         for row in row_top..=row_bot {
-            let mut row_str = String::new();
-            for col in col_left..=col_right {
-                if !row_str.is_empty() {
-                    row_str.push('\t');
-                }
-                let val = full_data
-                    .get(row as usize)
-                    .and_then(|r| r.get(col as usize))
-                    .cloned()
-                    .unwrap_or_else(|| self.table.cell_value(row, col));
-                row_str.push_str(&val);
-            }
-            if !result.is_empty() {
+            if row > row_top {
                 result.push('\n');
             }
-            result.push_str(&row_str);
+            for col in col_left..=col_right {
+                if col > col_left {
+                    result.push('\t');
+                }
+                if let Some(val) = full_data
+                    .get(row as usize)
+                    .and_then(|r| r.get(col as usize))
+                {
+                    result.push_str(val);
+                }
+            }
         }
 
         if result.is_empty() {
@@ -869,7 +902,10 @@ impl ResultTableWidget {
     /// Export all data to CSV format
     pub fn export_to_csv(&self) -> String {
         let headers = self.headers.borrow();
-        let mut csv = String::new();
+        let full_data = self.full_data.borrow();
+        let row_count = full_data.len();
+        let col_count = headers.len();
+        let mut csv = String::with_capacity((row_count + 1) * col_count * 20);
 
         // Header row
         let header_line: Vec<String> = headers.iter().map(|h| Self::escape_csv_field(h)).collect();
@@ -877,21 +913,13 @@ impl ResultTableWidget {
         csv.push('\n');
 
         // Data rows
-        let full_data = self.full_data.borrow();
-        for (row_idx, row) in full_data.iter().enumerate() {
-            let mut row_fields = Vec::new();
-            for cell in row {
-                row_fields.push(Self::escape_csv_field(cell));
-            }
-            // Add missing columns if any
-            if row.len() < self.table.cols() as usize {
-                for col in row.len()..self.table.cols() as usize {
-                    row_fields.push(Self::escape_csv_field(
-                        &self.table.cell_value(row_idx as i32, col as i32),
-                    ));
+        for row in full_data.iter() {
+            for (i, cell) in row.iter().enumerate() {
+                if i > 0 {
+                    csv.push(',');
                 }
+                csv.push_str(&Self::escape_csv_field(cell));
             }
-            csv.push_str(&row_fields.join(","));
             csv.push('\n');
         }
 
@@ -914,41 +942,22 @@ impl ResultTableWidget {
         self.table.rows() > 0
     }
 
-    pub fn get_widget(&self) -> SmartTable {
+    pub fn get_widget(&self) -> Table {
         self.table.clone()
     }
 
     /// Cleanup method to release resources before the widget is deleted.
-    ///
-    /// FLTK memory management requires that:
-    /// 1. Callbacks capturing Rc<RefCell<T>> must be cleared to decrement reference counts
-    /// 2. Widgets must be removed from their parent before deletion
-    /// 3. Data buffers should be cleared to release memory
-    ///
-    /// This method should be called before the parent Group is deleted to ensure
-    /// proper memory cleanup of captured closures and shared data.
     pub fn cleanup(&mut self) {
         // Clear the event handler callback to release captured Rc<RefCell<T>> references.
-        // The original handler captures: table_for_handle, headers_for_handle,
-        // full_data_for_handle, and drag_state_for_handle.
-        // Setting an empty handler releases these references.
         self.table.handle(|_, _| false);
 
-        // Clear SmartTable internal data (Arc<Mutex<CellMatrix>>).
-        // SmartTable stores cell data internally via Arc, and set_opts() sets up
-        // a draw_cell callback that captures Arc clones of data, row_headers, and col_headers.
-        // Clearing the internal data releases the actual memory, even if Arc references
-        // remain in the draw_cell callback until the widget is fully destroyed.
-        {
-            let data_ref = self.table.data_ref();
-            if let Ok(mut data) = data_ref.try_lock() {
-                data.clear();
-            };
-        }
+        // Set an empty draw_cell to release captured Rc references
+        // from the virtual rendering callback.
+        self.table.draw_cell(|_, _, _, _, _, _, _, _| {});
 
-        // Reset table to 0x0 to clear row/column headers and minimize internal state.
-        // This triggers set_opts which recreates empty header vectors.
-        self.apply_table_opts(0, 0);
+        // Reset table dimensions
+        self.table.set_rows(0);
+        self.table.set_cols(0);
 
         // Clear all data buffers to release memory
         self.headers.borrow_mut().clear();
