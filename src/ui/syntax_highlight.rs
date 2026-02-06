@@ -26,16 +26,6 @@ static SQL_KEYWORDS_SET: Lazy<HashSet<&'static str>> =
 static ORACLE_FUNCTIONS_SET: Lazy<HashSet<&'static str>> =
     Lazy::new(|| ORACLE_FUNCTIONS.iter().copied().collect());
 
-/// Creates the style table for SQL syntax highlighting
-pub fn create_style_table() -> Vec<StyleTableEntry> {
-    create_style_table_with(FontProfile {
-        name: "Courier",
-        normal: fltk::enums::Font::Courier,
-        bold: fltk::enums::Font::CourierBold,
-        italic: fltk::enums::Font::CourierItalic,
-    }, 14)
-}
-
 pub fn create_style_table_with(profile: FontProfile, size: u32) -> Vec<StyleTableEntry> {
     vec![
         // A - Default text (light gray)
@@ -238,12 +228,12 @@ impl SqlHighlighter {
         while let Some(&byte) = bytes.get(idx) {
             // Check for PROMPT command at the start of a line (SQL*Plus style)
             if idx == 0 || bytes.get(idx.saturating_sub(1)) == Some(&b'\n') {
-                let line_start = idx;
                 let mut scan = idx;
                 while bytes.get(scan).map_or(false, |&b| b == b' ' || b == b'\t') {
                     scan += 1;
                 }
                 if is_prompt_keyword(bytes, scan) {
+                    let line_start = idx;
                     let mut end = scan;
                     while let Some(&b) = bytes.get(end) {
                         if b == b'\n' {
@@ -255,6 +245,25 @@ impl SqlHighlighter {
                         if let Some(style) = styles.get_mut(b) {
                             *style = STYLE_COMMENT;
                         }
+                    }
+                    idx = end;
+                    continue;
+                }
+                if is_connect_keyword(bytes, scan) {
+                    // SQL*Plus CONNECT lines (e.g. CONNECT user/pass@host:1521/FREE)
+                    // contain many punctuation tokens; style only CONNECT keyword.
+                    let keyword_end = scan + 7;
+                    for b in scan..keyword_end {
+                        if let Some(style) = styles.get_mut(b) {
+                            *style = STYLE_KEYWORD;
+                        }
+                    }
+                    let mut end = scan;
+                    while let Some(&b) = bytes.get(end) {
+                        if b == b'\n' {
+                            break;
+                        }
+                        end += 1;
                     }
                     idx = end;
                     continue;
@@ -714,6 +723,23 @@ fn is_prompt_keyword(bytes: &[u8], start: usize) -> bool {
     }
     matches!(
         bytes.get(start + 6),
+        None | Some(b' ') | Some(b'\t') | Some(b'\n')
+    )
+}
+
+fn is_connect_keyword(bytes: &[u8], start: usize) -> bool {
+    if bytes.len() < start + 7 {
+        return false;
+    }
+    if !bytes[start..start + 7]
+        .iter()
+        .zip(b"CONNECT")
+        .all(|(b, c)| b.to_ascii_uppercase() == *c)
+    {
+        return false;
+    }
+    matches!(
+        bytes.get(start + 7),
         None | Some(b' ') | Some(b'\t') | Some(b'\n')
     )
 }

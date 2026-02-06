@@ -7,7 +7,7 @@ use fltk::{
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::ui::font_settings::{profile_by_name, FontProfile};
+use crate::ui::font_settings::{configured_editor_profile, FontProfile};
 use crate::ui::theme;
 use crate::ui::ResultTableWidget;
 
@@ -49,7 +49,7 @@ impl ResultTabsWidget {
 
         let data = Rc::new(RefCell::new(Vec::<ResultTab>::new()));
         let active_index = Rc::new(RefCell::new(None));
-        let font_profile = Rc::new(Cell::new(profile_by_name("Helvetica")));
+        let font_profile = Rc::new(Cell::new(configured_editor_profile()));
         let font_size = Rc::new(Cell::new(14));
 
         tabs.begin();

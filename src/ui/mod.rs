@@ -1,6 +1,6 @@
 pub mod connection_dialog;
-pub mod font_settings;
 pub mod find_replace;
+pub mod font_settings;
 pub mod intellisense;
 pub mod main_window;
 pub mod menu;
@@ -13,11 +13,11 @@ pub mod sql_editor;
 pub mod syntax_highlight;
 pub mod theme;
 
-use fltk::{app, prelude::WindowExt, window::Window};
+use fltk::{app, prelude::WidgetExt, prelude::WindowExt, window::Window};
 
 pub use connection_dialog::*;
-pub use font_settings::*;
 pub use find_replace::*;
+pub use font_settings::*;
 pub use intellisense::*;
 pub use main_window::*;
 pub use menu::*;
@@ -30,9 +30,16 @@ pub use sql_editor::*;
 pub use syntax_highlight::*;
 
 pub fn center_on_main(window: &mut Window) {
+    if let Some(main) = app::widget_from_id::<Window>("main_window") {
+        if main.as_widget_ptr() != window.as_widget_ptr() {
+            window.clone().center_of(&main);
+            return;
+        }
+    }
+
     if let Some(main) = app::first_window() {
-        window.center_of(&main);
+        window.clone().center_of(&main);
     } else {
-        window.center_screen();
+        window.clone().center_screen();
     }
 }

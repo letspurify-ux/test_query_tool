@@ -9,6 +9,7 @@ use fltk::{
 };
 
 use crate::ui::center_on_main;
+use crate::ui::configured_editor_profile;
 use crate::ui::theme;
 
 pub struct MenuBarBuilder;
@@ -19,12 +20,10 @@ fn forward_menu_callback(menu: &mut MenuBar) {
 
 fn show_info_dialog(title: &str, content: &str, width: i32, height: i32) {
     let current_group = fltk::group::Group::try_current();
-    
+
     fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
-    let mut dialog = Window::default()
-        .with_size(width, height)
-        .with_label(title);
+    let mut dialog = Window::default().with_size(width, height).with_label(title);
     center_on_main(&mut dialog);
     dialog.set_color(theme::panel_raised());
     dialog.make_modal(true);
@@ -35,7 +34,7 @@ fn show_info_dialog(title: &str, content: &str, width: i32, height: i32) {
         .with_size(width - 20, height - 60);
     display.set_color(theme::editor_bg());
     display.set_text_color(theme::text_primary());
-    display.set_text_font(fltk::enums::Font::Courier);
+    display.set_text_font(configured_editor_profile().normal);
     display.set_text_size(14);
 
     let mut buffer = TextBuffer::default();

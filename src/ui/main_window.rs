@@ -21,12 +21,12 @@ use std::thread;
 use crate::db::{
     create_shared_connection, lock_connection, ObjectBrowser, QueryResult, SharedConnection,
 };
-use crate::ui::{
-    ConnectionDialog, FindReplaceDialog, HighlightData, IntellisenseData,
-    MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, QueryProgress, ResultTabsWidget,
-    SqlAction, SqlEditorWidget, font_settings, show_settings_dialog,
-};
 use crate::ui::theme;
+use crate::ui::{
+    font_settings, show_settings_dialog, ConnectionDialog, FindReplaceDialog, HighlightData,
+    IntellisenseData, MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, QueryProgress,
+    ResultTabsWidget, SqlAction, SqlEditorWidget,
+};
 use crate::utils::{AppConfig, QueryHistory};
 
 #[derive(Clone)]
@@ -101,11 +101,12 @@ impl MainWindow {
         let connection = create_shared_connection();
 
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
-        
+
         let mut window = Window::default()
             .with_size(1200, 800)
             .with_label("Oracle Query Tool - Rust Edition")
             .center_screen();
+        window.set_id("main_window");
         window.set_color(theme::window_bg());
 
         let mut main_flex = Flex::default_fill();
@@ -209,9 +210,8 @@ impl MainWindow {
                         return true;
                     }
                     let delta = app::event_y() - start_y;
-                    let max_top =
-                        (total_height - QUERY_SPLITTER_HEIGHT - MIN_RESULTS_HEIGHT)
-                            .max(MIN_QUERY_HEIGHT);
+                    let max_top = (total_height - QUERY_SPLITTER_HEIGHT - MIN_RESULTS_HEIGHT)
+                        .max(MIN_QUERY_HEIGHT);
                     let mut new_height = start_h + delta;
                     if new_height < MIN_QUERY_HEIGHT {
                         new_height = MIN_QUERY_HEIGHT;
@@ -246,7 +246,9 @@ impl MainWindow {
         let spacer = Frame::default();
         result_toolbar.resizable(&spacer);
 
-        let mut clear_tabs_btn = Button::default().with_size(110, 25).with_label("Clear Tabs");
+        let mut clear_tabs_btn = Button::default()
+            .with_size(110, 25)
+            .with_label("Clear Tabs");
         clear_tabs_btn.set_color(theme::button_subtle());
         clear_tabs_btn.set_label_color(theme::text_secondary());
         clear_tabs_btn.set_frame(FrameType::RFlatBox);
@@ -328,14 +330,17 @@ impl MainWindow {
 
     fn apply_font_settings(state: &mut AppState) {
         let config = state.config.borrow();
-        let editor_profile = font_settings::profile_by_name(&config.editor_font);
-        let result_profile = font_settings::profile_by_name(&config.result_font);
+        let unified_profile = font_settings::profile_by_name(&config.editor_font);
+        app::set_font(unified_profile.normal);
+        fltk::misc::Tooltip::set_font(unified_profile.normal);
+        fltk::dialog::message_set_font(unified_profile.normal, app::font_size());
         state
             .sql_editor
-            .apply_font_settings(editor_profile, config.editor_font_size);
+            .apply_font_settings(unified_profile, config.editor_font_size);
         state
             .result_tabs
-            .apply_font_settings(result_profile, config.result_font_size);
+            .apply_font_settings(unified_profile, config.result_font_size);
+        app::redraw();
     }
 
     fn adjust_query_layout_with(right_flex: &mut fltk::group::Flex, sql_group: &fltk::group::Flex) {
@@ -369,27 +374,30 @@ impl MainWindow {
         let state = self.state.clone();
         let mut state_borrow = state.borrow_mut();
         let (schema_sender, schema_receiver) = std::sync::mpsc::channel::<SchemaUpdate>();
-        
+
         // Setup SQL editor execute callback
         let state_for_execute = state.clone();
-        state_borrow.sql_editor.set_execute_callback(move |query_result| {
-            let mut s = state_for_execute.borrow_mut();
-            *s.last_result.borrow_mut() = Some(query_result.clone());
-            let conn_info = s.connection_info.borrow().clone();
-            let base_msg = if query_result.success {
-                format!(
-                    "{} | Time: {:.3}s",
-                    query_result.message,
-                    query_result.execution_time.as_secs_f64()
-                )
-            } else {
-                format!(
-                    "Error | Time: {:.3}s",
-                    query_result.execution_time.as_secs_f64()
-                )
-            };
-            s.status_bar.set_label(&format_status(&base_msg, &conn_info));
-        });
+        state_borrow
+            .sql_editor
+            .set_execute_callback(move |query_result| {
+                let mut s = state_for_execute.borrow_mut();
+                *s.last_result.borrow_mut() = Some(query_result.clone());
+                let conn_info = s.connection_info.borrow().clone();
+                let base_msg = if query_result.success {
+                    format!(
+                        "{} | Time: {:.3}s",
+                        query_result.message,
+                        query_result.execution_time.as_secs_f64()
+                    )
+                } else {
+                    format!(
+                        "Error | Time: {:.3}s",
+                        query_result.execution_time.as_secs_f64()
+                    )
+                };
+                s.status_bar
+                    .set_label(&format_status(&base_msg, &conn_info));
+            });
 
         let state_for_status = state.clone();
         state_borrow.sql_editor.set_status_callback(move |message| {
@@ -402,7 +410,11 @@ impl MainWindow {
         state_borrow.sql_editor.set_find_callback(move || {
             let (mut editor, mut buffer, popups) = {
                 let s = state_for_find.borrow_mut();
-                (s.sql_editor.get_editor(), s.sql_buffer.clone(), s.popups.clone())
+                (
+                    s.sql_editor.get_editor(),
+                    s.sql_buffer.clone(),
+                    s.popups.clone(),
+                )
             };
             FindReplaceDialog::show_find_with_registry(&mut editor, &mut buffer, popups);
         });
@@ -411,7 +423,11 @@ impl MainWindow {
         state_borrow.sql_editor.set_replace_callback(move || {
             let (mut editor, mut buffer, popups) = {
                 let s = state_for_replace.borrow_mut();
-                (s.sql_editor.get_editor(), s.sql_buffer.clone(), s.popups.clone())
+                (
+                    s.sql_editor.get_editor(),
+                    s.sql_buffer.clone(),
+                    s.popups.clone(),
+                )
             };
             FindReplaceDialog::show_replace_with_registry(&mut editor, &mut buffer, popups);
         });
@@ -488,128 +504,135 @@ impl MainWindow {
 
         let state_for_progress = state.clone();
         let schema_sender_for_progress = schema_sender.clone();
-        state_borrow.sql_editor.set_progress_callback(move |progress| {
-            let mut s = state_for_progress.borrow_mut();
-            match progress {
-                QueryProgress::BatchStart => {
-                    s.result_tab_offset = s.result_tabs.tab_count();
-                    s.fetch_row_counts.clear();
-                }
-                QueryProgress::StatementStart { index } => {
-                    let tab_index = s.result_tab_offset + index;
-                    s.result_tabs
-                        .start_statement(tab_index, &format!("Result {}", tab_index + 1));
-                    s.fetch_row_counts.remove(&index);
-                    let conn_info = s.connection_info.borrow().clone();
-                    s.status_bar.set_label(&format_status("Executing query...", &conn_info));
-                }
-                QueryProgress::SelectStart { index, columns } => {
-                    let tab_index = s.result_tab_offset + index;
-                    s.result_tabs.start_streaming(tab_index, &columns);
-                    s.fetch_row_counts.insert(index, 0);
-                    let conn_info = s.connection_info.borrow().clone();
-                    s.status_bar.set_label(&format_status("Fetching rows: 0", &conn_info));
-                }
-                QueryProgress::Rows { index, rows } => {
-                    let tab_index = s.result_tab_offset + index;
-                    let rows_len = rows.len();
-                    s.result_tabs.append_rows(tab_index, rows);
-                    let new_count = {
-                        let count = s.fetch_row_counts.entry(index).or_insert(0);
-                        *count += rows_len;
-                        *count
-                    };
-                    let conn_info = s.connection_info.borrow().clone();
-                    s.status_bar
-                        .set_label(&format_status(&format!("Fetching rows: {}", new_count), &conn_info));
-                }
-                QueryProgress::ScriptOutput { lines } => {
-                    s.result_tabs.append_script_output_lines(&lines);
-                }
-                QueryProgress::PromptInput { .. } => {}
-                QueryProgress::AutoCommitChanged { enabled } => {
-                    if let Some(menu) = app::widget_from_id::<MenuBar>("main_menu") {
-                        if let Some(mut item) = menu.find_item("&Tools/&Auto-Commit\t") {
-                            if enabled {
-                                item.set();
-                            } else {
-                                item.clear();
+        state_borrow
+            .sql_editor
+            .set_progress_callback(move |progress| {
+                let mut s = state_for_progress.borrow_mut();
+                match progress {
+                    QueryProgress::BatchStart => {
+                        s.result_tab_offset = s.result_tabs.tab_count();
+                        s.fetch_row_counts.clear();
+                    }
+                    QueryProgress::StatementStart { index } => {
+                        let tab_index = s.result_tab_offset + index;
+                        s.result_tabs
+                            .start_statement(tab_index, &format!("Result {}", tab_index + 1));
+                        s.fetch_row_counts.remove(&index);
+                        let conn_info = s.connection_info.borrow().clone();
+                        s.status_bar
+                            .set_label(&format_status("Executing query...", &conn_info));
+                    }
+                    QueryProgress::SelectStart { index, columns } => {
+                        let tab_index = s.result_tab_offset + index;
+                        s.result_tabs.start_streaming(tab_index, &columns);
+                        s.fetch_row_counts.insert(index, 0);
+                        let conn_info = s.connection_info.borrow().clone();
+                        s.status_bar
+                            .set_label(&format_status("Fetching rows: 0", &conn_info));
+                    }
+                    QueryProgress::Rows { index, rows } => {
+                        let tab_index = s.result_tab_offset + index;
+                        let rows_len = rows.len();
+                        s.result_tabs.append_rows(tab_index, rows);
+                        let new_count = {
+                            let count = s.fetch_row_counts.entry(index).or_insert(0);
+                            *count += rows_len;
+                            *count
+                        };
+                        let conn_info = s.connection_info.borrow().clone();
+                        s.status_bar.set_label(&format_status(
+                            &format!("Fetching rows: {}", new_count),
+                            &conn_info,
+                        ));
+                    }
+                    QueryProgress::ScriptOutput { lines } => {
+                        s.result_tabs.append_script_output_lines(&lines);
+                    }
+                    QueryProgress::PromptInput { .. } => {}
+                    QueryProgress::AutoCommitChanged { enabled } => {
+                        if let Some(menu) = app::widget_from_id::<MenuBar>("main_menu") {
+                            if let Some(mut item) = menu.find_item("&Tools/&Auto-Commit\t") {
+                                if enabled {
+                                    item.set();
+                                } else {
+                                    item.clear();
+                                }
                             }
                         }
+                        let status = if enabled {
+                            "Auto-commit enabled"
+                        } else {
+                            "Auto-commit disabled"
+                        };
+                        let conn_info = s.connection_info.borrow().clone();
+                        s.status_bar.set_label(&format_status(status, &conn_info));
                     }
-                    let status = if enabled {
-                        "Auto-commit enabled"
-                    } else {
-                        "Auto-commit disabled"
-                    };
-                    let conn_info = s.connection_info.borrow().clone();
-                    s.status_bar.set_label(&format_status(status, &conn_info));
-                }
-                QueryProgress::ConnectionChanged { info } => {
-                    if let Some(info) = info {
-                        *s.connection_info.borrow_mut() = Some(info.clone());
-                        s.status_bar.set_label(&format!(
-                            "Connected | {}",
-                            info.display_string()
-                        ));
-                        s.object_browser.refresh();
-                        s.sql_editor.focus();
+                    QueryProgress::ConnectionChanged { info } => {
+                        if let Some(info) = info {
+                            *s.connection_info.borrow_mut() = Some(info.clone());
+                            s.status_bar
+                                .set_label(&format!("Connected | {}", info.display_string()));
+                            s.object_browser.refresh();
+                            s.sql_editor.focus();
 
-                        let schema_sender = schema_sender_for_progress.clone();
-                        let connection = s.connection.clone();
-                        thread::spawn(move || {
-                            let conn = {
-                                let conn_guard = lock_connection(&connection);
-                                conn_guard.get_connection()
-                            };
-                            if let Some(conn) = conn {
-                                let mut data = IntellisenseData::new();
-                                let mut highlight_data = HighlightData::new();
-                                if let Ok(tables) = ObjectBrowser::get_tables(conn.as_ref()) {
-                                    highlight_data.tables = tables.clone();
-                                    data.tables = tables;
+                            let schema_sender = schema_sender_for_progress.clone();
+                            let connection = s.connection.clone();
+                            thread::spawn(move || {
+                                let conn = {
+                                    let conn_guard = lock_connection(&connection);
+                                    conn_guard.get_connection()
+                                };
+                                if let Some(conn) = conn {
+                                    let mut data = IntellisenseData::new();
+                                    let mut highlight_data = HighlightData::new();
+                                    if let Ok(tables) = ObjectBrowser::get_tables(conn.as_ref()) {
+                                        highlight_data.tables = tables.clone();
+                                        data.tables = tables;
+                                    }
+                                    if let Ok(views) = ObjectBrowser::get_views(conn.as_ref()) {
+                                        highlight_data.views = views.clone();
+                                        data.views = views;
+                                    }
+                                    data.rebuild_indices();
+                                    let _ = schema_sender.send(SchemaUpdate {
+                                        data,
+                                        highlight_data,
+                                    });
+                                    app::awake();
                                 }
-                                if let Ok(views) = ObjectBrowser::get_views(conn.as_ref()) {
-                                    highlight_data.views = views.clone();
-                                    data.views = views;
-                                }
-                                data.rebuild_indices();
-                                let _ = schema_sender.send(SchemaUpdate { data, highlight_data });
-                                app::awake();
-                            }
-                        });
-                    } else {
-                        *s.connection_info.borrow_mut() = None;
-                        s.status_bar.set_label("Disconnected");
-                        *s.sql_editor.get_intellisense_data().borrow_mut() =
-                            IntellisenseData::new();
-                        s.sql_editor
-                            .get_highlighter()
-                            .borrow_mut()
-                            .set_highlight_data(HighlightData::new());
+                            });
+                        } else {
+                            *s.connection_info.borrow_mut() = None;
+                            s.status_bar.set_label("Disconnected");
+                            *s.sql_editor.get_intellisense_data().borrow_mut() =
+                                IntellisenseData::new();
+                            s.sql_editor
+                                .get_highlighter()
+                                .borrow_mut()
+                                .set_highlight_data(HighlightData::new());
+                        }
+                    }
+                    QueryProgress::StatementFinished { index, result, .. } => {
+                        let tab_index = s.result_tab_offset + index;
+                        if !result.success && !result.message.trim().is_empty() {
+                            let lines: Vec<String> =
+                                result.message.lines().map(|l| l.to_string()).collect();
+                            s.result_tabs.append_script_output_lines(&lines);
+                            s.result_tabs.select_script_output();
+                        }
+                        if result.is_select {
+                            s.result_tabs.finish_streaming(tab_index);
+                        } else {
+                            s.result_tabs.display_result(tab_index, &result);
+                        }
+                        s.fetch_row_counts.remove(&index);
+                    }
+                    QueryProgress::BatchFinished => {
+                        s.result_tabs.finish_all_streaming();
+                        s.fetch_row_counts.clear();
                     }
                 }
-                QueryProgress::StatementFinished { index, result, .. } => {
-                    let tab_index = s.result_tab_offset + index;
-                    if !result.success && !result.message.trim().is_empty() {
-                        let lines: Vec<String> =
-                            result.message.lines().map(|l| l.to_string()).collect();
-                        s.result_tabs.append_script_output_lines(&lines);
-                        s.result_tabs.select_script_output();
-                    }
-                    if result.is_select {
-                        s.result_tabs.finish_streaming(tab_index);
-                    } else {
-                        s.result_tabs.display_result(tab_index, &result);
-                    }
-                    s.fetch_row_counts.remove(&index);
-                }
-                QueryProgress::BatchFinished => {
-                    s.result_tabs.finish_all_streaming();
-                    s.fetch_row_counts.clear();
-                }
-            }
-        });
+            });
 
         self.setup_menu_callbacks(schema_sender, schema_receiver);
     }
@@ -652,7 +675,10 @@ impl MainWindow {
                             let mut data = update.data;
                             data.rebuild_indices();
                             *s.sql_editor.get_intellisense_data().borrow_mut() = data;
-                            s.sql_editor.get_highlighter().borrow_mut().set_highlight_data(update.highlight_data);
+                            s.sql_editor
+                                .get_highlighter()
+                                .borrow_mut()
+                                .set_highlight_data(update.highlight_data);
                         }
                         Err(std::sync::mpsc::TryRecvError::Empty) => break,
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -697,23 +723,27 @@ impl MainWindow {
                                                 highlight_data.tables = tables.clone();
                                                 data.tables = tables;
                                             }
-                                            if let Ok(views) = ObjectBrowser::get_views(conn.as_ref())
+                                            if let Ok(views) =
+                                                ObjectBrowser::get_views(conn.as_ref())
                                             {
                                                 highlight_data.views = views.clone();
                                                 data.views = views;
                                             }
                                             data.rebuild_indices();
-                                            let _ =
-                                                schema_sender.send(SchemaUpdate { data, highlight_data });
+                                            let _ = schema_sender.send(SchemaUpdate {
+                                                data,
+                                                highlight_data,
+                                            });
                                             app::awake();
                                         }
                                     });
                                 }
                                 ConnectionResult::Failure(err) => {
                                     s.status_bar.set_label("Connection failed");
-                                    s.result_tabs.append_script_output_lines(
-                                        &[format!("Connection failed: {}", err)],
-                                    );
+                                    s.result_tabs.append_script_output_lines(&[format!(
+                                        "Connection failed: {}",
+                                        err
+                                    )]);
                                     s.result_tabs.select_script_output();
                                 }
                             }
@@ -785,7 +815,10 @@ impl MainWindow {
                                             path.file_name().unwrap_or_default().to_string_lossy();
                                         let conn_info = s.connection_info.borrow().clone();
                                         s.status_bar.set_label(&format_status(
-                                            &format!("Exported {} rows to {}", row_count, file_label),
+                                            &format!(
+                                                "Exported {} rows to {}",
+                                                row_count, file_label
+                                            ),
                                             &conn_info,
                                         ));
                                     }
@@ -960,7 +993,7 @@ impl MainWindow {
                             let mut s = state_for_menu.borrow_mut();
                             let result_tabs_widget = s.result_tabs.get_widget();
                             let focus_in_results = if let Some(focus) = app::focus() {
-                                focus.as_widget_ptr() == result_tabs_widget.as_widget_ptr() || 
+                                focus.as_widget_ptr() == result_tabs_widget.as_widget_ptr() ||
                                 focus.inside(&result_tabs_widget)
                             } else {
                                 false
@@ -1152,15 +1185,16 @@ impl MainWindow {
                         "Settings/Preferences..." => {
                             let config_snapshot = {
                                 let s = state_for_menu.borrow();
-                                s.config.borrow().clone()
+                                let config_snapshot = s.config.borrow().clone();
+                                config_snapshot
                             };
                             if let Some(settings) = show_settings_dialog(&config_snapshot) {
                                 let mut s = state_for_menu.borrow_mut();
                                 let save_result = {
                                     let mut config = s.config.borrow_mut();
-                                    config.editor_font = settings.editor_font;
+                                    config.editor_font = settings.font.clone();
                                     config.editor_font_size = settings.editor_size;
-                                    config.result_font = settings.result_font;
+                                    config.result_font = settings.font;
                                     config.result_font_size = settings.result_size;
                                     config.save()
                                 };
@@ -1207,7 +1241,9 @@ impl MainWindow {
     }
 
     pub fn run() {
-        let app = app::App::default().with_scheme(app::Scheme::Gtk);
+        let app = app::App::default()
+            .with_scheme(app::Scheme::Gtk)
+            .load_system_fonts();
         app::set_font_size(14);
         fltk::misc::Tooltip::set_font_size(14);
 

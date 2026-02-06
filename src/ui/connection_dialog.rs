@@ -15,8 +15,8 @@ use std::thread;
 
 use crate::db::{ConnectionInfo, DatabaseConnection};
 use crate::ui::center_on_main;
-use crate::utils::AppConfig;
 use crate::ui::theme;
+use crate::utils::AppConfig;
 
 pub struct ConnectionDialog;
 
@@ -36,7 +36,7 @@ impl ConnectionDialog {
         let config = Rc::new(RefCell::new(AppConfig::load()));
 
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
-        
+
         let mut dialog = Window::default()
             .with_size(500, 460)
             .with_label("Connect to Oracle Database");
@@ -44,9 +44,7 @@ impl ConnectionDialog {
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 
-        let mut main_flex = Flex::default()
-            .with_pos(20, 20)
-            .with_size(460, 420);
+        let mut main_flex = Flex::default().with_pos(20, 20).with_size(460, 420);
         main_flex.set_type(fltk::group::FlexType::Column);
         main_flex.set_margin(10);
         main_flex.set_spacing(5);
@@ -54,8 +52,7 @@ impl ConnectionDialog {
         // Saved Connections section
         let mut saved_flex = Flex::default();
         saved_flex.set_type(fltk::group::FlexType::Row);
-        let mut saved_label = fltk::frame::Frame::default()
-            .with_label("Saved:");
+        let mut saved_label = fltk::frame::Frame::default().with_label("Saved:");
         saved_label.set_label_color(theme::text_primary());
         saved_flex.fixed(&saved_label, 100);
 
@@ -71,9 +68,7 @@ impl ConnectionDialog {
             }
         }
 
-        let mut delete_btn = Button::default()
-            .with_size(60, 20)
-            .with_label("Delete");
+        let mut delete_btn = Button::default().with_size(60, 20).with_label("Delete");
         delete_btn.set_color(theme::button_danger());
         delete_btn.set_label_color(theme::text_primary());
         delete_btn.set_frame(FrameType::RFlatBox);
@@ -85,8 +80,7 @@ impl ConnectionDialog {
         // Connection Name
         let mut name_flex = Flex::default();
         name_flex.set_type(fltk::group::FlexType::Row);
-        let mut name_label = fltk::frame::Frame::default()
-            .with_label("Name:");
+        let mut name_label = fltk::frame::Frame::default().with_label("Name:");
         name_label.set_label_color(theme::text_primary());
         name_flex.fixed(&name_label, 100);
         let mut name_input = Input::default();
@@ -99,8 +93,7 @@ impl ConnectionDialog {
         // Username
         let mut user_flex = Flex::default();
         user_flex.set_type(fltk::group::FlexType::Row);
-        let mut user_label = fltk::frame::Frame::default()
-            .with_label("Username:");
+        let mut user_label = fltk::frame::Frame::default().with_label("Username:");
         user_label.set_label_color(theme::text_primary());
         user_flex.fixed(&user_label, 100);
         let mut user_input = Input::default();
@@ -112,8 +105,7 @@ impl ConnectionDialog {
         // Password
         let mut pass_flex = Flex::default();
         pass_flex.set_type(fltk::group::FlexType::Row);
-        let mut pass_label = fltk::frame::Frame::default()
-            .with_label("Password:");
+        let mut pass_label = fltk::frame::Frame::default().with_label("Password:");
         pass_label.set_label_color(theme::text_primary());
         pass_flex.fixed(&pass_label, 100);
         let mut pass_input = SecretInput::default();
@@ -125,8 +117,7 @@ impl ConnectionDialog {
         // Host
         let mut host_flex = Flex::default();
         host_flex.set_type(fltk::group::FlexType::Row);
-        let mut host_label = fltk::frame::Frame::default()
-            .with_label("Host:");
+        let mut host_label = fltk::frame::Frame::default().with_label("Host:");
         host_label.set_label_color(theme::text_primary());
         host_flex.fixed(&host_label, 100);
         let mut host_input = Input::default();
@@ -139,8 +130,7 @@ impl ConnectionDialog {
         // Port
         let mut port_flex = Flex::default();
         port_flex.set_type(fltk::group::FlexType::Row);
-        let mut port_label = fltk::frame::Frame::default()
-            .with_label("Port:");
+        let mut port_label = fltk::frame::Frame::default().with_label("Port:");
         port_label.set_label_color(theme::text_primary());
         port_flex.fixed(&port_label, 100);
         let mut port_input = Input::default();
@@ -153,8 +143,7 @@ impl ConnectionDialog {
         // Service Name
         let mut service_flex = Flex::default();
         service_flex.set_type(fltk::group::FlexType::Row);
-        let mut service_label = fltk::frame::Frame::default()
-            .with_label("Service:");
+        let mut service_label = fltk::frame::Frame::default().with_label("Service:");
         service_label.set_label_color(theme::text_primary());
         service_flex.fixed(&service_label, 100);
         let mut service_input = Input::default();
@@ -169,8 +158,7 @@ impl ConnectionDialog {
         save_flex.set_type(fltk::group::FlexType::Row);
         let _spacer = fltk::frame::Frame::default();
         save_flex.fixed(&_spacer, 100);
-        let mut save_check = CheckButton::default()
-            .with_label("Save this connection");
+        let mut save_check = CheckButton::default().with_label("Save this connection");
         save_check.set_label_color(theme::text_secondary());
         save_check.set_value(true);
         save_flex.end();
@@ -183,23 +171,17 @@ impl ConnectionDialog {
 
         let _spacer = fltk::frame::Frame::default();
 
-        let mut test_btn = Button::default()
-            .with_size(80, 20)
-            .with_label("Test");
+        let mut test_btn = Button::default().with_size(80, 20).with_label("Test");
         test_btn.set_color(theme::button_secondary());
         test_btn.set_label_color(theme::text_primary());
         test_btn.set_frame(FrameType::RFlatBox);
 
-        let mut connect_btn = Button::default()
-            .with_size(80, 20)
-            .with_label("Connect");
+        let mut connect_btn = Button::default().with_size(80, 20).with_label("Connect");
         connect_btn.set_color(theme::button_primary());
         connect_btn.set_label_color(theme::text_primary());
         connect_btn.set_frame(FrameType::RFlatBox);
 
-        let mut cancel_btn = Button::default()
-            .with_size(80, 20)
-            .with_label("Cancel");
+        let mut cancel_btn = Button::default().with_size(80, 20).with_label("Cancel");
         cancel_btn.set_color(theme::button_subtle());
         cancel_btn.set_label_color(theme::text_primary());
         cancel_btn.set_frame(FrameType::RFlatBox);
@@ -224,7 +206,7 @@ impl ConnectionDialog {
         let mut port_input_cb = port_input.clone();
         let mut service_input_cb = service_input.clone();
         let sender_for_click = sender.clone();
-        
+
         saved_browser.set_callback(move |browser| {
             if let Some(selected) = browser.selected_text() {
                 let cfg = config_cb.borrow();
@@ -305,10 +287,7 @@ impl ConnectionDialog {
                 &service_input_conn.value(),
             );
 
-            let _ = sender_for_connect.send(DialogMessage::Connect(
-                info,
-                save_check_conn.value(),
-            ));
+            let _ = sender_for_connect.send(DialogMessage::Connect(info, save_check_conn.value()));
             app::awake();
         });
 
@@ -351,9 +330,7 @@ impl ConnectionDialog {
                                 }
                             }
                         } else {
-                            fltk::dialog::alert_default(
-                                "Please select a connection to delete",
-                            );
+                            fltk::dialog::alert_default("Please select a connection to delete");
                         }
                     }
                     DialogMessage::Test(info) => {
@@ -365,16 +342,14 @@ impl ConnectionDialog {
                             app::awake();
                         });
                     }
-                    DialogMessage::TestResult(result) => {
-                        match result {
-                            Ok(_) => {
-                                fltk::dialog::message_default("Connection successful!");
-                            }
-                            Err(e) => {
-                                fltk::dialog::alert_default(&format!("Connection failed: {}", e));
-                            }
+                    DialogMessage::TestResult(result) => match result {
+                        Ok(_) => {
+                            fltk::dialog::message_default("Connection successful!");
                         }
-                    }
+                        Err(e) => {
+                            fltk::dialog::alert_default(&format!("Connection failed: {}", e));
+                        }
+                    },
                     DialogMessage::Connect(info, save_connection) => {
                         if save_connection {
                             let mut cfg = config.borrow_mut();
@@ -398,7 +373,9 @@ impl ConnectionDialog {
         }
 
         // Remove dialog from popups to prevent memory leak
-        popups.borrow_mut().retain(|w| w.as_widget_ptr() != dialog.as_widget_ptr());
+        popups
+            .borrow_mut()
+            .retain(|w| w.as_widget_ptr() != dialog.as_widget_ptr());
 
         let final_result = result.borrow().clone();
         final_result

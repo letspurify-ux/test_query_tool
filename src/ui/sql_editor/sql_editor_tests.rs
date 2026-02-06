@@ -450,7 +450,8 @@ fn format_sql_indents_case_expression_inside_select_clause() {
 
 #[test]
 fn format_sql_case_when_does_not_insert_extra_blank_lines() {
-    let input = "SELECT CASE WHEN a = 1 THEN 'A' WHEN a = 2 THEN 'B' ELSE 'C' END AS flag FROM dual";
+    let input =
+        "SELECT CASE WHEN a = 1 THEN 'A' WHEN a = 2 THEN 'B' ELSE 'C' END AS flag FROM dual";
     let formatted = SqlEditorWidget::format_sql_basic(input);
 
     let expected = [
@@ -892,9 +893,7 @@ fn format_sql_package_body_case_inside_parentheses_keeps_newlines() {
     let formatted = SqlEditorWidget::format_sql_basic(input);
 
     assert!(
-        formatted.contains(
-            "v_val := fn_calc ((\n        CASE\n            WHEN v_mode = 1 THEN"
-        ),
+        formatted.contains("v_val := fn_calc ((\n        CASE\n            WHEN v_mode = 1 THEN"),
         "CASE expression inside parentheses should still expand to multiline layout, got: {}",
         formatted
     );

@@ -16,6 +16,7 @@ use crate::db::{
     lock_connection, ConstraintInfo, IndexInfo, ObjectBrowser, ProcedureArgument, SequenceInfo,
     SharedConnection, TableColumnDetail,
 };
+use crate::ui::configured_editor_profile;
 use crate::ui::theme;
 
 #[derive(Clone)]
@@ -259,13 +260,10 @@ impl ObjectBrowserWidget {
 
                 match message {
                     Ok(action) => match action {
-                        ObjectActionResult::TableStructure { table_name, result } => match result
-                        {
+                        ObjectActionResult::TableStructure { table_name, result } => match result {
                             Ok(columns) => {
-                                let mut info = format!(
-                                    "=== Table Structure: {} ===\n\n",
-                                    table_name
-                                );
+                                let mut info =
+                                    format!("=== Table Structure: {} ===\n\n", table_name);
                                 info.push_str(&format!(
                                     "{:<30} {:<20} {:<10} {:<10}\n",
                                     "Column Name", "Data Type", "Nullable", "PK"
@@ -293,8 +291,7 @@ impl ObjectBrowserWidget {
                         },
                         ObjectActionResult::TableIndexes { table_name, result } => match result {
                             Ok(indexes) => {
-                                let mut info =
-                                    format!("=== Indexes: {} ===\n\n", table_name);
+                                let mut info = format!("=== Indexes: {} ===\n\n", table_name);
                                 info.push_str(&format!(
                                     "{:<30} {:<10} {:<40}\n",
                                     "Index Name", "Unique", "Columns"
@@ -322,8 +319,7 @@ impl ObjectBrowserWidget {
                         ObjectActionResult::TableConstraints { table_name, result } => match result
                         {
                             Ok(constraints) => {
-                                let mut info =
-                                    format!("=== Constraints: {} ===\n\n", table_name);
+                                let mut info = format!("=== Constraints: {} ===\n\n", table_name);
                                 info.push_str(&format!(
                                     "{:<30} {:<15} {:<25} {:<20}\n",
                                     "Constraint Name", "Type", "Columns", "Ref Table"
@@ -353,8 +349,10 @@ impl ObjectBrowserWidget {
                             Ok(info) => {
                                 let mut details =
                                     format!("=== Sequence Info: {} ===\n\n", info.name);
-                                details.push_str(&format!("{:<18} {}\n", "Min Value", info.min_value));
-                                details.push_str(&format!("{:<18} {}\n", "Max Value", info.max_value));
+                                details
+                                    .push_str(&format!("{:<18} {}\n", "Min Value", info.min_value));
+                                details
+                                    .push_str(&format!("{:<18} {}\n", "Max Value", info.max_value));
                                 details.push_str(&format!(
                                     "{:<18} {}\n",
                                     "Increment By", info.increment_by
@@ -618,9 +616,7 @@ impl ObjectBrowserWidget {
 
         for arg in &selected_args {
             let arg_label = arg.name.clone();
-            let var_base = arg_label
-                .as_deref()
-                .unwrap_or("ARG");
+            let var_base = arg_label.as_deref().unwrap_or("ARG");
             let var_name = Self::unique_var_name(var_base, arg.position, &mut used_names);
             let direction = arg
                 .in_out
@@ -837,11 +833,7 @@ impl ObjectBrowserWidget {
         upper
     }
 
-    fn unique_var_name(
-        base_name: &str,
-        position: i32,
-        used: &mut HashSet<String>,
-    ) -> String {
+    fn unique_var_name(base_name: &str, position: i32, used: &mut HashSet<String>) -> String {
         let mut cleaned = base_name
             .chars()
             .map(|ch| {
@@ -855,7 +847,12 @@ impl ObjectBrowserWidget {
         if cleaned.is_empty() {
             cleaned = format!("arg{}", position.max(1));
         }
-        if cleaned.chars().next().map(|ch| ch.is_ascii_digit()).unwrap_or(false) {
+        if cleaned
+            .chars()
+            .next()
+            .map(|ch| ch.is_ascii_digit())
+            .unwrap_or(false)
+        {
             cleaned.insert(0, '_');
         }
         let candidate = format!("v_{}", cleaned);
@@ -1024,18 +1021,13 @@ impl ObjectBrowserWidget {
                                 }
                             };
                             let result = if let Some(db_conn) = conn {
-                                ObjectBrowser::get_table_structure(
-                                    db_conn.as_ref(),
-                                    &table_name,
-                                )
-                                .map_err(|err| err.to_string())
+                                ObjectBrowser::get_table_structure(db_conn.as_ref(), &table_name)
+                                    .map_err(|err| err.to_string())
                             } else {
                                 Err("Not connected to database".to_string())
                             };
-                            let _ = sender.send(ObjectActionResult::TableStructure {
-                                table_name,
-                                result,
-                            });
+                            let _ = sender
+                                .send(ObjectActionResult::TableStructure { table_name, result });
                             app::awake();
                         });
                     }
@@ -1053,18 +1045,13 @@ impl ObjectBrowserWidget {
                                 }
                             };
                             let result = if let Some(db_conn) = conn {
-                                ObjectBrowser::get_table_indexes(
-                                    db_conn.as_ref(),
-                                    &table_name,
-                                )
-                                .map_err(|err| err.to_string())
+                                ObjectBrowser::get_table_indexes(db_conn.as_ref(), &table_name)
+                                    .map_err(|err| err.to_string())
                             } else {
                                 Err("Not connected to database".to_string())
                             };
-                            let _ = sender.send(ObjectActionResult::TableIndexes {
-                                table_name,
-                                result,
-                            });
+                            let _ = sender
+                                .send(ObjectActionResult::TableIndexes { table_name, result });
                             app::awake();
                         });
                     }
@@ -1082,18 +1069,13 @@ impl ObjectBrowserWidget {
                                 }
                             };
                             let result = if let Some(db_conn) = conn {
-                                ObjectBrowser::get_table_constraints(
-                                    db_conn.as_ref(),
-                                    &table_name,
-                                )
-                                .map_err(|err| err.to_string())
+                                ObjectBrowser::get_table_constraints(db_conn.as_ref(), &table_name)
+                                    .map_err(|err| err.to_string())
                             } else {
                                 Err("Not connected to database".to_string())
                             };
-                            let _ = sender.send(ObjectActionResult::TableConstraints {
-                                table_name,
-                                result,
-                            });
+                            let _ = sender
+                                .send(ObjectActionResult::TableConstraints { table_name, result });
                             app::awake();
                         });
                     }
@@ -1111,11 +1093,8 @@ impl ObjectBrowserWidget {
                                 }
                             };
                             let result = if let Some(db_conn) = conn {
-                                ObjectBrowser::get_sequence_info(
-                                    db_conn.as_ref(),
-                                    &sequence_name,
-                                )
-                                .map_err(|err| err.to_string())
+                                ObjectBrowser::get_sequence_info(db_conn.as_ref(), &sequence_name)
+                                    .map_err(|err| err.to_string())
                             } else {
                                 Err("Not connected to database".to_string())
                             };
@@ -1206,10 +1185,8 @@ impl ObjectBrowserWidget {
         use fltk::{prelude::*, text::TextDisplay, window::Window};
 
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
-        
-        let mut dialog = Window::default()
-            .with_size(700, 500)
-            .with_label(title);
+
+        let mut dialog = Window::default().with_size(700, 500).with_label(title);
         crate::ui::center_on_main(&mut dialog);
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
@@ -1217,7 +1194,7 @@ impl ObjectBrowserWidget {
         let mut display = TextDisplay::default().with_pos(10, 10).with_size(680, 440);
         display.set_color(theme::editor_bg());
         display.set_text_color(theme::text_primary());
-        display.set_text_font(fltk::enums::Font::Courier);
+        display.set_text_font(configured_editor_profile().normal);
         display.set_text_size(14);
 
         let mut buffer = fltk::text::TextBuffer::default();

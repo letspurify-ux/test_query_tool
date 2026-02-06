@@ -1886,6 +1886,155 @@ fn test_connect_tool_command_still_works() {
 }
 
 #[test]
+fn test_column_new_value_tool_command_parsed() {
+    let sql = "COLUMN col NEW_VALUE var";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_column_command = items.iter().any(|item| {
+        matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::ColumnNewValue {
+                column_name,
+                variable_name
+            }) if column_name == "col" && variable_name == "var"
+        )
+    });
+    assert!(
+        has_column_command,
+        "COLUMN NEW_VALUE tool command should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_column_without_new_value_is_unsupported() {
+    let sql = "COLUMN col HEADING test";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_unsupported_column = items.iter().any(|item| {
+        matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::Unsupported { raw, .. })
+                if raw.eq_ignore_ascii_case("COLUMN col HEADING test")
+        )
+    });
+    assert!(
+        has_unsupported_column,
+        "Unsupported COLUMN command should be surfaced, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_set_trimspool_command_parsed() {
+    let sql = "SET TRIMSPOOL ON";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_trimspool = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::SetTrimSpool { enabled: true })
+        ),
+    );
+    assert!(
+        has_trimspool,
+        "SET TRIMSPOOL should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_set_colsep_command_parsed() {
+    let sql = "SET COLSEP ||";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_colsep = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::SetColSep { separator }) if separator == "||"
+        ),
+    );
+    assert!(
+        has_colsep,
+        "SET COLSEP should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_set_null_command_parsed() {
+    let sql = "SET NULL (null)";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_set_null = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::SetNull { null_text }) if null_text == "(null)"
+        ),
+    );
+    assert!(
+        has_set_null,
+        "SET NULL should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_spool_file_command_parsed() {
+    let sql = "SPOOL output.log";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_spool_file = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::Spool { path: Some(path), append: false })
+                if path == "output.log"
+        ),
+    );
+    assert!(
+        has_spool_file,
+        "SPOOL file should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_spool_append_command_parsed() {
+    let sql = "SPOOL APPEND";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_spool_append = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::Spool { path: None, append: true })
+        ),
+    );
+    assert!(
+        has_spool_append,
+        "SPOOL APPEND should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_spool_off_command_parsed() {
+    let sql = "SPOOL OFF";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_spool_off = items.iter().any(
+        |item| matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::Spool { path: None, append: false })
+        ),
+    );
+    assert!(
+        has_spool_off,
+        "SPOOL OFF should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
 fn test_trigger_with_declare_and_multiline_header() {
     // TRIGGER 헤더에서 이벤트 타입(INSERT)이 별도 행에 있고,
     // DECLARE 블록과 q-quote 내의 가짜 키워드가 포함된 경우

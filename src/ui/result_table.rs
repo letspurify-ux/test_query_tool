@@ -1,6 +1,5 @@
 use fltk::{
-    app,
-    draw,
+    app, draw,
     enums::{Align, Event, FrameType, Key, Shortcut},
     menu::MenuButton,
     prelude::*,
@@ -12,7 +11,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::db::QueryResult;
-use crate::ui::font_settings::{profile_by_name, FontProfile};
+use crate::ui::font_settings::{configured_editor_profile, FontProfile};
 use crate::ui::theme;
 
 /// Find the largest valid UTF-8 boundary at or before `index`.
@@ -68,7 +67,7 @@ impl ResultTableWidget {
     pub fn with_size(x: i32, y: i32, w: i32, h: i32) -> Self {
         let headers: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
         let full_data: Rc<RefCell<Vec<Vec<String>>>> = Rc::new(RefCell::new(Vec::new()));
-        let font_profile = Rc::new(Cell::new(profile_by_name("Helvetica")));
+        let font_profile = Rc::new(Cell::new(configured_editor_profile()));
         let font_size = Rc::new(Cell::new(14));
 
         let mut table = Table::new(x, y, w, h, None);
@@ -146,18 +145,9 @@ impl ResultTableWidget {
                                 if cell_val.len() > 50 {
                                     let end = floor_char_boundary(cell_val, 47);
                                     let truncated = format!("{}...", &cell_val[..end]);
-                                    draw::draw_text2(
-                                        &truncated,
-                                        x + 4,
-                                        y,
-                                        w - 8,
-                                        h,
-                                        Align::Left,
-                                    );
+                                    draw::draw_text2(&truncated, x + 4, y, w - 8, h, Align::Left);
                                 } else {
-                                    draw::draw_text2(
-                                        cell_val, x + 4, y, w - 8, h, Align::Left,
-                                    );
+                                    draw::draw_text2(cell_val, x + 4, y, w - 8, h, Align::Left);
                                 }
                             }
                         }
@@ -293,9 +283,7 @@ impl ResultTableWidget {
                         );
                         return true;
                     }
-                    if ctrl_or_cmd
-                        && (key == Key::from_char('c') || key == Key::from_char('C'))
-                    {
+                    if ctrl_or_cmd && (key == Key::from_char('c') || key == Key::from_char('C')) {
                         Self::copy_selected_to_clipboard(
                             &table_for_handle,
                             &headers_for_handle,
@@ -303,9 +291,7 @@ impl ResultTableWidget {
                         );
                         return true;
                     }
-                    if ctrl_or_cmd
-                        && (key == Key::from_char('a') || key == Key::from_char('A'))
-                    {
+                    if ctrl_or_cmd && (key == Key::from_char('a') || key == Key::from_char('A')) {
                         let rows = table_for_handle.rows();
                         let cols = table_for_handle.cols();
                         if rows > 0 && cols > 0 {
@@ -369,9 +355,7 @@ impl ResultTableWidget {
         let mut row_hit = None;
         let mut row = start_row;
         while row < rows {
-            if let Some((_, cy, _, ch)) =
-                table.find_cell(TableContext::Cell, row, start_col)
-            {
+            if let Some((_, cy, _, ch)) = table.find_cell(TableContext::Cell, row, start_col) {
                 if mouse_y >= cy && mouse_y < cy + ch {
                     row_hit = Some(row);
                     break;
@@ -392,9 +376,7 @@ impl ResultTableWidget {
 
         let mut col = start_col;
         while col < cols {
-            if let Some((cx, _, cw, _)) =
-                table.find_cell(TableContext::Cell, row_hit, col)
-            {
+            if let Some((cx, _, cw, _)) = table.find_cell(TableContext::Cell, row_hit, col) {
                 if mouse_x >= cx && mouse_x < cx + cw {
                     return Some((row_hit, col));
                 }
@@ -452,9 +434,7 @@ impl ResultTableWidget {
             // Find row by iterating
             (0..rows)
                 .find(|&r| {
-                    if let Some((_, cy, _, ch)) =
-                        table.find_cell(TableContext::Cell, r, 0)
-                    {
+                    if let Some((_, cy, _, ch)) = table.find_cell(TableContext::Cell, r, 0) {
                         mouse_y >= cy && mouse_y < cy + ch
                     } else {
                         false
@@ -471,9 +451,7 @@ impl ResultTableWidget {
         } else {
             (0..cols)
                 .find(|&c| {
-                    if let Some((cx, _, cw, _)) =
-                        table.find_cell(TableContext::Cell, 0, c)
-                    {
+                    if let Some((cx, _, cw, _)) = table.find_cell(TableContext::Cell, 0, c) {
                         mouse_x >= cx && mouse_x < cx + cw
                     } else {
                         false
@@ -666,7 +644,8 @@ impl ResultTableWidget {
         if !result.is_select {
             self.table.set_rows(1);
             self.table.set_cols(1);
-            self.table.set_col_width(0, (result.message.len() * 8).max(200) as i32);
+            self.table
+                .set_col_width(0, (result.message.len() * 8).max(200) as i32);
             *self.headers.borrow_mut() = vec!["Result".to_string()];
             *self.full_data.borrow_mut() = vec![vec![result.message.clone()]];
             self.table.redraw();
@@ -674,8 +653,7 @@ impl ResultTableWidget {
         }
 
         if result.rows.is_empty() && result.row_count > 0 && self.table.rows() > 0 {
-            let col_names: Vec<String> =
-                result.columns.iter().map(|c| c.name.clone()).collect();
+            let col_names: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
             let col_count = col_names.len() as i32;
             if self.table.cols() < col_count {
                 self.table.set_cols(col_count);

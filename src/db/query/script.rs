@@ -701,8 +701,7 @@ impl QueryExecutor {
                     .is_some_and(|d| *d + 1 == builder.state.block_depth)
                 {
                     builder.state.case_depth_stack.pop();
-                    builder.state.block_depth =
-                        builder.state.block_depth.saturating_sub(1);
+                    builder.state.block_depth = builder.state.block_depth.saturating_sub(1);
                 } else if builder.state.block_depth > 0 {
                     builder.state.block_depth -= 1;
                 }
@@ -1343,6 +1342,10 @@ impl QueryExecutor {
             return Some(Self::parse_undefine_command(trimmed));
         }
 
+        if upper.starts_with("COLUMN") {
+            return Some(Self::parse_column_new_value_command(trimmed));
+        }
+
         if upper.starts_with("SPOOL") {
             return Some(Self::parse_spool_command(trimmed));
         }
@@ -1389,6 +1392,18 @@ impl QueryExecutor {
 
         if upper.starts_with("SET LINESIZE") {
             return Some(Self::parse_linesize_command(trimmed));
+        }
+
+        if upper.starts_with("SET TRIMSPOOL") {
+            return Some(Self::parse_trimspool_command(trimmed));
+        }
+
+        if upper.starts_with("SET COLSEP") {
+            return Some(Self::parse_colsep_command(trimmed));
+        }
+
+        if upper.starts_with("SET NULL") {
+            return Some(Self::parse_null_command(trimmed));
         }
 
         if trimmed.starts_with("@@")
@@ -1702,21 +1717,87 @@ impl QueryExecutor {
         }
     }
 
+    fn parse_column_new_value_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 4 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "COLUMN requires syntax: COLUMN <column> NEW_VALUE <variable>."
+                    .to_string(),
+                is_error: true,
+            };
+        }
+
+        if !tokens[2].eq_ignore_ascii_case("NEW_VALUE") {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "Only COLUMN ... NEW_VALUE ... is supported.".to_string(),
+                is_error: true,
+            };
+        }
+
+        if tokens.len() > 4 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "COLUMN NEW_VALUE accepts exactly one column and one variable."
+                    .to_string(),
+                is_error: true,
+            };
+        }
+
+        let column_name = tokens[1].trim();
+        let variable_name = tokens[3].trim_start_matches(':').trim();
+        if column_name.is_empty() || variable_name.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "COLUMN requires syntax: COLUMN <column> NEW_VALUE <variable>."
+                    .to_string(),
+                is_error: true,
+            };
+        }
+
+        ToolCommand::ColumnNewValue {
+            column_name: column_name.to_string(),
+            variable_name: variable_name.to_string(),
+        }
+    }
+
     fn parse_spool_command(raw: &str) -> ToolCommand {
         let rest = raw[5..].trim();
         if rest.is_empty() {
             return ToolCommand::Unsupported {
                 raw: raw.to_string(),
-                message: "SPOOL requires a file path or OFF.".to_string(),
+                message: "SPOOL requires a file path, APPEND, or OFF.".to_string(),
                 is_error: true,
             };
         }
 
         if rest.eq_ignore_ascii_case("OFF") {
-            return ToolCommand::Spool { path: None };
+            return ToolCommand::Spool {
+                path: None,
+                append: false,
+            };
         }
 
-        let cleaned = rest.trim_matches('"').trim_matches('\'').to_string();
+        if rest.eq_ignore_ascii_case("APPEND") {
+            return ToolCommand::Spool {
+                path: None,
+                append: true,
+            };
+        }
+
+        let mut append = false;
+        let path_part = if rest
+            .to_uppercase()
+            .ends_with(" APPEND")
+        {
+            append = true;
+            rest[..rest.len() - "APPEND".len()].trim()
+        } else {
+            rest
+        };
+
+        let cleaned = path_part.trim_matches('"').trim_matches('\'').to_string();
         if cleaned.is_empty() {
             return ToolCommand::Unsupported {
                 raw: raw.to_string(),
@@ -1727,6 +1808,7 @@ impl QueryExecutor {
 
         ToolCommand::Spool {
             path: Some(cleaned),
+            append,
         }
     }
 
@@ -2138,6 +2220,56 @@ impl QueryExecutor {
                 is_error: true,
             },
         }
+    }
+
+    fn parse_trimspool_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET TRIMSPOOL requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetTrimSpool { enabled: true },
+            "OFF" => ToolCommand::SetTrimSpool { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET TRIMSPOOL supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_colsep_command(raw: &str) -> ToolCommand {
+        let rest = raw[10..].trim();
+        if rest.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET COLSEP requires a separator string.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let separator = rest.trim_matches('\'').trim_matches('"').to_string();
+        ToolCommand::SetColSep { separator }
+    }
+
+    fn parse_null_command(raw: &str) -> ToolCommand {
+        let rest = raw[8..].trim();
+        if rest.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET NULL requires a display value.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let null_text = rest.trim_matches('\'').trim_matches('"').to_string();
+        ToolCommand::SetNull { null_text }
     }
 
     fn parse_script_command(raw: &str) -> ToolCommand {

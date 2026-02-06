@@ -2,7 +2,7 @@ use fltk::{
     app,
     button::Button,
     draw::set_cursor,
-    enums::{Cursor, Font, FrameType},
+    enums::{Cursor, FrameType},
     frame::Frame,
     group::{Flex, FlexType, Pack, PackType},
     input::IntInput,
@@ -18,14 +18,15 @@ use crate::db::{
     lock_connection, ConnectionInfo, QueryExecutor, QueryResult, SharedConnection,
     TableColumnDetail,
 };
+use crate::ui::font_settings::{configured_editor_profile, FontProfile};
 use crate::ui::intellisense::{IntellisenseData, IntellisensePopup};
 use crate::ui::query_history::QueryHistoryDialog;
-use crate::ui::font_settings::FontProfile;
 use crate::ui::syntax_highlight::{
-    create_style_table, create_style_table_with, HighlightData, SqlHighlighter, STYLE_COMMENT,
-    STYLE_DEFAULT, STYLE_STRING,
+    create_style_table_with, HighlightData, SqlHighlighter, STYLE_COMMENT, STYLE_DEFAULT,
+    STYLE_STRING,
 };
 use crate::ui::theme;
+use crate::utils::AppConfig;
 
 mod execution;
 mod intellisense;
@@ -196,22 +197,25 @@ impl SqlEditorWidget {
         editor.set_buffer(buffer.clone());
         editor.set_color(theme::editor_bg());
         editor.set_text_color(theme::text_primary());
-        editor.set_text_font(Font::Courier);
-        editor.set_text_size(14);
+        let editor_config = AppConfig::load();
+        let editor_profile = configured_editor_profile();
+        let editor_size = editor_config.editor_font_size;
+        editor.set_text_font(editor_profile.normal);
+        editor.set_text_size(editor_size as i32);
         editor.set_cursor_color(theme::text_primary());
         editor.wrap_mode(WrapMode::None, 0);
         editor.super_handle_first(false);
         editor.set_linenumber_width(48);
         editor.set_linenumber_fgcolor(theme::text_muted());
         editor.set_linenumber_bgcolor(theme::panel_bg());
-        editor.set_linenumber_font(Font::Courier);
-        editor.set_linenumber_size(12);
+        editor.set_linenumber_font(editor_profile.normal);
+        editor.set_linenumber_size((editor_size.saturating_sub(2)) as i32);
 
         // Windows 11 selection color
         editor.set_selection_color(theme::selection_soft());
 
         // Setup syntax highlighting
-        let style_table = create_style_table();
+        let style_table = create_style_table_with(editor_profile, editor_size);
         editor.set_highlight_data(style_buffer.clone(), style_table);
 
         // Add editor to flex and make it resizable (takes remaining space)
@@ -767,7 +771,7 @@ impl SqlEditorWidget {
         let mut display = TextDisplay::default().with_pos(10, 10).with_size(780, 440);
         display.set_color(theme::editor_bg());
         display.set_text_color(theme::text_primary());
-        display.set_text_font(fltk::enums::Font::Courier);
+        display.set_text_font(configured_editor_profile().normal);
         display.set_text_size(14);
 
         let mut buffer = fltk::text::TextBuffer::default();

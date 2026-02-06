@@ -57,16 +57,25 @@ impl AppConfig {
             if let Some(parent) = path.parent() {
                 match fs::create_dir_all(parent) {
                     Ok(()) => {}
-                    Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+                    Err(err) => {
+                        eprintln!("Config persistence error: {err}");
+                        return Err(Box::new(err));
+                    }
                 }
             }
             let content = match serde_json::to_string_pretty(self) {
                 Ok(content) => content,
-                Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+                Err(err) => {
+                    eprintln!("Config persistence error: {err}");
+                    return Err(Box::new(err));
+                }
             };
             match fs::write(path, content) {
                 Ok(()) => {}
-                Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+                Err(err) => {
+                    eprintln!("Config persistence error: {err}");
+                    return Err(Box::new(err));
+                }
             }
         }
         Ok(())
@@ -74,8 +83,7 @@ impl AppConfig {
 
     pub fn add_recent_connection(&mut self, info: ConnectionInfo) {
         // Remove existing connection with same name
-        self.recent_connections
-            .retain(|c| c.name != info.name);
+        self.recent_connections.retain(|c| c.name != info.name);
 
         // Add to front
         self.recent_connections.insert(0, info);
@@ -150,16 +158,25 @@ impl QueryHistory {
             if let Some(parent) = path.parent() {
                 match fs::create_dir_all(parent) {
                     Ok(()) => {}
-                    Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+                    Err(err) => {
+                        eprintln!("Config persistence error: {err}");
+                        return Err(Box::new(err));
+                    }
                 }
             }
             let content = match serde_json::to_string_pretty(self) {
                 Ok(content) => content,
-                Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+                Err(err) => {
+                    eprintln!("Config persistence error: {err}");
+                    return Err(Box::new(err));
+                }
             };
             match fs::write(path, content) {
                 Ok(()) => {}
-                Err(err) => { eprintln!("Config persistence error: {err}"); return Err(Box::new(err)); },
+                Err(err) => {
+                    eprintln!("Config persistence error: {err}");
+                    return Err(Box::new(err));
+                }
             }
         }
         Ok(())

@@ -47,6 +47,7 @@ pub struct CompiledObject {
 pub struct SessionState {
     pub binds: HashMap<String, BindVar>,
     pub define_vars: HashMap<String, String>,
+    pub column_new_values: HashMap<String, String>,
     pub server_output: ServerOutputConfig,
     pub last_compiled: Option<CompiledObject>,
     pub continue_on_error: bool,
@@ -60,6 +61,9 @@ pub struct SessionState {
     pub heading_enabled: bool,
     pub pagesize: u32,
     pub linesize: u32,
+    pub trimspool_enabled: bool,
+    pub colsep: String,
+    pub null_text: String,
     pub spool_path: Option<PathBuf>,
     pub spool_truncate: bool,
 }
@@ -78,6 +82,7 @@ impl Default for SessionState {
         Self {
             binds: HashMap::new(),
             define_vars: HashMap::new(),
+            column_new_values: HashMap::new(),
             server_output: ServerOutputConfig::default(),
             last_compiled: None,
             continue_on_error: false,
@@ -91,6 +96,9 @@ impl Default for SessionState {
             heading_enabled: true,
             pagesize: 14,
             linesize: 80,
+            trimspool_enabled: false,
+            colsep: " | ".to_string(),
+            null_text: "NULL".to_string(),
             spool_path: None,
             spool_truncate: false,
         }

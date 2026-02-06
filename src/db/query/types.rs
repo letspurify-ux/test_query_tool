@@ -93,6 +93,10 @@ pub enum ToolCommand {
     Undefine {
         name: String,
     },
+    ColumnNewValue {
+        column_name: String,
+        variable_name: String,
+    },
     SetErrorContinue {
         enabled: bool,
     },
@@ -127,8 +131,18 @@ pub enum ToolCommand {
     SetLineSize {
         size: u32,
     },
+    SetTrimSpool {
+        enabled: bool,
+    },
+    SetColSep {
+        separator: String,
+    },
+    SetNull {
+        null_text: String,
+    },
     Spool {
         path: Option<String>,
+        append: bool,
     },
     WheneverSqlError {
         exit: bool,

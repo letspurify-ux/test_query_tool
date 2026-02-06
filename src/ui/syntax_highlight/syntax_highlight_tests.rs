@@ -89,6 +89,35 @@ fn test_prompt_highlighting_with_leading_whitespace() {
 }
 
 #[test]
+fn test_connect_line_disables_rest_highlighting() {
+    let highlighter = SqlHighlighter::new();
+    let text = "CONNECT system/password@localhost:1521/FREE\nSELECT * FROM dual";
+    let styles = highlighter.generate_styles(text);
+
+    let first_line_end = text.find('\n').unwrap();
+    assert!(styles[0..7].chars().all(|c| c == STYLE_KEYWORD));
+    assert!(styles[7..first_line_end]
+        .chars()
+        .all(|c| c == STYLE_DEFAULT));
+
+    let select_start = text.find("SELECT").unwrap();
+    assert!(styles[select_start..select_start + 6]
+        .chars()
+        .all(|c| c == STYLE_KEYWORD));
+}
+
+#[test]
+fn test_connect_line_with_leading_whitespace_disables_rest_highlighting() {
+    let highlighter = SqlHighlighter::new();
+    let text = "  connect system/password@localhost:1521/FREE";
+    let styles = highlighter.generate_styles(text);
+
+    assert!(styles[..2].chars().all(|c| c == STYLE_DEFAULT));
+    assert!(styles[2..9].chars().all(|c| c == STYLE_KEYWORD));
+    assert!(styles[9..].chars().all(|c| c == STYLE_DEFAULT));
+}
+
+#[test]
 fn test_windowed_highlighting_limits_scope() {
     let highlighter = SqlHighlighter::new();
     let text = "SELECT col FROM table;\n".repeat(2000);

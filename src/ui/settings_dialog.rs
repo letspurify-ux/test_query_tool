@@ -1,24 +1,23 @@
 use fltk::{
     app,
+    browser::HoldBrowser,
     button::Button,
-    enums::FrameType,
+    enums::{CallbackTrigger, FrameType},
     frame::Frame,
     group::{Flex, FlexType},
-    input::IntInput,
-    menu::Choice,
+    input::{Input, IntInput},
     prelude::*,
     window::Window,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::ui::{center_on_main, font_choice_index, font_choice_labels, theme};
+use crate::ui::{available_font_names, center_on_main, theme};
 use crate::utils::AppConfig;
 
 pub struct FontSettings {
-    pub editor_font: String,
+    pub font: String,
     pub editor_size: u32,
-    pub result_font: String,
     pub result_size: u32,
 }
 
@@ -35,12 +34,61 @@ fn validate_size(label: &str, value: &str) -> Option<u32> {
     }
 }
 
+fn refill_font_list(
+    browser: &mut HoldBrowser,
+    all_fonts: &[String],
+    query: &str,
+    filtered: &mut Vec<String>,
+    selected_font: &mut String,
+) {
+    let query = query.trim().to_ascii_lowercase();
+
+    filtered.clear();
+    browser.clear();
+
+    for name in all_fonts {
+        if query.is_empty() || name.to_ascii_lowercase().contains(&query) {
+            filtered.push(name.clone());
+        }
+    }
+
+    for name in filtered.iter() {
+        browser.add(name);
+    }
+
+    if filtered.is_empty() {
+        return;
+    }
+
+    let selected_index = filtered
+        .iter()
+        .position(|name| name.eq_ignore_ascii_case(selected_font))
+        .unwrap_or(0);
+    let _ = browser.select((selected_index + 1) as i32);
+    *selected_font = filtered[selected_index].clone();
+}
+
 pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     let current_group = fltk::group::Group::try_current();
     fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
-    let width = 380;
-    let height = 240;
+    let mut font_names = available_font_names();
+    let current_font = if !config.editor_font.trim().is_empty() {
+        config.editor_font.clone()
+    } else if !config.result_font.trim().is_empty() {
+        config.result_font.clone()
+    } else {
+        "Courier".to_string()
+    };
+    if !font_names
+        .iter()
+        .any(|font_name| font_name.eq_ignore_ascii_case(&current_font))
+    {
+        font_names.push(current_font.clone());
+    }
+
+    let width = 560;
+    let height = 420;
     let mut dialog = Window::default()
         .with_size(width, height)
         .with_label("Settings");
@@ -55,41 +103,61 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     main_flex.set_margin(6);
     main_flex.set_spacing(10);
 
-    let mut editor_row = Flex::default().with_size(0, 30);
-    editor_row.set_type(FlexType::Row);
-    editor_row.set_spacing(8);
-    let mut editor_label = Frame::default().with_label("Editor font");
-    editor_label.set_label_color(theme::text_primary());
-    let mut editor_font_choice = Choice::default();
-    editor_font_choice.add_choice(&font_choice_labels());
-    editor_font_choice.set_value(font_choice_index(&config.editor_font));
-    editor_font_choice.set_color(theme::input_bg());
-    editor_font_choice.set_text_color(theme::text_primary());
+    let mut search_row = Flex::default().with_size(0, 30);
+    search_row.set_type(FlexType::Row);
+    search_row.set_spacing(8);
+    let mut search_label = Frame::default().with_label("Font search");
+    search_label.set_label_color(theme::text_primary());
+    let mut search_input = Input::default();
+    search_input.set_color(theme::input_bg());
+    search_input.set_text_color(theme::text_primary());
+    search_input.set_trigger(CallbackTrigger::Changed);
+    search_row.fixed(&search_label, 110);
+    search_row.end();
+
+    let mut list_label = Frame::default().with_label("Select font (applies to editor and results)");
+    list_label.set_label_color(theme::text_secondary());
+
+    let mut font_browser = HoldBrowser::default().with_size(0, 180);
+    font_browser.set_color(theme::input_bg());
+    font_browser.set_selection_color(theme::selection_strong());
+
+    let mut selected_row = Flex::default().with_size(0, 28);
+    selected_row.set_type(FlexType::Row);
+    selected_row.set_spacing(8);
+    let mut selected_label = Frame::default().with_label("Selected font");
+    selected_label.set_label_color(theme::text_primary());
+    let mut selected_value = Frame::default();
+    selected_value.set_label(&current_font);
+    selected_value.set_label_color(theme::text_secondary());
+    selected_row.fixed(&selected_label, 110);
+    selected_row.end();
+
+    let mut editor_size_row = Flex::default().with_size(0, 30);
+    editor_size_row.set_type(FlexType::Row);
+    editor_size_row.set_spacing(8);
+    let mut editor_size_label = Frame::default().with_label("Editor size");
+    editor_size_label.set_label_color(theme::text_primary());
     let mut editor_size_input = IntInput::default();
     editor_size_input.set_value(&config.editor_font_size.to_string());
     editor_size_input.set_color(theme::input_bg());
     editor_size_input.set_text_color(theme::text_primary());
-    editor_row.fixed(&editor_label, 110);
-    editor_row.fixed(&editor_size_input, 60);
-    editor_row.end();
+    editor_size_row.fixed(&editor_size_label, 110);
+    editor_size_row.fixed(&editor_size_input, 80);
+    editor_size_row.end();
 
-    let mut result_row = Flex::default().with_size(0, 30);
-    result_row.set_type(FlexType::Row);
-    result_row.set_spacing(8);
-    let mut result_label = Frame::default().with_label("Results font");
-    result_label.set_label_color(theme::text_primary());
-    let mut result_font_choice = Choice::default();
-    result_font_choice.add_choice(&font_choice_labels());
-    result_font_choice.set_value(font_choice_index(&config.result_font));
-    result_font_choice.set_color(theme::input_bg());
-    result_font_choice.set_text_color(theme::text_primary());
+    let mut result_size_row = Flex::default().with_size(0, 30);
+    result_size_row.set_type(FlexType::Row);
+    result_size_row.set_spacing(8);
+    let mut result_size_label = Frame::default().with_label("Results size");
+    result_size_label.set_label_color(theme::text_primary());
     let mut result_size_input = IntInput::default();
     result_size_input.set_value(&config.result_font_size.to_string());
     result_size_input.set_color(theme::input_bg());
     result_size_input.set_text_color(theme::text_primary());
-    result_row.fixed(&result_label, 110);
-    result_row.fixed(&result_size_input, 60);
-    result_row.end();
+    result_size_row.fixed(&result_size_label, 110);
+    result_size_row.fixed(&result_size_input, 80);
+    result_size_row.end();
 
     let mut button_row = Flex::default().with_size(0, 34);
     button_row.set_type(FlexType::Row);
@@ -113,13 +181,56 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     dialog.show();
     fltk::group::Group::set_current(current_group.as_ref());
 
+    let all_fonts = Rc::new(font_names);
+    let selected_font = Rc::new(RefCell::new(current_font));
+    let filtered_fonts = Rc::new(RefCell::new(Vec::<String>::new()));
+
+    {
+        let mut filtered = filtered_fonts.borrow_mut();
+        let mut selected = selected_font.borrow_mut();
+        refill_font_list(
+            &mut font_browser,
+            all_fonts.as_ref(),
+            "",
+            &mut filtered,
+            &mut selected,
+        );
+        selected_value.set_label(&selected);
+    }
+
+    let mut font_browser_for_search = font_browser.clone();
+    let all_fonts_for_search = all_fonts.clone();
+    let filtered_fonts_for_search = filtered_fonts.clone();
+    let selected_font_for_search = selected_font.clone();
+    let mut selected_value_for_search = selected_value.clone();
+    search_input.set_callback(move |input| {
+        let mut filtered = filtered_fonts_for_search.borrow_mut();
+        let mut selected = selected_font_for_search.borrow_mut();
+        refill_font_list(
+            &mut font_browser_for_search,
+            all_fonts_for_search.as_ref(),
+            &input.value(),
+            &mut filtered,
+            &mut selected,
+        );
+        selected_value_for_search.set_label(&selected);
+    });
+
+    let selected_font_for_browser = selected_font.clone();
+    let mut selected_value_for_browser = selected_value.clone();
+    font_browser.set_callback(move |browser| {
+        if let Some(name) = browser.selected_text() {
+            *selected_font_for_browser.borrow_mut() = name.clone();
+            selected_value_for_browser.set_label(&name);
+        }
+    });
+
     let result = Rc::new(RefCell::new(None::<FontSettings>));
     let result_for_ok = result.clone();
     let mut dialog_handle = dialog.clone();
-    let mut editor_font_choice_ok = editor_font_choice.clone();
-    let mut result_font_choice_ok = result_font_choice.clone();
-    let mut editor_size_input_ok = editor_size_input.clone();
-    let mut result_size_input_ok = result_size_input.clone();
+    let editor_size_input_ok = editor_size_input.clone();
+    let result_size_input_ok = result_size_input.clone();
+    let selected_font_ok = selected_font.clone();
     ok_btn.set_callback(move |_| {
         let editor_size = match validate_size("Editor", &editor_size_input_ok.value()) {
             Some(size) => size,
@@ -129,16 +240,14 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
             Some(size) => size,
             None => return,
         };
-        let editor_font = editor_font_choice_ok
-            .text(editor_font_choice_ok.value())
-            .unwrap_or_else(|| "Courier".to_string());
-        let result_font = result_font_choice_ok
-            .text(result_font_choice_ok.value())
-            .unwrap_or_else(|| "Helvetica".to_string());
+        let font = selected_font_ok.borrow().trim().to_string();
+        if font.is_empty() {
+            fltk::dialog::alert_default("Please select a font.");
+            return;
+        }
         *result_for_ok.borrow_mut() = Some(FontSettings {
-            editor_font,
+            font,
             editor_size,
-            result_font,
             result_size,
         });
         dialog_handle.hide();
@@ -155,5 +264,6 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
         app::wait();
     }
 
-    result.borrow_mut().take()
+    let final_result = result.borrow_mut().take();
+    final_result
 }

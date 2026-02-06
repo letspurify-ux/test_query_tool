@@ -2221,7 +2221,10 @@ impl ObjectBrowser {
         Self::get_object_list(conn, sql)
     }
 
-    pub fn get_sequence_info(conn: &Connection, seq_name: &str) -> Result<SequenceInfo, OracleError> {
+    pub fn get_sequence_info(
+        conn: &Connection,
+        seq_name: &str,
+    ) -> Result<SequenceInfo, OracleError> {
         let sql = r#"
             SELECT
                 sequence_name,
@@ -3069,7 +3072,6 @@ impl ObjectBrowser {
         };
         Ok(ddl)
     }
-
 }
 
 /// Detailed column information for table structure

@@ -34,10 +34,7 @@ impl ConnectionInfo {
     }
 
     pub fn connection_string(&self) -> String {
-        format!(
-            "//{}:{}/{}",
-            self.host, self.port, self.service_name
-        )
+        format!("//{}:{}/{}", self.host, self.port, self.service_name)
     }
 
     pub fn display_string(&self) -> String {
@@ -82,14 +79,15 @@ impl DatabaseConnection {
 
     pub fn connect(&mut self, info: ConnectionInfo) -> Result<(), OracleError> {
         let conn_str = info.connection_string();
-        let connection = Arc::new(match Connection::connect(
-            &info.username,
-            &info.password,
-            &conn_str,
-        ) {
-            Ok(connection) => connection,
-            Err(err) => { eprintln!("Connection error: {err}"); return Err(err); },
-        });
+        let connection = Arc::new(
+            match Connection::connect(&info.username, &info.password, &conn_str) {
+                Ok(connection) => connection,
+                Err(err) => {
+                    eprintln!("Connection error: {err}");
+                    return Err(err);
+                }
+            },
+        );
 
         self.connection = Some(connection);
         self.info = info;
@@ -131,7 +129,10 @@ impl DatabaseConnection {
         let conn_str = info.connection_string();
         match Connection::connect(&info.username, &info.password, &conn_str) {
             Ok(_connection) => {}
-            Err(err) => { eprintln!("Connection error: {err}"); return Err(err); },
+            Err(err) => {
+                eprintln!("Connection error: {err}");
+                return Err(err);
+            }
         }
         Ok(())
     }

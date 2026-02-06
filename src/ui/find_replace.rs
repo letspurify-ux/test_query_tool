@@ -1,3 +1,5 @@
+use crate::ui::center_on_main;
+use crate::ui::theme;
 use fltk::{
     button::{Button, CheckButton},
     enums::{CallbackTrigger, FrameType},
@@ -9,23 +11,34 @@ use fltk::{
 };
 use std::cell::RefCell;
 use std::rc::Rc;
-use crate::ui::center_on_main;
-use crate::ui::theme;
 
 /// Find/Replace dialog
 pub struct FindReplaceDialog;
 
 impl FindReplaceDialog {
-    pub fn show_find_with_registry(editor: &mut TextEditor, buffer: &mut TextBuffer, popups: Rc<RefCell<Vec<Window>>>) {
+    pub fn show_find_with_registry(
+        editor: &mut TextEditor,
+        buffer: &mut TextBuffer,
+        popups: Rc<RefCell<Vec<Window>>>,
+    ) {
         Self::show_dialog(editor, buffer, false, popups);
     }
 
     /// Show find and replace dialog
-    pub fn show_replace_with_registry(editor: &mut TextEditor, buffer: &mut TextBuffer, popups: Rc<RefCell<Vec<Window>>>) {
+    pub fn show_replace_with_registry(
+        editor: &mut TextEditor,
+        buffer: &mut TextBuffer,
+        popups: Rc<RefCell<Vec<Window>>>,
+    ) {
         Self::show_dialog(editor, buffer, true, popups);
     }
 
-    fn show_dialog(editor: &mut TextEditor, buffer: &mut TextBuffer, show_replace: bool, popups: Rc<RefCell<Vec<Window>>>) {
+    fn show_dialog(
+        editor: &mut TextEditor,
+        buffer: &mut TextBuffer,
+        show_replace: bool,
+        popups: Rc<RefCell<Vec<Window>>>,
+    ) {
         enum DialogMessage {
             FindNext {
                 search_text: String,
@@ -52,17 +65,13 @@ impl FindReplaceDialog {
         let height = if show_replace { 180 } else { 130 };
 
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
-        
-        let mut dialog = Window::default()
-            .with_size(450, height)
-            .with_label(title);
+
+        let mut dialog = Window::default().with_size(450, height).with_label(title);
         center_on_main(&mut dialog);
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 
-        let mut main_flex = Flex::default()
-            .with_pos(10, 10)
-            .with_size(430, height - 20);
+        let mut main_flex = Flex::default().with_pos(10, 10).with_size(430, height - 20);
         main_flex.set_type(fltk::group::FlexType::Column);
         main_flex.set_spacing(5);
 
@@ -113,17 +122,13 @@ impl FindReplaceDialog {
 
         let _spacer = fltk::frame::Frame::default();
 
-        let mut find_next_btn = Button::default()
-            .with_size(90, 20)
-            .with_label("Find Next");
+        let mut find_next_btn = Button::default().with_size(90, 20).with_label("Find Next");
         find_next_btn.set_color(theme::button_primary());
         find_next_btn.set_label_color(theme::text_primary());
         find_next_btn.set_frame(FrameType::RFlatBox);
 
         let replace_btn = if show_replace {
-            let mut btn = Button::default()
-                .with_size(90, 20)
-                .with_label("Replace");
+            let mut btn = Button::default().with_size(90, 20).with_label("Replace");
             btn.set_color(theme::button_secondary());
             btn.set_label_color(theme::text_primary());
             btn.set_frame(FrameType::RFlatBox);
@@ -146,9 +151,7 @@ impl FindReplaceDialog {
             None
         };
 
-        let mut close_btn = Button::default()
-            .with_size(70, 20)
-            .with_label("Close");
+        let mut close_btn = Button::default().with_size(70, 20).with_label("Close");
         close_btn.set_color(theme::button_subtle());
         close_btn.set_label_color(theme::text_primary());
         close_btn.set_frame(FrameType::RFlatBox);
@@ -280,10 +283,7 @@ impl FindReplaceDialog {
                         if let Some((match_start, match_end)) =
                             find_next_match(&text, &search_text, start_pos, case_sensitive)
                         {
-                            buffer.select(
-                                match_start as i32,
-                                match_end as i32,
-                            );
+                            buffer.select(match_start as i32, match_end as i32);
                             editor.set_insert_position(match_end as i32);
                             editor.show_insert_position();
                             // Use match_end instead of match_start + 1 to avoid UTF-8 boundary issues
@@ -364,10 +364,7 @@ impl FindReplaceDialog {
                         };
 
                         buffer.set_text(&new_text);
-                        fltk::dialog::message_default(&format!(
-                            "Replaced {} occurrences",
-                            count
-                        ));
+                        fltk::dialog::message_default(&format!("Replaced {} occurrences", count));
                     }
                     DialogMessage::Close => {
                         dialog.hide();
@@ -377,7 +374,9 @@ impl FindReplaceDialog {
         }
 
         // Remove dialog from popups to prevent memory leak
-        popups.borrow_mut().retain(|w| w.as_widget_ptr() != dialog.as_widget_ptr());
+        popups
+            .borrow_mut()
+            .retain(|w| w.as_widget_ptr() != dialog.as_widget_ptr());
     }
 
     /// Find next occurrence (for F3 shortcut)
@@ -398,10 +397,7 @@ impl FindReplaceDialog {
         if let Some((match_start, match_end)) =
             find_next_match(&text, search_text, current_pos, case_sensitive)
         {
-            buffer.select(
-                match_start as i32,
-                match_end as i32,
-            );
+            buffer.select(match_start as i32, match_end as i32);
             editor.set_insert_position(match_end as i32);
             editor.show_insert_position();
             true

@@ -11,8 +11,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ui::center_on_main;
-use crate::utils::config::{QueryHistory, QueryHistoryEntry};
+use crate::ui::configured_editor_profile;
 use crate::ui::theme;
+use crate::utils::config::{QueryHistory, QueryHistoryEntry};
 
 /// Find the largest valid UTF-8 boundary at or before `index`.
 fn floor_char_boundary(s: &str, index: usize) -> usize {
@@ -41,7 +42,7 @@ impl QueryHistoryDialog {
         let history = QueryHistory::load();
 
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
-        
+
         let mut dialog = Window::default()
             .with_size(800, 500)
             .with_label("Query History");
@@ -49,9 +50,7 @@ impl QueryHistoryDialog {
         dialog.set_color(theme::panel_raised());
         dialog.make_modal(true);
 
-        let mut main_flex = Flex::default()
-            .with_pos(10, 10)
-            .with_size(780, 480);
+        let mut main_flex = Flex::default().with_pos(10, 10).with_size(780, 480);
         main_flex.set_type(fltk::group::FlexType::Column);
         main_flex.set_spacing(5);
 
@@ -65,8 +64,8 @@ impl QueryHistoryDialog {
         list_flex.set_type(fltk::group::FlexType::Column);
         list_flex.set_spacing(5);
 
-        let mut list_label = fltk::frame::Frame::default()
-            .with_label("Query History (Most Recent First):");
+        let mut list_label =
+            fltk::frame::Frame::default().with_label("Query History (Most Recent First):");
         list_label.set_label_color(theme::text_primary());
         list_flex.fixed(&list_label, 20);
 
@@ -94,8 +93,7 @@ impl QueryHistoryDialog {
         preview_flex.set_type(fltk::group::FlexType::Column);
         preview_flex.set_spacing(5);
 
-        let mut preview_label = fltk::frame::Frame::default()
-            .with_label("SQL Preview:");
+        let mut preview_label = fltk::frame::Frame::default().with_label("SQL Preview:");
         preview_label.set_label_color(theme::text_primary());
         preview_flex.fixed(&preview_label, 20);
 
@@ -104,7 +102,7 @@ impl QueryHistoryDialog {
         preview_display.set_buffer(preview_buffer.clone());
         preview_display.set_color(theme::editor_bg());
         preview_display.set_text_color(theme::text_primary());
-        preview_display.set_text_font(fltk::enums::Font::Courier);
+        preview_display.set_text_font(configured_editor_profile().normal);
         preview_display.set_text_size(14);
 
         preview_flex.end();
@@ -118,9 +116,7 @@ impl QueryHistoryDialog {
 
         let _spacer = fltk::frame::Frame::default();
 
-        let mut use_btn = Button::default()
-            .with_size(120, 20)
-            .with_label("Use Query");
+        let mut use_btn = Button::default().with_size(120, 20).with_label("Use Query");
         use_btn.set_color(theme::button_primary());
         use_btn.set_label_color(theme::text_primary());
         use_btn.set_frame(FrameType::RFlatBox);
@@ -132,9 +128,7 @@ impl QueryHistoryDialog {
         clear_btn.set_label_color(theme::text_primary());
         clear_btn.set_frame(FrameType::RFlatBox);
 
-        let mut close_btn = Button::default()
-            .with_size(80, 20)
-            .with_label("Close");
+        let mut close_btn = Button::default().with_size(80, 20).with_label("Close");
         close_btn.set_color(theme::button_subtle());
         close_btn.set_label_color(theme::text_primary());
         close_btn.set_frame(FrameType::RFlatBox);
@@ -235,7 +229,9 @@ impl QueryHistoryDialog {
         }
 
         // Remove dialog from popups to prevent memory leak
-        popups.borrow_mut().retain(|w| w.as_widget_ptr() != dialog.as_widget_ptr());
+        popups
+            .borrow_mut()
+            .retain(|w| w.as_widget_ptr() != dialog.as_widget_ptr());
 
         let result = selected_sql.borrow().clone();
         result
