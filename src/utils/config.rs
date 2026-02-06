@@ -4,11 +4,14 @@ use std::path::PathBuf;
 
 use crate::db::ConnectionInfo;
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(default)]
 pub struct AppConfig {
     pub recent_connections: Vec<ConnectionInfo>,
     pub last_connection: Option<String>,
+    pub editor_font: String,
     pub editor_font_size: u32,
+    pub result_font: String,
     pub result_font_size: u32,
     pub max_rows: u32,
     pub auto_commit: bool,
@@ -19,7 +22,9 @@ impl AppConfig {
         Self {
             recent_connections: Vec::new(),
             last_connection: None,
+            editor_font: "Courier".to_string(),
             editor_font_size: 14,
+            result_font: "Helvetica".to_string(),
             result_font_size: 14,
             max_rows: 1000,
             auto_commit: false,
@@ -89,6 +94,12 @@ impl AppConfig {
 
     pub fn get_all_connections(&self) -> &Vec<ConnectionInfo> {
         &self.recent_connections
+    }
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

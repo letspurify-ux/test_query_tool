@@ -20,9 +20,10 @@ use crate::db::{
 };
 use crate::ui::intellisense::{IntellisenseData, IntellisensePopup};
 use crate::ui::query_history::QueryHistoryDialog;
+use crate::ui::font_settings::FontProfile;
 use crate::ui::syntax_highlight::{
-    create_style_table, HighlightData, SqlHighlighter, STYLE_COMMENT, STYLE_DEFAULT,
-    STYLE_STRING,
+    create_style_table, create_style_table_with, HighlightData, SqlHighlighter, STYLE_COMMENT,
+    STYLE_DEFAULT, STYLE_STRING,
 };
 use crate::ui::theme;
 
@@ -950,6 +951,20 @@ impl SqlEditorWidget {
 
     pub fn get_buffer(&self) -> TextBuffer {
         self.buffer.clone()
+    }
+
+    pub fn apply_font_settings(&mut self, profile: FontProfile, size: u32) {
+        let size_i32 = size as i32;
+        self.editor.set_text_font(profile.normal);
+        self.editor.set_text_size(size_i32);
+        self.editor.set_linenumber_font(profile.normal);
+        self.editor
+            .set_linenumber_size((size.saturating_sub(2)) as i32);
+        let style_table = create_style_table_with(profile, size);
+        self.editor
+            .set_highlight_data(self.style_buffer.clone(), style_table);
+        self.refresh_highlighting();
+        self.editor.redraw();
     }
 
     #[allow(dead_code)]

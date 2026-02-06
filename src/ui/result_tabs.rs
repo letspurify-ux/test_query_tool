@@ -4,9 +4,10 @@ use fltk::{
     text::{TextBuffer, TextDisplay},
     widget::Widget,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use crate::ui::font_settings::{profile_by_name, FontProfile};
 use crate::ui::theme;
 use crate::ui::ResultTableWidget;
 
@@ -16,6 +17,8 @@ pub struct ResultTabsWidget {
     data: Rc<RefCell<Vec<ResultTab>>>,
     active_index: Rc<RefCell<Option<usize>>>,
     script_output: Rc<RefCell<ScriptOutputTab>>,
+    font_profile: Rc<Cell<FontProfile>>,
+    font_size: Rc<Cell<u32>>,
 }
 
 #[derive(Clone)]
@@ -46,6 +49,8 @@ impl ResultTabsWidget {
 
         let data = Rc::new(RefCell::new(Vec::<ResultTab>::new()));
         let active_index = Rc::new(RefCell::new(None));
+        let font_profile = Rc::new(Cell::new(profile_by_name("Helvetica")));
+        let font_size = Rc::new(Cell::new(14));
 
         tabs.begin();
         let x = tabs.x();
@@ -64,8 +69,9 @@ impl ResultTabsWidget {
         let mut script_display = TextDisplay::new(display_x, display_y, display_w, display_h, None);
         script_display.set_color(theme::panel_bg());
         script_display.set_text_color(theme::text_primary());
-        script_display.set_text_font(fltk::enums::Font::Courier);
-        script_display.set_text_size(14);
+        let script_profile = font_profile.get();
+        script_display.set_text_font(script_profile.normal);
+        script_display.set_text_size(font_size.get() as i32);
         let mut script_buffer = TextBuffer::default();
         script_buffer.set_text("");
         script_display.set_buffer(script_buffer.clone());
@@ -112,11 +118,28 @@ impl ResultTabsWidget {
             data,
             active_index,
             script_output,
+            font_profile,
+            font_size,
         }
     }
 
     pub fn get_widget(&self) -> Tabs {
         self.tabs.clone()
+    }
+
+    pub fn apply_font_settings(&mut self, profile: FontProfile, size: u32) {
+        self.font_profile.set(profile);
+        self.font_size.set(size);
+        {
+            let mut script_output = self.script_output.borrow_mut();
+            script_output.display.set_text_font(profile.normal);
+            script_output.display.set_text_size(size as i32);
+            script_output.display.redraw();
+        }
+        let mut data = self.data.borrow_mut();
+        for tab in data.iter_mut() {
+            tab.table.apply_font_settings(profile, size);
+        }
     }
 
     pub fn clear(&mut self) {
@@ -188,7 +211,8 @@ impl ResultTabsWidget {
         group.set_label_color(theme::text_secondary());
 
         group.begin();
-        let table = ResultTableWidget::with_size(x, y, w, h);
+        let mut table = ResultTableWidget::with_size(x, y, w, h);
+        table.apply_font_settings(self.font_profile.get(), self.font_size.get());
         let widget = table.get_widget();
         group.resizable(&widget);
         group.end();

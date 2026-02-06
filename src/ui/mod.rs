@@ -1,4 +1,5 @@
 pub mod connection_dialog;
+pub mod font_settings;
 pub mod find_replace;
 pub mod intellisense;
 pub mod main_window;
@@ -7,6 +8,7 @@ pub mod object_browser;
 pub mod query_history;
 pub mod result_table;
 pub mod result_tabs;
+pub mod settings_dialog;
 pub mod sql_editor;
 pub mod syntax_highlight;
 pub mod theme;
@@ -14,6 +16,7 @@ pub mod theme;
 use fltk::{app, prelude::WindowExt, window::Window};
 
 pub use connection_dialog::*;
+pub use font_settings::*;
 pub use find_replace::*;
 pub use intellisense::*;
 pub use main_window::*;
@@ -22,6 +25,7 @@ pub use object_browser::*;
 pub use query_history::*;
 pub use result_table::*;
 pub use result_tabs::*;
+pub use settings_dialog::*;
 pub use sql_editor::*;
 pub use syntax_highlight::*;
 

@@ -1,11 +1,12 @@
 use fltk::{
-    enums::{Color, Font},
+    enums::Color,
     text::{StyleTableEntry, TextBuffer},
 };
 use once_cell::sync::Lazy;
 use std::collections::HashSet;
 
 use super::intellisense::{ORACLE_FUNCTIONS, SQL_KEYWORDS};
+use crate::ui::font_settings::FontProfile;
 use crate::ui::theme;
 
 // Style characters for different token types
@@ -27,66 +28,75 @@ static ORACLE_FUNCTIONS_SET: Lazy<HashSet<&'static str>> =
 
 /// Creates the style table for SQL syntax highlighting
 pub fn create_style_table() -> Vec<StyleTableEntry> {
+    create_style_table_with(FontProfile {
+        name: "Courier",
+        normal: fltk::enums::Font::Courier,
+        bold: fltk::enums::Font::CourierBold,
+        italic: fltk::enums::Font::CourierItalic,
+    }, 14)
+}
+
+pub fn create_style_table_with(profile: FontProfile, size: u32) -> Vec<StyleTableEntry> {
     vec![
         // A - Default text (light gray)
         StyleTableEntry {
             color: theme::text_primary(),
-            font: Font::Courier,
-            size: 14,
+            font: profile.normal,
+            size: size as i32,
         },
         // B - SQL Keywords (blue)
         StyleTableEntry {
             color: Color::from_rgb(86, 156, 214),
-            font: Font::CourierBold,
-            size: 14,
+            font: profile.bold,
+            size: size as i32,
         },
         // C - Functions (light purple/magenta)
         StyleTableEntry {
             color: Color::from_rgb(220, 220, 170),
-            font: Font::Courier,
-            size: 14,
+            font: profile.normal,
+            size: size as i32,
         },
         // D - Strings (orange)
         StyleTableEntry {
             color: Color::from_rgb(206, 145, 120),
-            font: Font::Courier,
-            size: 14,
+            font: profile.normal,
+            size: size as i32,
         },
         // E - Comments (green)
         StyleTableEntry {
             color: Color::from_rgb(106, 153, 85),
-            font: Font::CourierItalic,
-            size: 14,
+            font: profile.italic,
+            size: size as i32,
         },
         // F - Numbers (light green)
         StyleTableEntry {
             color: Color::from_rgb(181, 206, 168),
-            font: Font::Courier,
-            size: 14,
+            font: profile.normal,
+            size: size as i32,
         },
         // G - Operators (white)
         StyleTableEntry {
             color: theme::text_secondary(),
-            font: Font::Courier,
-            size: 14,
+            font: profile.normal,
+            size: size as i32,
         },
         // H - Identifiers/Table names (cyan)
         StyleTableEntry {
             color: Color::from_rgb(78, 201, 176),
-            font: Font::Courier,
-            size: 14,
+            font: profile.normal,
+            size: size as i32,
         },
         // I - Hints (gold/yellow)
         StyleTableEntry {
             color: Color::from_rgb(255, 215, 0),
-            font: Font::CourierItalic,
-            size: 14,
+            font: profile.italic,
+            size: size as i32,
         },
         // J - DateTime literals (DATE '...', TIMESTAMP '...', INTERVAL '...')
         StyleTableEntry {
             color: Color::from_rgb(255, 160, 122),
-            font: Font::Courier,
-            size: 14,
+            font: profile.normal,
+            size: size as i32,
         },
     ]
 }

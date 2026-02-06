@@ -24,10 +24,10 @@ use crate::db::{
 use crate::ui::{
     ConnectionDialog, FindReplaceDialog, HighlightData, IntellisenseData,
     MenuBarBuilder, ObjectBrowserWidget, QueryHistoryDialog, QueryProgress, ResultTabsWidget,
-    SqlAction, SqlEditorWidget,
+    SqlAction, SqlEditorWidget, font_settings, show_settings_dialog,
 };
 use crate::ui::theme;
-use crate::utils::QueryHistory;
+use crate::utils::{AppConfig, QueryHistory};
 
 #[derive(Clone)]
 struct SchemaUpdate {
@@ -51,6 +51,7 @@ pub struct AppState {
     pub right_flex: Flex,
     pub query_split_adjusted: Rc<Cell<bool>>,
     pub connection_info: Rc<RefCell<Option<crate::db::ConnectionInfo>>>,
+    pub config: Rc<RefCell<AppConfig>>,
 }
 
 /// 접속 정보를 상태 표시줄 메시지 끝에 붙는 헬퍼
@@ -96,6 +97,7 @@ const MIN_RESULTS_HEIGHT: i32 = RESULT_TOOLBAR_HEIGHT + MIN_RESULTS_BODY_HEIGHT;
 
 impl MainWindow {
     pub fn new() -> Self {
+        let config = AppConfig::load();
         let connection = create_shared_connection();
 
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
@@ -302,11 +304,13 @@ impl MainWindow {
             right_flex: right_flex.clone(),
             query_split_adjusted: query_split_adjusted.clone(),
             connection_info: Rc::new(RefCell::new(None)),
+            config: Rc::new(RefCell::new(config)),
         }));
 
         {
             let mut state_borrow = state.borrow_mut();
             Self::adjust_query_layout(&mut state_borrow);
+            Self::apply_font_settings(&mut state_borrow);
         }
 
         Self { state }
@@ -320,6 +324,18 @@ impl MainWindow {
         } else {
             Self::adjust_query_layout_with(&mut right_flex, &sql_group);
         }
+    }
+
+    fn apply_font_settings(state: &mut AppState) {
+        let config = state.config.borrow();
+        let editor_profile = font_settings::profile_by_name(&config.editor_font);
+        let result_profile = font_settings::profile_by_name(&config.result_font);
+        state
+            .sql_editor
+            .apply_font_settings(editor_profile, config.editor_font_size);
+        state
+            .result_tabs
+            .apply_font_settings(result_profile, config.result_font_size);
     }
 
     fn adjust_query_layout_with(right_flex: &mut fltk::group::Flex, sql_group: &fltk::group::Flex) {
@@ -1132,6 +1148,30 @@ impl MainWindow {
                             let mut s = state_for_menu.borrow_mut();
                             let conn_info = s.connection_info.borrow().clone();
                             s.status_bar.set_label(&format_status(status, &conn_info));
+                        }
+                        "Settings/Preferences..." => {
+                            let config_snapshot = {
+                                let s = state_for_menu.borrow();
+                                s.config.borrow().clone()
+                            };
+                            if let Some(settings) = show_settings_dialog(&config_snapshot) {
+                                let mut s = state_for_menu.borrow_mut();
+                                let save_result = {
+                                    let mut config = s.config.borrow_mut();
+                                    config.editor_font = settings.editor_font;
+                                    config.editor_font_size = settings.editor_size;
+                                    config.result_font = settings.result_font;
+                                    config.result_font_size = settings.result_size;
+                                    config.save()
+                                };
+                                if let Err(err) = save_result {
+                                    fltk::dialog::alert_default(&format!(
+                                        "Failed to save settings: {}",
+                                        err
+                                    ));
+                                }
+                                MainWindow::apply_font_settings(&mut s);
+                            }
                         }
                         _ => {}
                     }
