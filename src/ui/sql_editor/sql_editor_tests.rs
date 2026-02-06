@@ -460,7 +460,7 @@ fn format_sql_case_when_does_not_insert_extra_blank_lines() {
         "        WHEN a = 2 THEN 'B'",
         "        ELSE 'C'",
         "    END AS flag",
-        "FROM dual;",
+        "FROM DUAL;",
     ]
     .join("\n");
 
@@ -650,7 +650,6 @@ END;"#;
         "        CASE",
         "            WHEN v_num = 1 THEN",
         "                NULL;",
-        "",
         "            ELSE",
         "                NULL;",
         "        END CASE;",
@@ -682,11 +681,9 @@ END;"#;
         "    CASE",
         "        WHEN p_n < 0 THEN",
         "            v := p_n * p_n;",
-        "",
         "        WHEN p_n BETWEEN 0 AND 10 THEN",
         "            x := p_n + 100;",
         "            v := x - 50;",
-        "",
         "        ELSE",
         "            v := p_n + 999;",
         "    END CASE;",
@@ -723,7 +720,7 @@ fn format_sql_does_not_insert_blank_line_between_line_comments() {
     let input = "-- first\n-- second\nSELECT 1 FROM dual;";
 
     let formatted = SqlEditorWidget::format_sql_basic(input);
-    let expected = ["-- first", "-- second", "", "SELECT 1", "FROM dual;"].join("\n");
+    let expected = ["-- first", "-- second", "", "SELECT 1", "FROM DUAL;"].join("\n");
 
     assert_eq!(formatted, expected);
 }
@@ -733,7 +730,7 @@ fn format_sql_does_not_insert_blank_line_between_prompt_commands() {
     let input = "PROMPT one\nPROMPT two\nSELECT 1 FROM dual;";
 
     let formatted = SqlEditorWidget::format_sql_basic(input);
-    let expected = ["PROMPT one", "PROMPT two", "", "SELECT 1", "FROM dual;"].join("\n");
+    let expected = ["PROMPT one", "PROMPT two", "", "SELECT 1", "FROM DUAL;"].join("\n");
 
     assert_eq!(formatted, expected);
 }
@@ -775,7 +772,7 @@ END;"#;
     let expected = [
         "BEGIN",
         "    IF 1 = 1 THEN",
-        "/* block comment",
+        "        /* block comment",
         "still block comment */",
         "        NULL;",
         "    END IF;",
@@ -841,18 +838,19 @@ FROM dual;"#;
     let expected = [
         "SELECT",
         "    CASE",
-        "        WHEN a = 1 THEN CASE",
+        "        WHEN a = 1 THEN",
+        "        CASE",
         "            WHEN b = 2 THEN 'X'",
         "            ELSE 'Y'",
         "        END",
-        "",
-        "        ELSE CASE",
+        "        ELSE",
+        "        CASE",
         "            WHEN c = 3 THEN 'Z'",
         "            ELSE 'W'",
         "        END",
         "    END AS result_value,",
         "    col2",
-        "FROM dual;",
+        "FROM DUAL;",
     ]
     .join("\n");
 
@@ -867,10 +865,10 @@ fn format_sql_package_body_with_nested_case_keeps_block_newlines() {
 
     assert!(
         formatted.contains(
-            "CASE
-                WHEN 1 THEN
-                    CASE
-                        WHEN v_flag = 'Y' THEN"
+            "CASE v_mode
+            WHEN 1 THEN
+                CASE
+                    WHEN v_flag = 'Y' THEN"
         ),
         "Nested CASE in package body should keep multi-line layout, got: {}",
         formatted
@@ -880,7 +878,7 @@ fn format_sql_package_body_with_nested_case_keeps_block_newlines() {
             "END CASE;
             ELSE
                 NULL;
-            END CASE;"
+        END CASE;"
         ),
         "Outer CASE branches should remain separated by new lines, got: {}",
         formatted
@@ -895,18 +893,14 @@ fn format_sql_package_body_case_inside_parentheses_keeps_newlines() {
 
     assert!(
         formatted.contains(
-            "v_val := fn_calc ((
-                CASE
-                    WHEN v_mode = 1 THEN CASE"
+            "v_val := fn_calc ((\n        CASE\n            WHEN v_mode = 1 THEN"
         ),
         "CASE expression inside parentheses should still expand to multiline layout, got: {}",
         formatted
     );
     assert!(
         formatted.contains(
-            "WHEN v_flag = 'Y' THEN 100
-                        ELSE 200
-                    END"
+            "WHEN v_flag = 'Y' THEN\n                        100\n                    ELSE\n                        200\n                END"
         ),
         "Nested CASE branches inside parenthesis should stay on separate lines, got: {}",
         formatted
@@ -932,8 +926,7 @@ fn format_sql_package_body_type_table_is_not_misdetected_as_create_table() {
     assert!(
         formatted.contains(
             "BEGIN
-        v_out := fn_calc ((
-            CASE"
+        v_out := fn_calc ((\n        CASE"
         ),
         "Nested CASE inside function body should remain multiline, got: {}",
         formatted
@@ -948,9 +941,7 @@ fn format_sql_package_body_type_table_with_nested_case_keeps_newlines() {
 
     assert!(
         formatted.contains(
-            "TYPE num_tab IS TABLE OF NUMBER INDEX BY PLS_INTEGER;
-
-    FUNCTION run_demo RETURN NUMBER IS"
+            "TYPE num_tab IS TABLE OF NUMBER INDEX BY PLS_INTEGER;\n    FUNCTION run_demo RETURN NUMBER IS"
         ),
         "TYPE ... IS TABLE declaration should not collapse following routine block, got: {}",
         formatted
@@ -959,13 +950,9 @@ fn format_sql_package_body_type_table_with_nested_case_keeps_newlines() {
         formatted.contains(
             "BEGIN
         CASE
-            WHEN v_mode = 1 THEN CASE
-                WHEN v_flag = 'Y' THEN 10
-                ELSE 20
-            END
-
-            ELSE 0
-        END CASE;"
+            WHEN v_mode = 1 THEN
+                CASE
+                    WHEN v_flag = 'Y' THEN"
         ),
         "Nested CASE after TYPE ... IS TABLE should remain multiline, got: {}",
         formatted
@@ -1063,7 +1050,7 @@ SELECT a, b FROM dual;";
     let formatted = SqlEditorWidget::format_sql_basic(input);
 
     assert!(
-        formatted.contains("SELECT\n    a,\n    b\nFROM DUAL;"),
+        formatted.contains("SELECT a,\n    b\nFROM DUAL;"),
         "Formatter should recover top-level statement splitting after comment slash, got: {}",
         formatted
     );

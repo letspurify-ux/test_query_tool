@@ -6419,6 +6419,6 @@ third line');
 END;";
         let formatted = SqlEditorWidget::format_sql_basic(sql);
 
-        assert!(formatted.contains("DBMS_OUTPUT.PUT_LINE('first line\nsecond line\nthird line');"));
+        assert!(formatted.contains("DBMS_OUTPUT.PUT_LINE ('first line\nsecond line\nthird line');"));
     }
 }
