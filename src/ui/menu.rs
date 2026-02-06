@@ -324,6 +324,14 @@ impl MenuBarBuilder {
             forward_menu_callback,
         );
 
+        // Settings menu
+        menu.add(
+            "&Settings/&Preferences...\t",
+            Shortcut::None,
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+
         // Help menu
         menu.add(
             "&Help/&About\t",

@@ -1,17 +1,18 @@
 use fltk::{
     app,
     draw,
-    enums::{Align, Event, Font, FrameType, Key, Shortcut},
+    enums::{Align, Event, FrameType, Key, Shortcut},
     menu::MenuButton,
     prelude::*,
     table::{Table, TableContext},
     widget::Widget,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::db::QueryResult;
+use crate::ui::font_settings::{profile_by_name, FontProfile};
 use crate::ui::theme;
 
 /// Find the largest valid UTF-8 boundary at or before `index`.
@@ -48,6 +49,8 @@ pub struct ResultTableWidget {
     full_data: Rc<RefCell<Vec<Vec<String>>>>,
     /// How many rows have been sampled for column width calculation
     width_sampled_rows: Rc<RefCell<usize>>,
+    font_profile: Rc<Cell<FontProfile>>,
+    font_size: Rc<Cell<u32>>,
 }
 
 #[derive(Default)]
@@ -65,6 +68,8 @@ impl ResultTableWidget {
     pub fn with_size(x: i32, y: i32, w: i32, h: i32) -> Self {
         let headers: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
         let full_data: Rc<RefCell<Vec<Vec<String>>>> = Rc::new(RefCell::new(Vec::new()));
+        let font_profile = Rc::new(Cell::new(profile_by_name("Helvetica")));
+        let font_size = Rc::new(Cell::new(14));
 
         let mut table = Table::new(x, y, w, h, None);
 
@@ -92,17 +97,21 @@ impl ResultTableWidget {
         let headers_for_draw = headers.clone();
         let full_data_for_draw = full_data.clone();
         let table_for_draw = table.clone();
+        let font_profile_for_draw = font_profile.clone();
+        let font_size_for_draw = font_size.clone();
 
         table.draw_cell(move |_t, ctx, row, col, x, y, w, h| {
+            let font_profile = font_profile_for_draw.get();
+            let font_size = font_size_for_draw.get() as i32;
             match ctx {
                 TableContext::StartPage => {
-                    draw::set_font(Font::Helvetica, 14);
+                    draw::set_font(font_profile.normal, font_size);
                 }
                 TableContext::ColHeader => {
                     draw::push_clip(x, y, w, h);
                     draw::draw_box(FrameType::FlatBox, x, y, w, h, header_bg);
                     draw::set_draw_color(header_fg);
-                    draw::set_font(Font::HelveticaBold, 14);
+                    draw::set_font(font_profile.bold, font_size);
                     if let Ok(hdrs) = headers_for_draw.try_borrow() {
                         if let Some(text) = hdrs.get(col as usize) {
                             draw::draw_text2(text, x + 4, y, w - 8, h, Align::Left);
@@ -116,7 +125,7 @@ impl ResultTableWidget {
                     draw::push_clip(x, y, w, h);
                     draw::draw_box(FrameType::FlatBox, x, y, w, h, header_bg);
                     draw::set_draw_color(header_fg);
-                    draw::set_font(Font::Helvetica, 14);
+                    draw::set_font(font_profile.normal, font_size);
                     let text = (row + 1).to_string();
                     draw::draw_text2(&text, x, y, w - 4, h, Align::Right);
                     draw::set_draw_color(border_color);
@@ -129,7 +138,7 @@ impl ResultTableWidget {
                     let bg = if selected { sel_bg } else { cell_bg };
                     draw::draw_box(FrameType::FlatBox, x, y, w, h, bg);
                     draw::set_draw_color(cell_fg);
-                    draw::set_font(Font::Helvetica, 14);
+                    draw::set_font(font_profile.normal, font_size);
 
                     if let Ok(data) = full_data_for_draw.try_borrow() {
                         if let Some(row_data) = data.get(row as usize) {
@@ -319,6 +328,8 @@ impl ResultTableWidget {
             last_flush: Rc::new(RefCell::new(Instant::now())),
             full_data,
             width_sampled_rows: Rc::new(RefCell::new(0)),
+            font_profile,
+            font_size,
         }
     }
 
@@ -944,6 +955,16 @@ impl ResultTableWidget {
 
     pub fn get_widget(&self) -> Table {
         self.table.clone()
+    }
+
+    pub fn apply_font_settings(&mut self, profile: FontProfile, size: u32) {
+        self.font_profile.set(profile);
+        self.font_size.set(size);
+        let row_height = (size + 12) as i32;
+        let header_height = (size + 14) as i32;
+        self.table.set_row_height_all(row_height);
+        self.table.set_col_header_height(header_height);
+        self.table.redraw();
     }
 
     /// Cleanup method to release resources before the widget is deleted.
