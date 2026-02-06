@@ -682,6 +682,10 @@ impl SqlEditorWidget {
                         && matches!(next_word_upper.as_deref(), Some("REPLACE"));
                     let is_insert_into =
                         upper == "INTO" && matches!(prev_word_upper.as_deref(), Some("INSERT"));
+                    let is_merge_into =
+                        upper == "INTO" && matches!(prev_word_upper.as_deref(), Some("MERGE"));
+                    let is_start_with =
+                        upper == "WITH" && matches!(prev_word_upper.as_deref(), Some("START"));
                     let mut newline_after_keyword = false;
                     let is_between_and = upper == "AND" && between_pending;
                     if upper == "END" {
@@ -766,7 +770,11 @@ impl SqlEditorWidget {
                         needs_space = true;
                         idx += 1;
                         continue;
-                    } else if clause_keywords.contains(&upper.as_str()) && !is_insert_into {
+                    } else if clause_keywords.contains(&upper.as_str())
+                        && !is_insert_into
+                        && !is_merge_into
+                        && !is_start_with
+                    {
                         newline_with(
                             &mut out,
                             base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent),
@@ -1483,7 +1491,8 @@ impl SqlEditorWidget {
                         }
                         _ => {
                             ensure_indent(&mut out, &mut at_line_start, line_indent);
-                            if needs_space {
+                            // Don't add space between consecutive ampersands (&&var substitution)
+                            if needs_space && !(sym == "&" && out.ends_with('&')) {
                                 out.push(' ');
                             }
                             out.push_str(&sym);
@@ -1493,7 +1502,13 @@ impl SqlEditorWidget {
                                 && tokens
                                     .get(idx + 1)
                                     .map_or(false, |t| matches!(t, SqlToken::Word(_)));
-                            needs_space = !is_bind_var_colon;
+                            // For substitution variables (&var, &&var), don't add space after &
+                            let is_ampersand_prefix = sym == "&"
+                                && tokens.get(idx + 1).map_or(false, |t| {
+                                    matches!(t, SqlToken::Word(_))
+                                        || matches!(t, SqlToken::Symbol(s) if s == "&")
+                                });
+                            needs_space = !is_bind_var_colon && !is_ampersand_prefix;
                         }
                     }
                     if started_line {
@@ -6420,5 +6435,95 @@ END;";
         let formatted = SqlEditorWidget::format_sql_basic(sql);
 
         assert!(formatted.contains("DBMS_OUTPUT.PUT_LINE ('first line\nsecond line\nthird line');"));
+    }
+
+    #[test]
+    fn keeps_ampersand_substitution_variables_together() {
+        let sql = "SELECT &&pp FROM dual";
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+        assert!(
+            formatted.contains("&&pp"),
+            "&&pp should stay together, got: {}",
+            formatted
+        );
+
+        let sql2 = "SELECT &var1 FROM dual";
+        let formatted2 = SqlEditorWidget::format_sql_basic(sql2);
+        assert!(
+            formatted2.contains("&var1"),
+            "&var1 should stay together, got: {}",
+            formatted2
+        );
+    }
+
+    #[test]
+    fn keeps_merge_into_together() {
+        let sql = "MERGE INTO target_table t USING source_table s ON (t.id = s.id) WHEN MATCHED THEN UPDATE SET t.name = s.name";
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+        assert!(
+            formatted.contains("MERGE INTO target_table"),
+            "MERGE INTO should stay on the same line, got: {}",
+            formatted
+        );
+    }
+
+    #[test]
+    fn keeps_start_with_together() {
+        let sql = "SELECT employee_id, manager_id FROM employees START WITH manager_id IS NULL CONNECT BY PRIOR employee_id = manager_id";
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+        assert!(
+            formatted.contains("START WITH"),
+            "START WITH should stay on the same line, got: {}",
+            formatted
+        );
+    }
+
+    #[test]
+    fn nested_case_expression_in_plsql_aligns_else_correctly() {
+        let sql = r#"CREATE OR REPLACE PACKAGE BODY oqt_mega_pkg AS
+FUNCTION f_deep(p_grp IN NUMBER, p_n IN NUMBER, p_txt IN VARCHAR2) RETURN NUMBER IS
+  v NUMBER := 0;
+BEGIN
+  v :=
+    CASE
+      WHEN p_grp < 0 THEN -1000
+      WHEN p_grp = 0 THEN
+        CASE
+          WHEN p_n > 10 THEN 100
+          ELSE 10
+        END
+      ELSE
+        CASE
+          WHEN INSTR(NVL(p_txt,'x'), 'END;') > 0 THEN 777
+          ELSE LENGTH(NVL(p_txt,'')) + p_n
+        END
+    END;
+  RETURN v;
+END;
+END oqt_mega_pkg;"#;
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+
+        // ELSE after inner CASE END should align with outer WHEN
+        assert!(
+            formatted.contains(
+                "END\n            ELSE\n                CASE"
+            ),
+            "ELSE should align with outer WHEN after inner CASE END, got:\n{}",
+            formatted
+        );
+
+        // Outer END should close the outer CASE properly
+        assert!(
+            formatted.contains("END\n        END;"),
+            "Outer CASE END should be properly indented, got:\n{}",
+            formatted
+        );
+
+        // Idempotent
+        let formatted_again = SqlEditorWidget::format_sql_basic(&formatted);
+        assert_eq!(
+            formatted, formatted_again,
+            "Formatting should be idempotent for nested CASE expressions"
+        );
     }
 }

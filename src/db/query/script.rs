@@ -682,6 +682,33 @@ impl QueryExecutor {
             }
 
             let leading_word = words.first().map(String::as_str);
+
+            // Eagerly resolve pending_end when the current line does NOT continue an
+            // END CASE / END IF / END LOOP / END BEFORE / END AFTER sequence.
+            // Without this, a bare "END" on its own line (e.g. CASE expression end)
+            // leaves block_depth and case_depth_stack stale for the next line's depth
+            // calculation, causing incorrect indentation for ELSE/WHEN that follow.
+            if builder.state.pending_end
+                && !matches!(
+                    leading_word,
+                    Some("CASE" | "IF" | "LOOP" | "BEFORE" | "AFTER")
+                )
+            {
+                if builder
+                    .state
+                    .case_depth_stack
+                    .last()
+                    .is_some_and(|d| *d + 1 == builder.state.block_depth)
+                {
+                    builder.state.case_depth_stack.pop();
+                    builder.state.block_depth =
+                        builder.state.block_depth.saturating_sub(1);
+                } else if builder.state.block_depth > 0 {
+                    builder.state.block_depth -= 1;
+                }
+                builder.state.pending_end = false;
+            }
+
             let open_cases = builder.state.case_depth_stack.len();
             if case_branch_stack.len() < open_cases {
                 case_branch_stack.resize(open_cases, false);
