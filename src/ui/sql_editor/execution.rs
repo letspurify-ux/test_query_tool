@@ -1866,7 +1866,58 @@ impl SqlEditorWidget {
             return None;
         }
 
-        let mut seen_create = false;
+        // Guard: only apply CREATE TABLE formatting when TABLE is the actual
+        // object keyword in the CREATE header. This avoids false matches like
+        // CREATE PACKAGE BODY ... TYPE ... IS TABLE OF ...
+        let mut word_positions: Vec<(usize, String)> = Vec::new();
+        for (idx, token) in tokens.iter().enumerate() {
+            if let SqlToken::Word(word) = token {
+                word_positions.push((idx, word.to_uppercase()));
+            }
+        }
+
+        let Some(create_word_idx) = word_positions.iter().position(|(_, word)| word == "CREATE")
+        else {
+            return None;
+        };
+
+        let mut header_idx = create_word_idx + 1;
+        while let Some((_, word)) = word_positions.get(header_idx) {
+            if matches!(
+                word.as_str(),
+                "OR" | "REPLACE" | "EDITIONABLE" | "NONEDITIONABLE"
+            ) {
+                header_idx += 1;
+                continue;
+            }
+            break;
+        }
+
+        if word_positions
+            .get(header_idx)
+            .is_some_and(|(_, word)| word == "GLOBAL")
+            && word_positions
+                .get(header_idx + 1)
+                .is_some_and(|(_, word)| word == "TEMPORARY")
+        {
+            header_idx += 2;
+        } else if word_positions
+            .get(header_idx)
+            .is_some_and(|(_, word)| word == "PRIVATE")
+            && word_positions
+                .get(header_idx + 1)
+                .is_some_and(|(_, word)| word == "TEMPORARY")
+        {
+            header_idx += 2;
+        }
+
+        let Some((_, create_object)) = word_positions.get(header_idx) else {
+            return None;
+        };
+        if create_object != "TABLE" {
+            return None;
+        }
+
         let mut seen_table = false;
         let mut ctas = false;
         let mut depth = 0i32;
@@ -1879,9 +1930,7 @@ impl SqlEditorWidget {
             match token {
                 SqlToken::Word(word) => {
                     let upper = word.to_uppercase();
-                    if upper == "CREATE" {
-                        seen_create = true;
-                    } else if seen_create && upper == "TABLE" {
+                    if !seen_table && upper == "TABLE" {
                         seen_table = true;
                     } else if seen_table && upper == "AS" {
                         if tokens[idx + 1..]
@@ -1897,7 +1946,7 @@ impl SqlEditorWidget {
                     }
                 }
                 SqlToken::Symbol(sym) if sym == "(" => {
-                    if depth == 0 && seen_create && seen_table && !ctas && open_idx.is_none() {
+                    if depth == 0 && seen_table && !ctas && open_idx.is_none() {
                         open_idx = Some(idx);
                     }
                     depth += 1;

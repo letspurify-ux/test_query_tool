@@ -895,6 +895,33 @@ fn format_sql_package_body_case_inside_parentheses_keeps_newlines() {
 }
 
 #[test]
+fn format_sql_package_body_type_table_is_not_misdetected_as_create_table() {
+    let input = "CREATE OR REPLACE PACKAGE BODY pkg_case_type AS TYPE num_tab IS TABLE OF NUMBER INDEX BY PLS_INTEGER; FUNCTION run_demo RETURN NUMBER IS v_out NUMBER; BEGIN v_out := fn_calc((CASE WHEN v_mode = 1 THEN CASE WHEN v_flag = 'Y' THEN 10 ELSE 20 END ELSE 0 END)); RETURN v_out; END run_demo; END pkg_case_type;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+
+    assert!(
+        formatted.starts_with("CREATE OR REPLACE PACKAGE BODY"),
+        "Package body should keep CREATE PACKAGE prefix, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains("TYPE num_tab IS TABLE OF NUMBER INDEX BY PLS_INTEGER;"),
+        "TYPE ... IS TABLE declaration should be preserved, got: {}",
+        formatted
+    );
+    assert!(
+        formatted.contains(
+            "BEGIN
+        v_out := fn_calc ((
+            CASE"
+        ),
+        "Nested CASE inside function body should remain multiline, got: {}",
+        formatted
+    );
+}
+
+#[test]
 fn format_sql_package_body_type_table_with_nested_case_keeps_newlines() {
     let input = "CREATE OR REPLACE PACKAGE BODY pkg_case_type AS TYPE num_tab IS TABLE OF NUMBER INDEX BY PLS_INTEGER; FUNCTION run_demo RETURN NUMBER IS BEGIN CASE WHEN v_mode = 1 THEN CASE WHEN v_flag = 'Y' THEN 10 ELSE 20 END ELSE 0 END CASE; RETURN 1; END run_demo; END pkg_case_type;";
 
