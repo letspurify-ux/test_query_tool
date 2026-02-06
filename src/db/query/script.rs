@@ -45,6 +45,9 @@ struct SplitState {
     /// True when we've just seen TYPE in CREATE context, waiting to check for BODY.
     /// TYPE BODY should be treated like PACKAGE BODY (is_package = true).
     after_type: bool,
+    /// True when parsing a CREATE TYPE statement (not TYPE BODY).
+    /// Restricts TYPE ... AS/IS OBJECT|VARRAY|TABLE handling to real type DDL.
+    is_type_create: bool,
 }
 
 impl SplitState {
@@ -188,7 +191,7 @@ impl SplitState {
             // We leave after_as_is = false for packages to avoid incorrect depth decrements
             // when encountering REF CURSOR type declarations inside the package
             // Don't set for COMPOUND TRIGGER timing points either
-            if !self.is_package && !self.nested_subprogram && !self.pending_timing_point_is {
+            if self.is_type_create && !self.nested_subprogram && !self.pending_timing_point_is {
                 // This might be CREATE TYPE ... AS/IS OBJECT/VARRAY/etc
                 self.after_as_is = true;
             }
@@ -304,6 +307,7 @@ impl SplitState {
         self.in_compound_trigger = false;
         self.pending_timing_point_is = false;
         self.after_type = false;
+        self.is_type_create = false;
     }
 
     fn track_create_plsql(&mut self, upper: &str) {
@@ -339,6 +343,7 @@ impl SplitState {
                     self.in_create_plsql = true;
                     self.is_package = upper == "PACKAGE";
                     self.is_trigger = upper == "TRIGGER";
+                    self.is_type_create = upper == "TYPE";
                     // Track when we just saw TYPE to detect TYPE BODY
                     self.after_type = upper == "TYPE";
                     self.create_pending = false;
