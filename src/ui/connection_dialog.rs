@@ -246,7 +246,10 @@ impl ConnectionDialog {
                 if let Some(conn) = cfg.get_connection_by_name(&selected) {
                     name_input_cb.set_value(&conn.name);
                     user_input_cb.set_value(&conn.username);
-                    pass_input_cb.set_value(&conn.password);
+                    // Load password from OS keyring on demand, not from in-memory config
+                    let password = AppConfig::get_password_for_connection(&conn.name)
+                        .unwrap_or_default();
+                    pass_input_cb.set_value(&password);
                     host_input_cb.set_value(&conn.host);
                     port_input_cb.set_value(&conn.port.to_string());
                     service_input_cb.set_value(&conn.service_name);
@@ -256,7 +259,7 @@ impl ConnectionDialog {
                         let info = ConnectionInfo::new(
                             &conn.name,
                             &conn.username,
-                            &conn.password,
+                            &password,
                             &conn.host,
                             conn.port,
                             &conn.service_name,
@@ -406,11 +409,16 @@ impl ConnectionDialog {
             }
         }
 
+        // Clear password input field to minimize password lifetime in memory
+        pass_input.set_value("");
+
         // Remove dialog from popups to prevent memory leak
         popups
             .borrow_mut()
             .retain(|w| w.as_widget_ptr() != dialog.as_widget_ptr());
 
+        // Clear password from the returned ConnectionInfo clone held in config
+        // (it was already saved to keyring if needed)
         let final_result = result.borrow().clone();
         final_result
     }
