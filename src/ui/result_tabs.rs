@@ -38,6 +38,37 @@ struct ScriptOutputTab {
 }
 
 impl ResultTabsWidget {
+    fn buffer_ends_with_newline(buffer: &TextBuffer) -> bool {
+        let len = buffer.length();
+        if len <= 0 {
+            return false;
+        }
+        buffer
+            .text_range(len - 1, len)
+            .map(|s| s == "\n")
+            .unwrap_or(false)
+    }
+
+    fn trim_script_output_buffer(buffer: &mut TextBuffer) {
+        let max_chars = constants::SCRIPT_OUTPUT_MAX_CHARS;
+        let target_chars = constants::SCRIPT_OUTPUT_TRIM_TARGET_CHARS.min(max_chars);
+        let len = buffer.length().max(0) as usize;
+        if len <= max_chars {
+            return;
+        }
+
+        let remove_upto = len.saturating_sub(target_chars);
+        if remove_upto == 0 {
+            return;
+        }
+
+        let prefix = buffer.text_range(0, remove_upto as i32).unwrap_or_default();
+        let cut = prefix.rfind('\n').map(|idx| idx + 1).unwrap_or(remove_upto);
+        if cut > 0 {
+            buffer.remove(0, cut as i32);
+        }
+    }
+
     pub fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
         // Use explicit dimensions to avoid "center of requires the size of the
         // widget to be known" panic that occurs with default_fill()
@@ -204,8 +235,7 @@ impl ResultTabsWidget {
         if lines.is_empty() {
             return;
         }
-        let current_text = buffer.text();
-        if !current_text.is_empty() && !current_text.ends_with('\n') {
+        if buffer.length() > 0 && !Self::buffer_ends_with_newline(&buffer) {
             buffer.append("\n");
         }
         for (idx, line) in lines.iter().enumerate() {
@@ -215,6 +245,7 @@ impl ResultTabsWidget {
             }
         }
         buffer.append("\n");
+        Self::trim_script_output_buffer(&mut buffer);
         let line_count = script_output.display.count_lines(0, buffer.length(), true);
         script_output.display.scroll(line_count, 0);
     }
@@ -375,9 +406,11 @@ impl ResultTabsWidget {
     }
 
     fn clear_script_output(&self) {
-        let script_output = self.script_output.borrow();
-        let mut buffer = script_output.buffer.clone();
+        let mut script_output = self.script_output.borrow_mut();
+        let mut buffer = TextBuffer::default();
         buffer.set_text("");
+        script_output.display.set_buffer(buffer.clone());
+        script_output.buffer = buffer;
     }
 }
 

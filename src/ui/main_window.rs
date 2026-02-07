@@ -16,7 +16,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::thread;
 
 use crate::db::{
@@ -410,10 +410,13 @@ impl MainWindow {
         let (schema_sender, schema_receiver) = std::sync::mpsc::channel::<SchemaUpdate>();
 
         // Setup SQL editor execute callback
-        let state_for_execute = state.clone();
+        let weak_state_for_execute = Rc::downgrade(&state);
         state_borrow
             .sql_editor
             .set_execute_callback(move |query_result| {
+                let Some(state_for_execute) = weak_state_for_execute.upgrade() else {
+                    return;
+                };
                 let mut s = state_for_execute.borrow_mut();
                 *s.last_result.borrow_mut() = Some(query_result.clone());
                 let conn_info = s.connection_info.borrow().clone();
@@ -433,17 +436,23 @@ impl MainWindow {
                     .set_label(&format_status(&base_msg, &conn_info));
             });
 
-        let state_for_status = state.clone();
+        let weak_state_for_status = Rc::downgrade(&state);
         state_borrow.sql_editor.set_status_callback(move |message| {
+            let Some(state_for_status) = weak_state_for_status.upgrade() else {
+                return;
+            };
             let mut s = state_for_status.borrow_mut();
             let conn_info = s.connection_info.borrow().clone();
             s.status_bar.set_label(&format_status(message, &conn_info));
         });
 
-        let state_for_find = state.clone();
+        let weak_state_for_find = Rc::downgrade(&state);
         state_borrow.sql_editor.set_find_callback(move || {
+            let Some(state_for_find) = weak_state_for_find.upgrade() else {
+                return;
+            };
             let (mut editor, mut buffer, popups) = {
-                let s = state_for_find.borrow_mut();
+                let s = state_for_find.borrow();
                 (
                     s.sql_editor.get_editor(),
                     s.sql_buffer.clone(),
@@ -453,10 +462,13 @@ impl MainWindow {
             FindReplaceDialog::show_find_with_registry(&mut editor, &mut buffer, popups);
         });
 
-        let state_for_replace = state.clone();
+        let weak_state_for_replace = Rc::downgrade(&state);
         state_borrow.sql_editor.set_replace_callback(move || {
+            let Some(state_for_replace) = weak_state_for_replace.upgrade() else {
+                return;
+            };
             let (mut editor, mut buffer, popups) = {
-                let s = state_for_replace.borrow_mut();
+                let s = state_for_replace.borrow();
                 (
                     s.sql_editor.get_editor(),
                     s.sql_buffer.clone(),
@@ -467,8 +479,11 @@ impl MainWindow {
         });
 
         // Setup object browser callback
-        let state_for_browser = state.clone();
+        let weak_state_for_browser = Rc::downgrade(&state);
         state_borrow.object_browser.set_sql_callback(move |action| {
+            let Some(state_for_browser) = weak_state_for_browser.upgrade() else {
+                return;
+            };
             let mut s = state_for_browser.borrow_mut();
             match action {
                 SqlAction::Set(sql) => {
@@ -511,36 +526,47 @@ impl MainWindow {
             }
         });
 
-        let state_for_window = state.clone();
-        state_borrow.window.handle(move |_w, ev| match ev {
-            fltk::enums::Event::KeyDown => {
-                if app::event_key() == fltk::enums::Key::Escape {
-                    return true;
+        let weak_state_for_window = Rc::downgrade(&state);
+        state_borrow.window.handle(move |_w, ev| {
+            let Some(state_for_window) = weak_state_for_window.upgrade() else {
+                return false;
+            };
+            match ev {
+                fltk::enums::Event::KeyDown => {
+                    if app::event_key() == fltk::enums::Key::Escape {
+                        return true;
+                    }
+                    false
                 }
-                false
-            }
-            fltk::enums::Event::Push => {
-                let sql_editor = {
-                    let s = state_for_window.borrow();
-                    s.sql_editor.clone()
-                };
-                sql_editor.hide_intellisense_if_outside(app::event_x_root(), app::event_y_root());
-                false
-            }
-            fltk::enums::Event::Resize => {
-                if let Ok(s) = state_for_window.try_borrow() {
-                    MainWindow::adjust_query_layout_on_resize(&s);
+                fltk::enums::Event::Push => {
+                    let sql_editor = {
+                        let s = state_for_window.borrow();
+                        s.sql_editor.clone()
+                    };
+                    sql_editor.hide_intellisense_if_outside(
+                        app::event_x_root(),
+                        app::event_y_root(),
+                    );
+                    false
                 }
-                false
+                fltk::enums::Event::Resize => {
+                    if let Ok(s) = state_for_window.try_borrow() {
+                        MainWindow::adjust_query_layout_on_resize(&s);
+                    }
+                    false
+                }
+                _ => false,
             }
-            _ => false,
         });
 
-        let state_for_progress = state.clone();
+        let weak_state_for_progress = Rc::downgrade(&state);
         let schema_sender_for_progress = schema_sender.clone();
         state_borrow
             .sql_editor
             .set_progress_callback(move |progress| {
+                let Some(state_for_progress) = weak_state_for_progress.upgrade() else {
+                    return;
+                };
                 let mut s = state_for_progress.borrow_mut();
                 match progress {
                     QueryProgress::BatchStart => {
@@ -692,9 +718,12 @@ impl MainWindow {
             schema_receiver: Rc<RefCell<std::sync::mpsc::Receiver<SchemaUpdate>>>,
             conn_receiver: Rc<RefCell<std::sync::mpsc::Receiver<ConnectionResult>>>,
             file_receiver: Rc<RefCell<std::sync::mpsc::Receiver<FileActionResult>>>,
-            state: Rc<RefCell<AppState>>,
+            state_weak: Weak<RefCell<AppState>>,
             schema_sender: std::sync::mpsc::Sender<SchemaUpdate>,
         ) {
+            let Some(state) = state_weak.upgrade() else {
+                return;
+            };
             let mut schema_disconnected = false;
             let mut conn_disconnected = false;
             let mut file_disconnected = false;
@@ -885,27 +914,30 @@ impl MainWindow {
                     Rc::clone(&schema_receiver),
                     Rc::clone(&conn_receiver),
                     Rc::clone(&file_receiver),
-                    Rc::clone(&state),
+                    state_weak.clone(),
                     schema_sender.clone(),
                 );
             });
         }
 
         // Start polling
-        let state_for_poll = state.clone();
+        let weak_state_for_poll = Rc::downgrade(&state);
         let schema_sender_for_poll = schema_sender.clone();
         schedule_poll(
             schema_receiver,
             conn_receiver,
             file_receiver,
-            state_for_poll,
+            weak_state_for_poll,
             schema_sender_for_poll,
         );
 
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
-            let state_for_menu = state.clone();
+            let weak_state_for_menu = Rc::downgrade(&state);
             let file_sender = file_sender.clone();
             menu.set_callback(move |m| {
+                let Some(state_for_menu) = weak_state_for_menu.upgrade() else {
+                    return;
+                };
                 let menu_path = m.item_pathname(None).ok().or_else(|| m.choice().map(|p| p.to_string()));
                 if let Some(path) = menu_path {
                     let choice = path.split('\t').next().unwrap_or(&path).trim().replace('&', "");
@@ -1257,16 +1289,23 @@ impl MainWindow {
 
     pub fn show(&mut self) {
         let state = self.state.clone();
-        let (mut window, popups, sql_editor) = {
+        let mut window = {
             let s = state.borrow();
-            (s.window.clone(), s.popups.clone(), s.sql_editor.clone())
+            s.window.clone()
         };
+        let weak_state_for_close = Rc::downgrade(&state);
         window.set_callback(move |w| {
-            let mut popups = popups.borrow_mut();
-            for mut popup in popups.drain(..) {
-                popup.hide();
+            if let Some(state) = weak_state_for_close.upgrade() {
+                let (popups, sql_editor) = {
+                    let s = state.borrow();
+                    (s.popups.clone(), s.sql_editor.clone())
+                };
+                let mut popups = popups.borrow_mut();
+                for mut popup in popups.drain(..) {
+                    popup.hide();
+                }
+                sql_editor.hide_intellisense();
             }
-            sql_editor.hide_intellisense();
             w.hide();
             app::quit();
         });

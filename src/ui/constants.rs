@@ -82,6 +82,12 @@ pub const TAB_HEADER_HEIGHT: i32 = 25;
 /// Inner padding for the script output display.
 pub const SCRIPT_OUTPUT_PADDING: i32 = 6;
 
+/// Hard cap for script output buffer length to prevent unbounded growth.
+pub const SCRIPT_OUTPUT_MAX_CHARS: usize = 2_000_000;
+
+/// Target length after trimming script output buffer.
+pub const SCRIPT_OUTPUT_TRIM_TARGET_CHARS: usize = 1_500_000;
+
 // -- Splitter sizes --
 
 /// Width of the main horizontal splitter between object browser and editor.

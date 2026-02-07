@@ -944,10 +944,26 @@ impl ResultTableWidget {
     pub fn clear(&mut self) {
         self.table.set_rows(0);
         self.table.set_cols(0);
-        self.headers.borrow_mut().clear();
-        self.pending_rows.borrow_mut().clear();
-        self.pending_widths.borrow_mut().clear();
-        self.full_data.borrow_mut().clear();
+        {
+            let mut headers = self.headers.borrow_mut();
+            headers.clear();
+            headers.shrink_to_fit();
+        }
+        {
+            let mut pending_rows = self.pending_rows.borrow_mut();
+            pending_rows.clear();
+            pending_rows.shrink_to_fit();
+        }
+        {
+            let mut pending_widths = self.pending_widths.borrow_mut();
+            pending_widths.clear();
+            pending_widths.shrink_to_fit();
+        }
+        {
+            let mut full_data = self.full_data.borrow_mut();
+            full_data.clear();
+            full_data.shrink_to_fit();
+        }
         *self.width_sampled_rows.borrow_mut() = 0;
         *self.last_flush.borrow_mut() = Instant::now();
         self.table.redraw();
@@ -1081,10 +1097,26 @@ impl ResultTableWidget {
         self.table.set_cols(0);
 
         // Clear all data buffers to release memory
-        self.headers.borrow_mut().clear();
-        self.pending_rows.borrow_mut().clear();
-        self.pending_widths.borrow_mut().clear();
-        self.full_data.borrow_mut().clear();
+        {
+            let mut headers = self.headers.borrow_mut();
+            headers.clear();
+            headers.shrink_to_fit();
+        }
+        {
+            let mut pending_rows = self.pending_rows.borrow_mut();
+            pending_rows.clear();
+            pending_rows.shrink_to_fit();
+        }
+        {
+            let mut pending_widths = self.pending_widths.borrow_mut();
+            pending_widths.clear();
+            pending_widths.shrink_to_fit();
+        }
+        {
+            let mut full_data = self.full_data.borrow_mut();
+            full_data.clear();
+            full_data.shrink_to_fit();
+        }
     }
 }
 
