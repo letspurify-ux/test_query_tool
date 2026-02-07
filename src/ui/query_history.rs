@@ -9,6 +9,8 @@ use fltk::{
 };
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{mpsc, OnceLock};
+use std::thread;
 
 use crate::ui::center_on_main;
 use crate::ui::constants::*;
@@ -26,6 +28,26 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
         i -= 1;
     }
     i
+}
+
+fn history_writer_sender() -> &'static mpsc::Sender<QueryHistoryEntry> {
+    static HISTORY_WRITER: OnceLock<mpsc::Sender<QueryHistoryEntry>> = OnceLock::new();
+    HISTORY_WRITER.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<QueryHistoryEntry>();
+        thread::spawn(move || {
+            let mut history = QueryHistory::load();
+            while let Ok(entry) = receiver.recv() {
+                history.add_entry(entry);
+                while let Ok(next) = receiver.try_recv() {
+                    history.add_entry(next);
+                }
+                if let Err(err) = history.save() {
+                    eprintln!("Query history save error: {err}");
+                }
+            }
+        });
+        sender
+    })
 }
 
 /// Query history dialog for viewing and re-executing past queries
@@ -152,7 +174,7 @@ impl QueryHistoryDialog {
         let selected_sql: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let queries: Rc<RefCell<Vec<QueryHistoryEntry>>> = Rc::new(RefCell::new(history.queries));
 
-        let (sender, receiver) = std::sync::mpsc::channel::<DialogMessage>();
+        let (sender, receiver) = mpsc::channel::<DialogMessage>();
 
         // Browser selection callback - update preview
         let sender_for_preview = sender.clone();
@@ -249,8 +271,6 @@ impl QueryHistoryDialog {
         row_count: usize,
         connection_name: &str,
     ) {
-        let mut history = QueryHistory::load();
-
         let entry = QueryHistoryEntry {
             sql: sql.to_string(),
             timestamp: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -259,8 +279,11 @@ impl QueryHistoryDialog {
             connection_name: connection_name.to_string(),
         };
 
-        history.add_entry(entry);
-        let _ = history.save();
+        if let Err(err) = history_writer_sender().send(entry) {
+            let mut history = QueryHistory::load();
+            history.add_entry(err.0);
+            let _ = history.save();
+        }
     }
 }
 

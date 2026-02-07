@@ -41,6 +41,9 @@ struct SelectTransformState {
     compute_seen_numeric: Vec<bool>,
 }
 
+const PROGRESS_ROWS_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
+const PROGRESS_ROWS_MAX_BATCH: usize = 1000;
+
 impl SqlEditorWidget {
     pub fn execute_sql_text(&self, sql: &str) {
         self.execute_sql(sql, false);
@@ -5222,7 +5225,10 @@ impl SqlEditorWidget {
                                                 &row, &null_text,
                                             );
                                             buffered_rows.push(display_row);
-                                            if last_flush.elapsed() >= Duration::from_secs(1) {
+                                            if SqlEditorWidget::should_flush_progress_rows(
+                                                last_flush,
+                                                buffered_rows.len(),
+                                            ) {
                                                 let rows = std::mem::take(&mut buffered_rows);
                                                 SqlEditorWidget::append_spool_rows(&session, &rows);
                                                 let _ = sender
@@ -5396,7 +5402,10 @@ impl SqlEditorWidget {
                                                 &row, &null_text,
                                             );
                                             buffered_rows.push(display_row);
-                                            if last_flush.elapsed() >= Duration::from_secs(1) {
+                                            if SqlEditorWidget::should_flush_progress_rows(
+                                                last_flush,
+                                                buffered_rows.len(),
+                                            ) {
                                                 let rows = std::mem::take(&mut buffered_rows);
                                                 SqlEditorWidget::append_spool_rows(&session, &rows);
                                                 let _ = sender
@@ -5764,7 +5773,10 @@ impl SqlEditorWidget {
                                                 &row, &null_text,
                                             );
                                             buffered_rows.push(display_row);
-                                            if last_flush.elapsed() >= Duration::from_secs(1) {
+                                            if SqlEditorWidget::should_flush_progress_rows(
+                                                last_flush,
+                                                buffered_rows.len(),
+                                            ) {
                                                 let rows = std::mem::take(&mut buffered_rows);
                                                 SqlEditorWidget::append_spool_rows(&session, &rows);
                                                 let _ = sender
@@ -6572,6 +6584,10 @@ impl SqlEditorWidget {
         for column in &mut result.columns {
             column.name.clear();
         }
+    }
+
+    fn should_flush_progress_rows(last_flush: Instant, buffered_len: usize) -> bool {
+        buffered_len >= PROGRESS_ROWS_MAX_BATCH || last_flush.elapsed() >= PROGRESS_ROWS_FLUSH_INTERVAL
     }
 
     fn emit_select_result(

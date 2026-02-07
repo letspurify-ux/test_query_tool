@@ -45,6 +45,8 @@ const INTELLISENSE_WORD_WINDOW: i32 = 256;
 const INTELLISENSE_CONTEXT_WINDOW: i32 = 120_000;
 const INTELLISENSE_QUALIFIER_WINDOW: i32 = 256;
 const INTELLISENSE_STATEMENT_WINDOW: i32 = 120_000;
+const MAX_PROGRESS_MESSAGES_PER_POLL: usize = 200;
+const PROGRESS_POLL_INTERVAL_SECONDS: f64 = 0.05;
 
 #[derive(Clone)]
 struct TableReference {
@@ -118,7 +120,7 @@ pub struct SqlEditorWidget {
     buffer: TextBuffer,
     style_buffer: TextBuffer,
     connection: SharedConnection,
-    execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>>,
+    execute_callback: Rc<RefCell<Option<Box<dyn FnMut(&QueryResult)>>>>,
     progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>>,
     progress_sender: mpsc::Sender<QueryProgress>,
     column_sender: mpsc::Sender<ColumnLoadUpdate>,
@@ -237,7 +239,7 @@ impl SqlEditorWidget {
         group.resizable(&editor);
         group.end();
 
-        let execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>> =
+        let execute_callback: Rc<RefCell<Option<Box<dyn FnMut(&QueryResult)>>>> =
             Rc::new(RefCell::new(None));
         let progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>> =
             Rc::new(RefCell::new(None));
@@ -315,11 +317,18 @@ impl SqlEditorWidget {
             receiver: Rc<RefCell<mpsc::Receiver<QueryProgress>>>,
             progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>>,
             query_running: Rc<RefCell<bool>>,
-            execute_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryResult)>>>>,
+            execute_callback: Rc<RefCell<Option<Box<dyn FnMut(&QueryResult)>>>>,
         ) {
             let mut disconnected = false;
+            let mut processed = 0usize;
+            let mut hit_budget = false;
             // Process any pending messages
             loop {
+                if processed >= MAX_PROGRESS_MESSAGES_PER_POLL {
+                    hit_budget = true;
+                    break;
+                }
+
                 let message = {
                     let r = receiver.borrow();
                     r.try_recv()
@@ -327,11 +336,9 @@ impl SqlEditorWidget {
 
                 match message {
                     Ok(message) => {
-                        if let Some(ref mut cb) = *progress_callback.borrow_mut() {
-                            cb(message.clone());
-                        }
+                        processed += 1;
 
-                        match message {
+                        match &message {
                             QueryProgress::PromptInput { prompt, response } => {
                                 let value = SqlEditorWidget::prompt_input_dialog(&prompt);
                                 let _ = response.send(value);
@@ -342,7 +349,7 @@ impl SqlEditorWidget {
                                 timed_out,
                                 ..
                             } => {
-                                if timed_out {
+                                if *timed_out {
                                     fltk::dialog::alert_default(&format!(
                                         "Query timed out!\n\n{}",
                                         result.message
@@ -352,7 +359,7 @@ impl SqlEditorWidget {
                                     &result.sql,
                                     result.execution_time.as_millis() as u64,
                                     result.row_count,
-                                    &connection_name,
+                                    connection_name,
                                 );
                                 if let Some(ref mut cb) = *execute_callback.borrow_mut() {
                                     cb(result);
@@ -364,6 +371,10 @@ impl SqlEditorWidget {
                                 app::flush();
                             }
                             _ => {}
+                        }
+
+                        if let Some(ref mut cb) = *progress_callback.borrow_mut() {
+                            cb(message);
                         }
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
@@ -384,7 +395,12 @@ impl SqlEditorWidget {
             }
 
             // Reschedule for next poll
-            app::add_timeout3(0.05, move |_| {
+            let delay = if hit_budget {
+                0.0
+            } else {
+                PROGRESS_POLL_INTERVAL_SECONDS
+            };
+            app::add_timeout3(delay, move |_| {
                 schedule_poll(
                     Rc::clone(&receiver),
                     Rc::clone(&progress_callback),
@@ -914,7 +930,7 @@ impl SqlEditorWidget {
 
     pub fn set_execute_callback<F>(&mut self, callback: F)
     where
-        F: FnMut(QueryResult) + 'static,
+        F: FnMut(&QueryResult) + 'static,
     {
         *self.execute_callback.borrow_mut() = Some(Box::new(callback));
     }
