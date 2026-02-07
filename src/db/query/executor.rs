@@ -1649,43 +1649,24 @@ impl QueryExecutor {
         // Determine the DDL type for better messaging
         let sql_upper = sql.to_uppercase();
         let message = if sql_upper.starts_with("CREATE") {
-            if sql_upper.contains(" TABLE ") {
-                "Table created"
-            } else if sql_upper.contains(" VIEW ") {
-                "View created"
-            } else if sql_upper.contains(" INDEX ") {
-                "Index created"
-            } else if sql_upper.contains(" PROCEDURE ") {
-                "Procedure created"
-            } else if sql_upper.contains(" FUNCTION ") {
-                "Function created"
-            } else if sql_upper.contains(" PACKAGE ") {
-                "Package created"
-            } else if sql_upper.contains(" TRIGGER ") {
-                "Trigger created"
-            } else if sql_upper.contains(" SEQUENCE ") {
-                "Sequence created"
-            } else if sql_upper.contains(" SYNONYM ") {
-                "Synonym created"
-            } else if sql_upper.contains(" TYPE ") {
-                "Type created"
-            } else {
-                "Object created"
-            }
+            let obj_type = Self::parse_ddl_object_type(&sql_upper);
+            format!("{} created", obj_type)
         } else if sql_upper.starts_with("ALTER") {
-            "Object altered"
+            let obj_type = Self::parse_ddl_object_type(&sql_upper);
+            format!("{} altered", obj_type)
         } else if sql_upper.starts_with("DROP") {
-            "Object dropped"
+            let obj_type = Self::parse_ddl_object_type(&sql_upper);
+            format!("{} dropped", obj_type)
         } else if sql_upper.starts_with("TRUNCATE") {
-            "Table truncated"
+            "Table truncated".to_string()
         } else if sql_upper.starts_with("GRANT") {
-            "Grant succeeded"
+            "Grant succeeded".to_string()
         } else if sql_upper.starts_with("REVOKE") {
-            "Revoke succeeded"
+            "Revoke succeeded".to_string()
         } else if sql_upper.starts_with("COMMENT") {
-            "Comment added"
+            "Comment added".to_string()
         } else {
-            "Statement executed successfully"
+            "Statement executed successfully".to_string()
         };
 
         Ok(QueryResult {
@@ -1694,10 +1675,87 @@ impl QueryExecutor {
             rows: vec![],
             row_count: 0,
             execution_time,
-            message: message.to_string(),
+            message,
             is_select: false,
             success: true,
         })
+    }
+
+    /// Parse the object type from a DDL statement header.
+    /// Only examines the leading tokens (CREATE/ALTER/DROP + modifiers + type keyword)
+    /// to avoid false matches from keywords appearing in PL/SQL bodies.
+    pub fn parse_ddl_object_type(sql_upper: &str) -> &'static str {
+        let tokens: Vec<&str> = sql_upper.split_whitespace().collect();
+        if tokens.len() < 2 {
+            return "Object";
+        }
+
+        let mut idx = 1usize; // skip CREATE/ALTER/DROP/etc.
+
+        // For CREATE statements, skip optional modifiers
+        if tokens[0] == "CREATE" {
+            // Skip "OR REPLACE"
+            if tokens.get(idx).map_or(false, |t| *t == "OR")
+                && tokens.get(idx + 1).map_or(false, |t| *t == "REPLACE")
+            {
+                idx += 2;
+            }
+            // Skip EDITIONABLE/NONEDITIONABLE
+            if tokens
+                .get(idx)
+                .map_or(false, |t| *t == "EDITIONABLE" || *t == "NONEDITIONABLE")
+            {
+                idx += 1;
+            }
+            // Skip FORCE / NO FORCE (for views/synonyms)
+            if tokens.get(idx).map_or(false, |t| *t == "NO")
+                && tokens.get(idx + 1).map_or(false, |t| *t == "FORCE")
+            {
+                idx += 2;
+            } else if tokens.get(idx).map_or(false, |t| *t == "FORCE") {
+                idx += 1;
+            }
+        }
+
+        match tokens.get(idx).copied() {
+            Some("TABLE") | Some("GLOBAL") => "Table",
+            Some("VIEW") | Some("MATERIALIZED") => "View",
+            Some("INDEX") | Some("UNIQUE") | Some("BITMAP") => "Index",
+            Some("PROCEDURE") => "Procedure",
+            Some("FUNCTION") => "Function",
+            Some("PACKAGE") => {
+                if tokens.get(idx + 1).map_or(false, |t| *t == "BODY") {
+                    "Package Body"
+                } else {
+                    "Package"
+                }
+            }
+            Some("TRIGGER") => "Trigger",
+            Some("SEQUENCE") => "Sequence",
+            Some("SYNONYM") => "Synonym",
+            Some("PUBLIC") => {
+                if tokens.get(idx + 1).map_or(false, |t| *t == "SYNONYM") {
+                    "Synonym"
+                } else if tokens.get(idx + 1).map_or(false, |t| *t == "DATABASE") {
+                    "Database Link"
+                } else {
+                    "Object"
+                }
+            }
+            Some("TYPE") => {
+                if tokens.get(idx + 1).map_or(false, |t| *t == "BODY") {
+                    "Type Body"
+                } else {
+                    "Type"
+                }
+            }
+            Some("DATABASE") => "Database Link",
+            Some("DIRECTORY") => "Directory",
+            Some("TABLESPACE") => "Tablespace",
+            Some("USER") => "User",
+            Some("ROLE") => "Role",
+            _ => "Object",
+        }
     }
 
     /// Execute a PL/SQL anonymous block (BEGIN...END or DECLARE...BEGIN...END)
