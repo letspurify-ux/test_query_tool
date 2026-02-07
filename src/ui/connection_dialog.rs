@@ -246,7 +246,7 @@ impl ConnectionDialog {
                 if let Some(conn) = cfg.get_connection_by_name(&selected) {
                     name_input_cb.set_value(&conn.name);
                     user_input_cb.set_value(&conn.username);
-                    // Load password from OS keyring on demand, not from in-memory config
+                    // Load password from OS keyring on demand.
                     let password = AppConfig::get_password_for_connection(&conn.name)
                         .unwrap_or_default();
                     pass_input_cb.set_value(&password);

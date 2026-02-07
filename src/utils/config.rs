@@ -62,7 +62,6 @@ impl AppConfig {
         // Passwords are NOT loaded eagerly; use get_password_for_connection() on demand.
         let mut needs_resave = false;
         for conn in &mut config.recent_connections {
-            // Migration: if password was deserialized from old config, store it in keyring
             if !conn.password.is_empty() {
                 if let Err(e) = credential_store::store_password(&conn.name, &conn.password) {
                     eprintln!("Keyring migration warning: {}", e);
@@ -121,13 +120,12 @@ impl AppConfig {
     }
 
     pub fn add_recent_connection(&mut self, mut info: ConnectionInfo) {
-        // Store password securely in OS keyring
+        // Store password in OS keyring, then clear from memory
         if !info.password.is_empty() {
             if let Err(e) = credential_store::store_password(&info.name, &info.password) {
                 eprintln!("Keyring store warning: {}", e);
             }
         }
-        // Clear password from memory after storing in keyring
         info.clear_password();
 
         // Remove existing connection with same name

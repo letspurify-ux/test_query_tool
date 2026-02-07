@@ -149,7 +149,7 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     size_row.set_spacing(DIALOG_SPACING);
     let mut editor_size_label = Frame::default().with_label("Editor:");
     editor_size_label.set_label_color(theme::text_primary());
-    size_row.fixed(&editor_size_label, 60);
+    size_row.fixed(&editor_size_label, FORM_LABEL_WIDTH);
     let mut editor_size_input = IntInput::default();
     editor_size_input.set_value(&config.editor_font_size.to_string());
     editor_size_input.set_color(theme::input_bg());
@@ -158,7 +158,7 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
 
     let mut result_size_label = Frame::default().with_label("Results:");
     result_size_label.set_label_color(theme::text_primary());
-    size_row.fixed(&result_size_label, 60);
+    size_row.fixed(&result_size_label, FORM_LABEL_WIDTH);
     let mut result_size_input = IntInput::default();
     result_size_input.set_value(&config.result_font_size.to_string());
     result_size_input.set_color(theme::input_bg());
@@ -198,6 +198,7 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     button_row.fixed(&cancel_btn, BUTTON_WIDTH);
     button_row.fixed(&ok_btn, BUTTON_WIDTH);
     button_row.end();
+    main_flex.fixed(&button_row, BUTTON_ROW_HEIGHT);
 
     main_flex.end();
     dialog.end();
