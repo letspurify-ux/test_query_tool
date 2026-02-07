@@ -21,6 +21,7 @@ use std::thread;
 use crate::db::{
     create_shared_connection, lock_connection, ObjectBrowser, QueryResult, SharedConnection,
 };
+use crate::ui::constants::*;
 use crate::ui::theme;
 use crate::ui::{
     font_settings, show_settings_dialog, ConnectionDialog, FindReplaceDialog, HighlightData,
@@ -88,13 +89,6 @@ enum FileActionResult {
     },
 }
 
-const MAIN_SPLITTER_WIDTH: i32 = 6;
-const QUERY_SPLITTER_HEIGHT: i32 = 6;
-const RESULT_TOOLBAR_HEIGHT: i32 = 34;
-const MIN_QUERY_HEIGHT: i32 = 160;
-const MIN_RESULTS_BODY_HEIGHT: i32 = 160;
-const MIN_RESULTS_HEIGHT: i32 = RESULT_TOOLBAR_HEIGHT + MIN_RESULTS_BODY_HEIGHT;
-
 impl MainWindow {
     pub fn new() -> Self {
         let config = AppConfig::load();
@@ -113,7 +107,7 @@ impl MainWindow {
         main_flex.set_type(FlexType::Column);
 
         let menu_bar = MenuBarBuilder::build();
-        main_flex.fixed(&menu_bar, 30);
+        main_flex.fixed(&menu_bar, MENU_BAR_HEIGHT);
 
         let mut content_flex = Flex::default();
         content_flex.set_type(FlexType::Row);
@@ -247,13 +241,13 @@ impl MainWindow {
         result_toolbar.resizable(&spacer);
 
         let mut clear_tabs_btn = Button::default()
-            .with_size(110, 25)
+            .with_size(BUTTON_WIDTH_LARGE, BUTTON_HEIGHT)
             .with_label("Clear Tabs");
         clear_tabs_btn.set_color(theme::button_subtle());
         clear_tabs_btn.set_label_color(theme::text_secondary());
         clear_tabs_btn.set_frame(FrameType::RFlatBox);
         clear_tabs_btn.set_tooltip("Remove all result tabs");
-        result_toolbar.fixed(&clear_tabs_btn, 110);
+        result_toolbar.fixed(&clear_tabs_btn, BUTTON_WIDTH_LARGE);
 
         result_toolbar.end();
         right_flex.fixed(&result_toolbar, RESULT_TOOLBAR_HEIGHT);
@@ -272,7 +266,7 @@ impl MainWindow {
         status_bar.set_frame(FrameType::FlatBox);
         status_bar.set_color(theme::accent());
         status_bar.set_label_color(theme::text_primary());
-        main_flex.fixed(&status_bar, 25);
+        main_flex.fixed(&status_bar, STATUS_BAR_HEIGHT);
         main_flex.end();
         window.end();
         window.make_resizable(true);
@@ -1247,8 +1241,8 @@ impl MainWindow {
         let app = app::App::default()
             .with_scheme(app::Scheme::Gtk)
             .load_system_fonts();
-        app::set_font_size(14);
-        fltk::misc::Tooltip::set_font_size(14);
+        app::set_font_size(DEFAULT_FONT_SIZE);
+        fltk::misc::Tooltip::set_font_size(DEFAULT_FONT_SIZE);
 
         // Set default colors for Windows 11-inspired theme
         let (bg_r, bg_g, bg_b) = theme::app_background().to_rgb();

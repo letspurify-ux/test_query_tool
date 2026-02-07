@@ -26,6 +26,7 @@ use crate::ui::syntax_highlight::{
     STYLE_STRING,
 };
 use crate::ui::theme;
+use crate::ui::constants::*;
 use crate::utils::AppConfig;
 
 mod execution;
@@ -145,50 +146,50 @@ impl SqlEditorWidget {
         // Button toolbar with modern styling
         let mut button_pack = Pack::default();
         button_pack.set_type(PackType::Horizontal);
-        button_pack.set_spacing(6);
+        button_pack.set_spacing(TOOLBAR_SPACING);
 
-        let mut execute_btn = Button::default().with_size(90, 20).with_label("@> Execute");
+        let mut execute_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("@> Execute");
         execute_btn.set_color(theme::button_primary());
         execute_btn.set_label_color(theme::text_primary());
         execute_btn.set_frame(FrameType::RFlatBox);
 
-        let mut cancel_btn = Button::default().with_size(80, 20).with_label("Cancel");
+        let mut cancel_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Cancel");
         cancel_btn.set_color(theme::button_warning());
         cancel_btn.set_label_color(theme::text_primary());
         cancel_btn.set_frame(FrameType::RFlatBox);
 
-        let mut explain_btn = Button::default().with_size(80, 20).with_label("Explain");
+        let mut explain_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Explain");
         explain_btn.set_color(theme::button_secondary());
         explain_btn.set_label_color(theme::text_primary());
         explain_btn.set_frame(FrameType::RFlatBox);
 
-        let mut clear_btn = Button::default().with_size(70, 20).with_label("Clear");
+        let mut clear_btn = Button::default().with_size(BUTTON_WIDTH_SMALL, BUTTON_HEIGHT).with_label("Clear");
         clear_btn.set_color(theme::button_subtle());
         clear_btn.set_label_color(theme::text_secondary());
         clear_btn.set_frame(FrameType::RFlatBox);
 
-        let mut commit_btn = Button::default().with_size(80, 20).with_label("Commit");
+        let mut commit_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Commit");
         commit_btn.set_color(theme::button_success());
         commit_btn.set_label_color(theme::text_primary());
         commit_btn.set_frame(FrameType::RFlatBox);
 
-        let mut rollback_btn = Button::default().with_size(80, 20).with_label("Rollback");
+        let mut rollback_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Rollback");
         rollback_btn.set_color(theme::button_danger());
         rollback_btn.set_label_color(theme::text_primary());
         rollback_btn.set_frame(FrameType::RFlatBox);
 
-        let mut timeout_label = Frame::default().with_size(85, 28);
+        let mut timeout_label = Frame::default().with_size(85, BUTTON_HEIGHT);
         timeout_label.set_label("Timeout(s)");
         timeout_label.set_label_color(theme::text_muted());
 
-        let mut timeout_input = IntInput::default().with_size(55, 28);
+        let mut timeout_input = IntInput::default().with_size(NUMERIC_INPUT_WIDTH, BUTTON_HEIGHT);
         timeout_input.set_color(theme::input_bg());
         timeout_input.set_text_color(theme::text_primary());
         timeout_input.set_tooltip("Call timeout in seconds (empty = no timeout)");
         timeout_input.set_value("60");
 
         button_pack.end();
-        group.fixed(&button_pack, 34);
+        group.fixed(&button_pack, RESULT_TOOLBAR_HEIGHT);
 
         // SQL Editor with modern styling
         let buffer = TextBuffer::default();
@@ -772,7 +773,7 @@ impl SqlEditorWidget {
         display.set_color(theme::editor_bg());
         display.set_text_color(theme::text_primary());
         display.set_text_font(configured_editor_profile().normal);
-        display.set_text_size(14);
+        display.set_text_size(DEFAULT_FONT_SIZE);
 
         let mut buffer = fltk::text::TextBuffer::default();
         buffer.set_text(plan_text);
@@ -780,7 +781,7 @@ impl SqlEditorWidget {
 
         let mut close_btn = fltk::button::Button::default()
             .with_pos(690, 455)
-            .with_size(100, 20)
+            .with_size(BUTTON_WIDTH_LARGE, BUTTON_HEIGHT)
             .with_label("Close");
         close_btn.set_color(theme::button_secondary());
         close_btn.set_label_color(theme::text_primary());

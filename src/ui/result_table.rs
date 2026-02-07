@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 
 use crate::db::QueryResult;
 use crate::ui::font_settings::{configured_editor_profile, FontProfile};
+use crate::ui::constants::*;
 use crate::ui::theme;
 
 /// Find the largest valid UTF-8 boundary at or before `index`.
@@ -68,17 +69,17 @@ impl ResultTableWidget {
         let headers: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
         let full_data: Rc<RefCell<Vec<Vec<String>>>> = Rc::new(RefCell::new(Vec::new()));
         let font_profile = Rc::new(Cell::new(configured_editor_profile()));
-        let font_size = Rc::new(Cell::new(14));
+        let font_size = Rc::new(Cell::new(DEFAULT_FONT_SIZE as u32));
 
         let mut table = Table::new(x, y, w, h, None);
 
         // Apply dark theme colors
         table.set_color(theme::panel_bg());
         table.set_row_header(true);
-        table.set_row_header_width(55);
+        table.set_row_header_width(TABLE_ROW_HEADER_WIDTH);
         table.set_col_header(true);
-        table.set_col_header_height(28);
-        table.set_row_height_all(26);
+        table.set_col_header_height(TABLE_COL_HEADER_HEIGHT);
+        table.set_row_height_all(TABLE_ROW_HEIGHT);
         table.set_rows(0);
         table.set_cols(0);
         table.end();
@@ -113,7 +114,7 @@ impl ResultTableWidget {
                     draw::set_font(font_profile.bold, font_size);
                     if let Ok(hdrs) = headers_for_draw.try_borrow() {
                         if let Some(text) = hdrs.get(col as usize) {
-                            draw::draw_text2(text, x + 4, y, w - 8, h, Align::Left);
+                            draw::draw_text2(text, x + TABLE_CELL_PADDING, y, w - TABLE_CELL_PADDING * 2, h, Align::Left);
                         }
                     }
                     draw::set_draw_color(border_color);
@@ -126,7 +127,7 @@ impl ResultTableWidget {
                     draw::set_draw_color(header_fg);
                     draw::set_font(font_profile.normal, font_size);
                     let text = (row + 1).to_string();
-                    draw::draw_text2(&text, x, y, w - 4, h, Align::Right);
+                    draw::draw_text2(&text, x, y, w - TABLE_CELL_PADDING, h, Align::Right);
                     draw::set_draw_color(border_color);
                     draw::draw_line(x + w - 1, y, x + w - 1, y + h);
                     draw::pop_clip();
@@ -145,9 +146,9 @@ impl ResultTableWidget {
                                 if cell_val.len() > 50 {
                                     let end = floor_char_boundary(cell_val, 47);
                                     let truncated = format!("{}...", &cell_val[..end]);
-                                    draw::draw_text2(&truncated, x + 4, y, w - 8, h, Align::Left);
+                                    draw::draw_text2(&truncated, x + TABLE_CELL_PADDING, y, w - TABLE_CELL_PADDING * 2, h, Align::Left);
                                 } else {
-                                    draw::draw_text2(cell_val, x + 4, y, w - 8, h, Align::Left);
+                                    draw::draw_text2(cell_val, x + TABLE_CELL_PADDING, y, w - TABLE_CELL_PADDING * 2, h, Align::Left);
                                 }
                             }
                         }

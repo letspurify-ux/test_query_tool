@@ -10,6 +10,7 @@ use fltk::{
 
 use crate::ui::center_on_main;
 use crate::ui::configured_editor_profile;
+use crate::ui::constants::*;
 use crate::ui::theme;
 
 pub struct MenuBarBuilder;
@@ -35,19 +36,17 @@ fn show_info_dialog(title: &str, content: &str, width: i32, height: i32) {
     display.set_color(theme::editor_bg());
     display.set_text_color(theme::text_primary());
     display.set_text_font(configured_editor_profile().normal);
-    display.set_text_size(14);
+    display.set_text_size(DEFAULT_FONT_SIZE);
 
     let mut buffer = TextBuffer::default();
     buffer.set_text(content);
     display.set_buffer(buffer);
 
-    let button_width = 90;
-    let button_height = 20;
-    let button_x = (width - button_width) / 2;
-    let button_y = height - 35;
+    let button_x = (width - BUTTON_WIDTH) / 2;
+    let button_y = height - BUTTON_ROW_HEIGHT - 1;
     let mut close_btn = Button::default()
         .with_pos(button_x, button_y)
-        .with_size(button_width, button_height)
+        .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
         .with_label("Close");
     close_btn.set_color(theme::button_secondary());
     close_btn.set_label_color(theme::text_primary());

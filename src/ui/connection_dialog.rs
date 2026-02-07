@@ -15,6 +15,7 @@ use std::thread;
 
 use crate::db::{ConnectionInfo, DatabaseConnection};
 use crate::ui::center_on_main;
+use crate::ui::constants::*;
 use crate::ui::theme;
 use crate::utils::AppConfig;
 
@@ -46,15 +47,15 @@ impl ConnectionDialog {
 
         let mut main_flex = Flex::default().with_pos(20, 20).with_size(460, 420);
         main_flex.set_type(fltk::group::FlexType::Column);
-        main_flex.set_margin(10);
-        main_flex.set_spacing(5);
+        main_flex.set_margin(DIALOG_MARGIN);
+        main_flex.set_spacing(DIALOG_SPACING);
 
         // Saved Connections section
         let mut saved_flex = Flex::default();
         saved_flex.set_type(fltk::group::FlexType::Row);
         let mut saved_label = fltk::frame::Frame::default().with_label("Saved:");
         saved_label.set_label_color(theme::text_primary());
-        saved_flex.fixed(&saved_label, 100);
+        saved_flex.fixed(&saved_label, FORM_LABEL_WIDTH);
 
         let mut saved_browser = HoldBrowser::default();
         saved_browser.set_color(theme::input_bg());
@@ -68,129 +69,129 @@ impl ConnectionDialog {
             }
         }
 
-        let mut delete_btn = Button::default().with_size(60, 20).with_label("Delete");
+        let mut delete_btn = Button::default().with_size(BUTTON_WIDTH_SMALL, BUTTON_HEIGHT).with_label("Delete");
         delete_btn.set_color(theme::button_danger());
         delete_btn.set_label_color(theme::text_primary());
         delete_btn.set_frame(FrameType::RFlatBox);
 
-        saved_flex.fixed(&delete_btn, 60);
+        saved_flex.fixed(&delete_btn, BUTTON_WIDTH_SMALL);
         saved_flex.end();
-        main_flex.fixed(&saved_flex, 80);
+        main_flex.fixed(&saved_flex, SAVED_BROWSER_HEIGHT);
 
         // Connection Name
         let mut name_flex = Flex::default();
         name_flex.set_type(fltk::group::FlexType::Row);
         let mut name_label = fltk::frame::Frame::default().with_label("Name:");
         name_label.set_label_color(theme::text_primary());
-        name_flex.fixed(&name_label, 100);
+        name_flex.fixed(&name_label, FORM_LABEL_WIDTH);
         let mut name_input = Input::default();
         name_input.set_value("My Connection");
         name_input.set_color(theme::input_bg());
         name_input.set_text_color(theme::text_primary());
         name_flex.end();
-        main_flex.fixed(&name_flex, 30);
+        main_flex.fixed(&name_flex, INPUT_ROW_HEIGHT);
 
         // Username
         let mut user_flex = Flex::default();
         user_flex.set_type(fltk::group::FlexType::Row);
         let mut user_label = fltk::frame::Frame::default().with_label("Username:");
         user_label.set_label_color(theme::text_primary());
-        user_flex.fixed(&user_label, 100);
+        user_flex.fixed(&user_label, FORM_LABEL_WIDTH);
         let mut user_input = Input::default();
         user_input.set_color(theme::input_bg());
         user_input.set_text_color(theme::text_primary());
         user_flex.end();
-        main_flex.fixed(&user_flex, 30);
+        main_flex.fixed(&user_flex, INPUT_ROW_HEIGHT);
 
         // Password
         let mut pass_flex = Flex::default();
         pass_flex.set_type(fltk::group::FlexType::Row);
         let mut pass_label = fltk::frame::Frame::default().with_label("Password:");
         pass_label.set_label_color(theme::text_primary());
-        pass_flex.fixed(&pass_label, 100);
+        pass_flex.fixed(&pass_label, FORM_LABEL_WIDTH);
         let mut pass_input = SecretInput::default();
         pass_input.set_color(theme::input_bg());
         pass_input.set_text_color(theme::text_primary());
         pass_flex.end();
-        main_flex.fixed(&pass_flex, 30);
+        main_flex.fixed(&pass_flex, INPUT_ROW_HEIGHT);
 
         // Host
         let mut host_flex = Flex::default();
         host_flex.set_type(fltk::group::FlexType::Row);
         let mut host_label = fltk::frame::Frame::default().with_label("Host:");
         host_label.set_label_color(theme::text_primary());
-        host_flex.fixed(&host_label, 100);
+        host_flex.fixed(&host_label, FORM_LABEL_WIDTH);
         let mut host_input = Input::default();
         host_input.set_value("localhost");
         host_input.set_color(theme::input_bg());
         host_input.set_text_color(theme::text_primary());
         host_flex.end();
-        main_flex.fixed(&host_flex, 30);
+        main_flex.fixed(&host_flex, INPUT_ROW_HEIGHT);
 
         // Port
         let mut port_flex = Flex::default();
         port_flex.set_type(fltk::group::FlexType::Row);
         let mut port_label = fltk::frame::Frame::default().with_label("Port:");
         port_label.set_label_color(theme::text_primary());
-        port_flex.fixed(&port_label, 100);
+        port_flex.fixed(&port_label, FORM_LABEL_WIDTH);
         let mut port_input = Input::default();
         port_input.set_value("1521");
         port_input.set_color(theme::input_bg());
         port_input.set_text_color(theme::text_primary());
         port_flex.end();
-        main_flex.fixed(&port_flex, 30);
+        main_flex.fixed(&port_flex, INPUT_ROW_HEIGHT);
 
         // Service Name
         let mut service_flex = Flex::default();
         service_flex.set_type(fltk::group::FlexType::Row);
         let mut service_label = fltk::frame::Frame::default().with_label("Service:");
         service_label.set_label_color(theme::text_primary());
-        service_flex.fixed(&service_label, 100);
+        service_flex.fixed(&service_label, FORM_LABEL_WIDTH);
         let mut service_input = Input::default();
         service_input.set_value("ORCL");
         service_input.set_color(theme::input_bg());
         service_input.set_text_color(theme::text_primary());
         service_flex.end();
-        main_flex.fixed(&service_flex, 30);
+        main_flex.fixed(&service_flex, INPUT_ROW_HEIGHT);
 
         // Save connection checkbox
         let mut save_flex = Flex::default();
         save_flex.set_type(fltk::group::FlexType::Row);
         let _spacer = fltk::frame::Frame::default();
-        save_flex.fixed(&_spacer, 100);
+        save_flex.fixed(&_spacer, FORM_LABEL_WIDTH);
         let mut save_check = CheckButton::default().with_label("Save this connection");
         save_check.set_label_color(theme::text_secondary());
         save_check.set_value(true);
         save_flex.end();
-        main_flex.fixed(&save_flex, 25);
+        main_flex.fixed(&save_flex, CHECKBOX_ROW_HEIGHT);
 
         // Buttons
         let mut button_flex = Flex::default();
         button_flex.set_type(fltk::group::FlexType::Row);
-        button_flex.set_spacing(5);
+        button_flex.set_spacing(DIALOG_SPACING);
 
         let _spacer = fltk::frame::Frame::default();
 
-        let mut test_btn = Button::default().with_size(80, 20).with_label("Test");
+        let mut test_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Test");
         test_btn.set_color(theme::button_secondary());
         test_btn.set_label_color(theme::text_primary());
         test_btn.set_frame(FrameType::RFlatBox);
 
-        let mut connect_btn = Button::default().with_size(80, 20).with_label("Connect");
+        let mut connect_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Connect");
         connect_btn.set_color(theme::button_primary());
         connect_btn.set_label_color(theme::text_primary());
         connect_btn.set_frame(FrameType::RFlatBox);
 
-        let mut cancel_btn = Button::default().with_size(80, 20).with_label("Cancel");
+        let mut cancel_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Cancel");
         cancel_btn.set_color(theme::button_subtle());
         cancel_btn.set_label_color(theme::text_primary());
         cancel_btn.set_frame(FrameType::RFlatBox);
 
-        button_flex.fixed(&test_btn, 80);
-        button_flex.fixed(&connect_btn, 80);
-        button_flex.fixed(&cancel_btn, 80);
+        button_flex.fixed(&test_btn, BUTTON_WIDTH);
+        button_flex.fixed(&connect_btn, BUTTON_WIDTH);
+        button_flex.fixed(&cancel_btn, BUTTON_WIDTH);
         button_flex.end();
-        main_flex.fixed(&button_flex, 35);
+        main_flex.fixed(&button_flex, BUTTON_ROW_HEIGHT);
 
         main_flex.end();
         dialog.end();

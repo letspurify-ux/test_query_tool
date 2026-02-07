@@ -8,6 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use crate::ui::font_settings::{configured_editor_profile, FontProfile};
+use crate::ui::constants;
 use crate::ui::theme;
 use crate::ui::ResultTableWidget;
 
@@ -35,9 +36,6 @@ struct ScriptOutputTab {
 }
 
 impl ResultTabsWidget {
-    const TAB_HEADER_HEIGHT: i32 = 25;
-    const SCRIPT_OUTPUT_PADDING: i32 = 6;
-
     pub fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
         // Use explicit dimensions to avoid "center of requires the size of the
         // widget to be known" panic that occurs with default_fill()
@@ -50,18 +48,18 @@ impl ResultTabsWidget {
         let data = Rc::new(RefCell::new(Vec::<ResultTab>::new()));
         let active_index = Rc::new(RefCell::new(None));
         let font_profile = Rc::new(Cell::new(configured_editor_profile()));
-        let font_size = Rc::new(Cell::new(14));
+        let font_size = Rc::new(Cell::new(constants::DEFAULT_FONT_SIZE as u32));
 
         tabs.begin();
         let x = tabs.x();
-        let y = tabs.y() + Self::TAB_HEADER_HEIGHT;
+        let y = tabs.y() + constants::TAB_HEADER_HEIGHT;
         let w = tabs.w().max(100);
-        let h = (tabs.h() - Self::TAB_HEADER_HEIGHT).max(100);
+        let h = (tabs.h() - constants::TAB_HEADER_HEIGHT).max(100);
         let mut script_group = Group::new(x, y, w, h, None).with_label("Script Output");
         script_group.set_color(theme::panel_bg());
         script_group.set_label_color(theme::text_secondary());
         script_group.begin();
-        let padding = Self::SCRIPT_OUTPUT_PADDING;
+        let padding = constants::SCRIPT_OUTPUT_PADDING;
         let display_x = x + padding;
         let display_y = y + padding;
         let display_w = (w - padding * 2).max(10);
@@ -102,7 +100,7 @@ impl ResultTabsWidget {
             }
         });
 
-        let tab_header_height = Self::TAB_HEADER_HEIGHT;
+        let tab_header_height = constants::TAB_HEADER_HEIGHT;
         tabs.resize_callback(move |t, x, y, w, h| {
             let content_y = y + tab_header_height;
             let content_h = (h - tab_header_height).max(100);
@@ -203,9 +201,9 @@ impl ResultTabsWidget {
         // "center of requires the size of the widget to be known" panic
         // Use minimum dimensions (100x100) if tabs size is not yet known
         let x = self.tabs.x();
-        let y = self.tabs.y() + Self::TAB_HEADER_HEIGHT;
+        let y = self.tabs.y() + constants::TAB_HEADER_HEIGHT;
         let w = self.tabs.w().max(100);
-        let h = (self.tabs.h() - Self::TAB_HEADER_HEIGHT).max(100);
+        let h = (self.tabs.h() - constants::TAB_HEADER_HEIGHT).max(100);
         let mut group = Group::new(x, y, w, h, None).with_label(label);
         group.set_color(theme::panel_bg());
         group.set_label_color(theme::text_secondary());

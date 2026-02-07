@@ -12,6 +12,7 @@ use fltk::{
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::ui::constants::*;
 use crate::ui::{available_font_names, center_on_main, theme};
 use crate::utils::AppConfig;
 
@@ -100,19 +101,19 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
         .with_pos(10, 10)
         .with_size(width - 20, height - 20);
     main_flex.set_type(FlexType::Column);
-    main_flex.set_margin(6);
-    main_flex.set_spacing(10);
+    main_flex.set_margin(DIALOG_MARGIN);
+    main_flex.set_spacing(DIALOG_SPACING);
 
-    let mut search_row = Flex::default().with_size(0, 30);
+    let mut search_row = Flex::default().with_size(0, INPUT_ROW_HEIGHT);
     search_row.set_type(FlexType::Row);
-    search_row.set_spacing(8);
+    search_row.set_spacing(DIALOG_SPACING);
     let mut search_label = Frame::default().with_label("Font search");
     search_label.set_label_color(theme::text_primary());
     let mut search_input = Input::default();
     search_input.set_color(theme::input_bg());
     search_input.set_text_color(theme::text_primary());
     search_input.set_trigger(CallbackTrigger::Changed);
-    search_row.fixed(&search_label, 110);
+    search_row.fixed(&search_label, SETTINGS_LABEL_WIDTH);
     search_row.end();
 
     let mut list_label = Frame::default().with_label("Select font (applies to editor and results)");
@@ -122,58 +123,58 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     font_browser.set_color(theme::input_bg());
     font_browser.set_selection_color(theme::selection_strong());
 
-    let mut selected_row = Flex::default().with_size(0, 28);
+    let mut selected_row = Flex::default().with_size(0, CHECKBOX_ROW_HEIGHT);
     selected_row.set_type(FlexType::Row);
-    selected_row.set_spacing(8);
+    selected_row.set_spacing(DIALOG_SPACING);
     let mut selected_label = Frame::default().with_label("Selected font");
     selected_label.set_label_color(theme::text_primary());
     let mut selected_value = Frame::default();
     selected_value.set_label(&current_font);
     selected_value.set_label_color(theme::text_secondary());
-    selected_row.fixed(&selected_label, 110);
+    selected_row.fixed(&selected_label, SETTINGS_LABEL_WIDTH);
     selected_row.end();
 
-    let mut editor_size_row = Flex::default().with_size(0, 30);
+    let mut editor_size_row = Flex::default().with_size(0, INPUT_ROW_HEIGHT);
     editor_size_row.set_type(FlexType::Row);
-    editor_size_row.set_spacing(8);
+    editor_size_row.set_spacing(DIALOG_SPACING);
     let mut editor_size_label = Frame::default().with_label("Editor size");
     editor_size_label.set_label_color(theme::text_primary());
     let mut editor_size_input = IntInput::default();
     editor_size_input.set_value(&config.editor_font_size.to_string());
     editor_size_input.set_color(theme::input_bg());
     editor_size_input.set_text_color(theme::text_primary());
-    editor_size_row.fixed(&editor_size_label, 110);
-    editor_size_row.fixed(&editor_size_input, 80);
+    editor_size_row.fixed(&editor_size_label, SETTINGS_LABEL_WIDTH);
+    editor_size_row.fixed(&editor_size_input, NUMERIC_INPUT_WIDTH);
     editor_size_row.end();
 
-    let mut result_size_row = Flex::default().with_size(0, 30);
+    let mut result_size_row = Flex::default().with_size(0, INPUT_ROW_HEIGHT);
     result_size_row.set_type(FlexType::Row);
-    result_size_row.set_spacing(8);
+    result_size_row.set_spacing(DIALOG_SPACING);
     let mut result_size_label = Frame::default().with_label("Results size");
     result_size_label.set_label_color(theme::text_primary());
     let mut result_size_input = IntInput::default();
     result_size_input.set_value(&config.result_font_size.to_string());
     result_size_input.set_color(theme::input_bg());
     result_size_input.set_text_color(theme::text_primary());
-    result_size_row.fixed(&result_size_label, 110);
-    result_size_row.fixed(&result_size_input, 80);
+    result_size_row.fixed(&result_size_label, SETTINGS_LABEL_WIDTH);
+    result_size_row.fixed(&result_size_input, NUMERIC_INPUT_WIDTH);
     result_size_row.end();
 
-    let mut button_row = Flex::default().with_size(0, 34);
+    let mut button_row = Flex::default().with_size(0, BUTTON_ROW_HEIGHT);
     button_row.set_type(FlexType::Row);
-    button_row.set_spacing(10);
+    button_row.set_spacing(DIALOG_SPACING);
     let spacer = Frame::default();
     button_row.resizable(&spacer);
-    let mut cancel_btn = Button::default().with_size(90, 28).with_label("Cancel");
+    let mut cancel_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Cancel");
     cancel_btn.set_color(theme::button_secondary());
     cancel_btn.set_label_color(theme::text_primary());
     cancel_btn.set_frame(FrameType::RFlatBox);
-    let mut ok_btn = Button::default().with_size(90, 28).with_label("Save");
+    let mut ok_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Save");
     ok_btn.set_color(theme::button_primary());
     ok_btn.set_label_color(theme::text_primary());
     ok_btn.set_frame(FrameType::RFlatBox);
-    button_row.fixed(&cancel_btn, 90);
-    button_row.fixed(&ok_btn, 90);
+    button_row.fixed(&cancel_btn, BUTTON_WIDTH);
+    button_row.fixed(&ok_btn, BUTTON_WIDTH);
     button_row.end();
 
     main_flex.end();
