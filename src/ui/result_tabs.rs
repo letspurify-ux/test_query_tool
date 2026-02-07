@@ -1,4 +1,6 @@
 use fltk::{
+    app,
+    enums::{Event, Key},
     group::{Group, Tabs, TabsOverflow},
     prelude::*,
     text::{TextBuffer, TextDisplay},
@@ -97,6 +99,38 @@ impl ResultTabsWidget {
                 let data = data_for_cb.borrow();
                 let index = data.iter().position(|tab| tab.group.as_widget_ptr() == ptr);
                 *active_for_cb.borrow_mut() = index;
+            }
+        });
+
+        let tabs_for_key = tabs.clone();
+        tabs.handle(move |_, ev| {
+            if !matches!(ev, Event::KeyDown) {
+                return false;
+            }
+
+            let key = app::event_key();
+            if !matches!(key, Key::Left | Key::Right | Key::Up | Key::Down) {
+                return false;
+            }
+
+            let children: Vec<Group> = tabs_for_key
+                .clone()
+                .into_iter()
+                .filter_map(|w| w.as_group())
+                .collect();
+            if children.is_empty() {
+                return true;
+            }
+
+            let current_ptr = tabs_for_key.value().map(|w| w.as_widget_ptr());
+            let index = current_ptr
+                .and_then(|ptr| children.iter().position(|g| g.as_widget_ptr() == ptr))
+                .unwrap_or(0);
+
+            match key {
+                Key::Left | Key::Up => index == 0,
+                Key::Right | Key::Down => index + 1 >= children.len(),
+                _ => false,
             }
         });
 

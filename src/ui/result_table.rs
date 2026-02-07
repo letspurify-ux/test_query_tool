@@ -61,6 +61,34 @@ struct DragState {
 }
 
 impl ResultTableWidget {
+    fn should_consume_boundary_arrow(table: &Table, key: Key) -> bool {
+        let rows = table.rows();
+        let cols = table.cols();
+        if rows <= 0 || cols <= 0 {
+            return true;
+        }
+
+        let (row_top, col_left, row_bot, col_right) = table.get_selection();
+        let row = if row_top >= 0 && row_bot >= 0 {
+            row_top.min(row_bot)
+        } else {
+            return false;
+        };
+        let col = if col_left >= 0 && col_right >= 0 {
+            col_left.min(col_right)
+        } else {
+            return false;
+        };
+
+        match key {
+            Key::Left => col <= 0,
+            Key::Right => col >= cols - 1,
+            Key::Up => row <= 0,
+            Key::Down => row >= rows - 1,
+            _ => return false,
+        }
+    }
+
     fn apply_table_metrics_for_current_font(&mut self) {
         let font_size = self.font_size.get();
         self.table
@@ -334,6 +362,10 @@ impl ResultTableWidget {
                     let ctrl_or_cmd =
                         state.contains(Shortcut::Ctrl) || state.contains(Shortcut::Command);
                     let shift = state.contains(Shortcut::Shift);
+
+                    if matches!(key, Key::Left | Key::Right | Key::Up | Key::Down) {
+                        return Self::should_consume_boundary_arrow(&table_for_handle, key);
+                    }
 
                     if ctrl_or_cmd {
                         match key {
