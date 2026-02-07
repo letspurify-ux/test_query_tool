@@ -47,7 +47,6 @@ pub struct AppState {
     pub status_bar: Frame,
     pub fetch_row_counts: HashMap<usize, usize>,
     pub current_file: Rc<RefCell<Option<PathBuf>>>,
-    pub last_result: Rc<RefCell<Option<QueryResult>>>,
     pub popups: Rc<RefCell<Vec<Window>>>,
     pub window: Window,
     pub right_flex: Flex,
@@ -238,6 +237,15 @@ impl MainWindow {
         result_toolbar.set_margin(TOOLBAR_SPACING);
         result_toolbar.set_spacing(TOOLBAR_SPACING);
 
+        let mut close_tab_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Close Tab");
+        close_tab_btn.set_color(theme::button_subtle());
+        close_tab_btn.set_label_color(theme::text_secondary());
+        close_tab_btn.set_frame(FrameType::RFlatBox);
+        close_tab_btn.set_tooltip("Close the current result tab (Ctrl+W)");
+        result_toolbar.fixed(&close_tab_btn, BUTTON_WIDTH);
+
         let mut clear_tabs_btn = Button::default()
             .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
             .with_label("Clear Tabs");
@@ -273,6 +281,19 @@ impl MainWindow {
         window.make_resizable(true);
 
         let sql_buffer = sql_editor.get_buffer();
+
+        let result_tabs_for_close = result_tabs.clone();
+        let sql_editor_for_close = sql_editor.clone();
+        close_tab_btn.set_callback(move |_| {
+            if sql_editor_for_close.is_query_running() {
+                fltk::dialog::alert_default("A query is running. Stop it before closing tabs.");
+                return;
+            }
+            let mut tabs = result_tabs_for_close.clone();
+            tabs.close_current_tab();
+            app::redraw();
+        });
+
         let result_tabs_for_clear = result_tabs.clone();
         let sql_editor_for_clear = sql_editor.clone();
         clear_tabs_btn.set_callback(move |_| {
@@ -295,7 +316,6 @@ impl MainWindow {
             status_bar,
             fetch_row_counts: HashMap::new(),
             current_file: Rc::new(RefCell::new(None)),
-            last_result: Rc::new(RefCell::new(None)),
             popups: Rc::new(RefCell::new(Vec::new())),
             window,
             right_flex: right_flex.clone(),
@@ -418,7 +438,6 @@ impl MainWindow {
                     return;
                 };
                 let mut s = state_for_execute.borrow_mut();
-                *s.last_result.borrow_mut() = Some(query_result.clone());
                 let conn_info = s.connection_info.borrow().clone();
                 let base_msg = if query_result.success {
                     format!(
@@ -1296,15 +1315,17 @@ impl MainWindow {
         let weak_state_for_close = Rc::downgrade(&state);
         window.set_callback(move |w| {
             if let Some(state) = weak_state_for_close.upgrade() {
-                let (popups, sql_editor) = {
+                let (popups, sql_editor, mut result_tabs) = {
                     let s = state.borrow();
-                    (s.popups.clone(), s.sql_editor.clone())
+                    (s.popups.clone(), s.sql_editor.clone(), s.result_tabs.clone())
                 };
                 let mut popups = popups.borrow_mut();
                 for mut popup in popups.drain(..) {
                     popup.hide();
                 }
                 sql_editor.hide_intellisense();
+                // Clean up result tabs to release FLTK widget callbacks and data buffers
+                result_tabs.clear();
             }
             w.hide();
             app::quit();
