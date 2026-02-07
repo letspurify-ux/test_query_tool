@@ -7033,20 +7033,24 @@ impl SqlEditorWidget {
 
         let _spacer = Frame::default();
 
-        let mut ok_btn = Button::default().with_size(80, 24).with_label("OK");
+        let mut ok_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("OK");
         ok_btn.set_color(theme::button_primary());
         ok_btn.set_label_color(theme::text_primary());
         ok_btn.set_frame(FrameType::RFlatBox);
 
-        let mut cancel_btn = Button::default().with_size(80, 24).with_label("Cancel");
+        let mut cancel_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Cancel");
         cancel_btn.set_color(theme::button_subtle());
         cancel_btn.set_label_color(theme::text_primary());
         cancel_btn.set_frame(FrameType::RFlatBox);
 
-        button_flex.fixed(&ok_btn, 80);
-        button_flex.fixed(&cancel_btn, 80);
+        button_flex.fixed(&ok_btn, BUTTON_WIDTH);
+        button_flex.fixed(&cancel_btn, BUTTON_WIDTH);
         button_flex.end();
-        main_flex.fixed(&button_flex, 28);
+        main_flex.fixed(&button_flex, BUTTON_ROW_HEIGHT);
         main_flex.end();
         dialog.end();
 

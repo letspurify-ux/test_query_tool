@@ -98,6 +98,11 @@ pub fn configured_editor_profile() -> FontProfile {
     profile_by_name(&config.editor_font)
 }
 
+pub fn configured_ui_font_size() -> i32 {
+    let config = AppConfig::load();
+    config.ui_font_size.clamp(8, 24) as i32
+}
+
 fn find_font_by_name(name: &str) -> Option<Font> {
     let name = name.trim();
     if name.is_empty() {

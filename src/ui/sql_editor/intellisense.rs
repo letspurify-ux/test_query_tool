@@ -1047,15 +1047,16 @@ impl SqlEditorWidget {
         display.set_color(theme::editor_bg());
         display.set_text_color(theme::text_primary());
         display.set_text_font(crate::ui::configured_editor_profile().normal);
-        display.set_text_size(14);
+        display.set_text_size(crate::ui::configured_ui_font_size());
 
         let mut buffer = fltk::text::TextBuffer::default();
         buffer.set_text(&info);
         display.set_buffer(buffer);
 
+        let close_btn_x = (600 - BUTTON_WIDTH) / 2;
         let mut close_btn = fltk::button::Button::default()
-            .with_pos(250, 360)
-            .with_size(100, 20)
+            .with_pos(close_btn_x, 360)
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
             .with_label("Close");
         close_btn.set_color(theme::button_secondary());
         close_btn.set_label_color(theme::text_primary());

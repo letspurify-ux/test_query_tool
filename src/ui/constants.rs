@@ -20,7 +20,7 @@ pub const BUTTON_HEIGHT: i32 = 28;
 pub const INPUT_ROW_HEIGHT: i32 = 30;
 
 /// Height of a row containing action buttons at the bottom of a dialog.
-pub const BUTTON_ROW_HEIGHT: i32 = 36;
+pub const BUTTON_ROW_HEIGHT: i32 = 28;
 
 /// Height of a row containing only a label/frame.
 pub const LABEL_ROW_HEIGHT: i32 = 22;

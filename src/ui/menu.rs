@@ -9,7 +9,7 @@ use fltk::{
 };
 
 use crate::ui::center_on_main;
-use crate::ui::configured_editor_profile;
+use crate::ui::{configured_editor_profile, configured_ui_font_size};
 use crate::ui::constants::*;
 use crate::ui::theme;
 
@@ -36,14 +36,14 @@ fn show_info_dialog(title: &str, content: &str, width: i32, height: i32) {
     display.set_color(theme::editor_bg());
     display.set_text_color(theme::text_primary());
     display.set_text_font(configured_editor_profile().normal);
-    display.set_text_size(DEFAULT_FONT_SIZE);
+    display.set_text_size(configured_ui_font_size());
 
     let mut buffer = TextBuffer::default();
     buffer.set_text(content);
     display.set_buffer(buffer);
 
     let button_x = (width - BUTTON_WIDTH) / 2;
-    let button_y = height - BUTTON_ROW_HEIGHT - 1;
+    let button_y = height - BUTTON_HEIGHT - DIALOG_MARGIN;
     let mut close_btn = Button::default()
         .with_pos(button_x, button_y)
         .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)

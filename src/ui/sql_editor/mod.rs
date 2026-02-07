@@ -18,7 +18,7 @@ use crate::db::{
     lock_connection, ConnectionInfo, QueryExecutor, QueryResult, SharedConnection,
     TableColumnDetail,
 };
-use crate::ui::font_settings::{configured_editor_profile, FontProfile};
+use crate::ui::font_settings::{configured_editor_profile, configured_ui_font_size, FontProfile};
 use crate::ui::intellisense::{IntellisenseData, IntellisensePopup};
 use crate::ui::query_history::QueryHistoryDialog;
 use crate::ui::syntax_highlight::{
@@ -189,7 +189,7 @@ impl SqlEditorWidget {
         timeout_input.set_value("60");
 
         button_pack.end();
-        group.fixed(&button_pack, RESULT_TOOLBAR_HEIGHT);
+        group.fixed(&button_pack, BUTTON_ROW_HEIGHT);
 
         // SQL Editor with modern styling
         let buffer = TextBuffer::default();
@@ -773,7 +773,7 @@ impl SqlEditorWidget {
         display.set_color(theme::editor_bg());
         display.set_text_color(theme::text_primary());
         display.set_text_font(configured_editor_profile().normal);
-        display.set_text_size(DEFAULT_FONT_SIZE);
+        display.set_text_size(configured_ui_font_size());
 
         let mut buffer = fltk::text::TextBuffer::default();
         buffer.set_text(plan_text);
@@ -958,17 +958,19 @@ impl SqlEditorWidget {
         self.buffer.clone()
     }
 
-    pub fn apply_font_settings(&mut self, profile: FontProfile, size: u32) {
+    pub fn apply_font_settings(&mut self, profile: FontProfile, size: u32, ui_size: i32) {
         let size_i32 = size as i32;
         self.editor.set_text_font(profile.normal);
         self.editor.set_text_size(size_i32);
         self.editor.set_linenumber_font(profile.normal);
         self.editor
             .set_linenumber_size((size.saturating_sub(2)) as i32);
+        self.timeout_input.set_text_size(ui_size);
         let style_table = create_style_table_with(profile, size);
         self.editor
             .set_highlight_data(self.style_buffer.clone(), style_table);
         self.refresh_highlighting();
+        self.timeout_input.redraw();
         self.editor.redraw();
     }
 

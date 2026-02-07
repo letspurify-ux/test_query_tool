@@ -18,6 +18,7 @@ use crate::utils::AppConfig;
 
 pub struct FontSettings {
     pub font: String,
+    pub ui_size: u32,
     pub editor_size: u32,
     pub result_size: u32,
 }
@@ -30,6 +31,16 @@ fn validate_size(label: &str, value: &str) -> Option<u32> {
                 "{} size must be a number between 8 and 48.",
                 label
             ));
+            None
+        }
+    }
+}
+
+fn validate_ui_size(value: &str) -> Option<u32> {
+    match value.trim().parse::<u32>() {
+        Ok(size) if (8..=24).contains(&size) => Some(size),
+        _ => {
+            fltk::dialog::alert_default("Global UI size must be a number between 8 and 24.");
             None
         }
     }
@@ -172,6 +183,22 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     size_row.end();
     main_flex.fixed(&size_row, INPUT_ROW_HEIGHT);
 
+    // Global UI font size row
+    let mut global_size_row = Flex::default().with_size(0, INPUT_ROW_HEIGHT);
+    global_size_row.set_type(FlexType::Row);
+    global_size_row.set_spacing(DIALOG_SPACING);
+    let mut global_size_label = Frame::default().with_label("Global UI:");
+    global_size_label.set_label_color(theme::text_primary());
+    global_size_row.fixed(&global_size_label, FORM_LABEL_WIDTH);
+    let mut global_size_input = IntInput::default();
+    global_size_input.set_value(&config.ui_font_size.to_string());
+    global_size_input.set_color(theme::input_bg());
+    global_size_input.set_text_color(theme::text_primary());
+    global_size_row.fixed(&global_size_input, NUMERIC_INPUT_WIDTH);
+    let _global_size_spacer = Frame::default();
+    global_size_row.end();
+    main_flex.fixed(&global_size_row, INPUT_ROW_HEIGHT);
+
     let mut size_hint = Frame::default().with_label("(8 ~ 48pt)");
     size_hint.set_label_color(theme::text_secondary());
     main_flex.fixed(&size_hint, LABEL_ROW_HEIGHT);
@@ -253,8 +280,13 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     let mut dialog_handle = dialog.clone();
     let editor_size_input_ok = editor_size_input.clone();
     let result_size_input_ok = result_size_input.clone();
+    let global_size_input_ok = global_size_input.clone();
     let selected_font_ok = selected_font.clone();
     ok_btn.set_callback(move |_| {
+        let ui_size = match validate_ui_size(&global_size_input_ok.value()) {
+            Some(size) => size,
+            None => return,
+        };
         let editor_size = match validate_size("Editor", &editor_size_input_ok.value()) {
             Some(size) => size,
             None => return,
@@ -270,6 +302,7 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
         }
         *result_for_ok.borrow_mut() = Some(FontSettings {
             font,
+            ui_size,
             editor_size,
             result_size,
         });

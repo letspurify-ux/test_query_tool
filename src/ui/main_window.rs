@@ -9,6 +9,7 @@ use fltk::{
     menu::MenuBar,
     prelude::*,
     text::TextBuffer,
+    widget::Widget,
     window::Window,
 };
 use std::cell::{Cell, RefCell};
@@ -234,20 +235,20 @@ impl MainWindow {
 
         let mut result_toolbar = Flex::default();
         result_toolbar.set_type(FlexType::Row);
-        result_toolbar.set_margin(6);
-        result_toolbar.set_spacing(5);
-
-        let spacer = Frame::default();
-        result_toolbar.resizable(&spacer);
+        result_toolbar.set_margin(TOOLBAR_SPACING);
+        result_toolbar.set_spacing(TOOLBAR_SPACING);
 
         let mut clear_tabs_btn = Button::default()
-            .with_size(BUTTON_WIDTH_LARGE, BUTTON_HEIGHT)
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
             .with_label("Clear Tabs");
         clear_tabs_btn.set_color(theme::button_subtle());
         clear_tabs_btn.set_label_color(theme::text_secondary());
         clear_tabs_btn.set_frame(FrameType::RFlatBox);
         clear_tabs_btn.set_tooltip("Remove all result tabs");
-        result_toolbar.fixed(&clear_tabs_btn, BUTTON_WIDTH_LARGE);
+        result_toolbar.fixed(&clear_tabs_btn, BUTTON_WIDTH);
+
+        let spacer = Frame::default();
+        result_toolbar.resizable(&spacer);
 
         result_toolbar.end();
         right_flex.fixed(&result_toolbar, RESULT_TOOLBAR_HEIGHT);
@@ -323,18 +324,57 @@ impl MainWindow {
     }
 
     fn apply_font_settings(state: &mut AppState) {
-        let config = state.config.borrow();
-        let unified_profile = font_settings::profile_by_name(&config.editor_font);
+        let (unified_profile, ui_size, editor_size, result_size) = {
+            let config = state.config.borrow();
+            (
+                font_settings::profile_by_name(&config.editor_font),
+                config.ui_font_size.clamp(8, 24) as i32,
+                config.editor_font_size,
+                config.result_font_size,
+            )
+        };
         app::set_font(unified_profile.normal);
+        app::set_font_size(ui_size);
         fltk::misc::Tooltip::set_font(unified_profile.normal);
-        fltk::dialog::message_set_font(unified_profile.normal, app::font_size());
+        fltk::misc::Tooltip::set_font_size(ui_size);
+        fltk::dialog::message_set_font(unified_profile.normal, ui_size);
         state
             .sql_editor
-            .apply_font_settings(unified_profile, config.editor_font_size);
+            .apply_font_settings(unified_profile, editor_size, ui_size);
         state
             .result_tabs
-            .apply_font_settings(unified_profile, config.result_font_size);
+            .apply_font_settings(unified_profile, result_size);
+        state.object_browser.apply_ui_font_size(ui_size);
+        Self::apply_runtime_ui_font_size(state, ui_size);
         app::redraw();
+    }
+
+    fn apply_runtime_ui_font_size(state: &mut AppState, ui_size: i32) {
+        fn apply_widget_label_size_recursive(widget: &mut Widget, size: i32) {
+            widget.set_label_size(size);
+            if let Some(group) = widget.as_group() {
+                for mut child in group.into_iter() {
+                    apply_widget_label_size_recursive(&mut child, size);
+                }
+            }
+        }
+
+        let mut window = state.window.clone();
+        window.set_label_size(ui_size);
+        for mut child in window.clone().into_iter() {
+            apply_widget_label_size_recursive(&mut child, ui_size);
+        }
+
+        if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
+            menu.set_text_size(ui_size);
+        }
+
+        for popup in state.popups.borrow_mut().iter_mut() {
+            popup.set_label_size(ui_size);
+            for mut child in popup.clone().into_iter() {
+                apply_widget_label_size_recursive(&mut child, ui_size);
+            }
+        }
     }
 
     fn adjust_query_layout_with(right_flex: &mut fltk::group::Flex, sql_group: &fltk::group::Flex) {
@@ -1193,6 +1233,7 @@ impl MainWindow {
                                 let save_result = {
                                     let mut config = s.config.borrow_mut();
                                     config.editor_font = settings.font.clone();
+                                    config.ui_font_size = settings.ui_size;
                                     config.editor_font_size = settings.editor_size;
                                     config.result_font = settings.font;
                                     config.result_font_size = settings.result_size;
@@ -1244,8 +1285,10 @@ impl MainWindow {
         let app = app::App::default()
             .with_scheme(app::Scheme::Gtk)
             .load_system_fonts();
-        app::set_font_size(DEFAULT_FONT_SIZE);
-        fltk::misc::Tooltip::set_font_size(DEFAULT_FONT_SIZE);
+        let config = AppConfig::load();
+        let ui_size = config.ui_font_size.clamp(8, 24) as i32;
+        app::set_font_size(ui_size);
+        fltk::misc::Tooltip::set_font_size(ui_size);
 
         // Set default colors for Windows 11-inspired theme
         let (bg_r, bg_g, bg_b) = theme::app_background().to_rgb();

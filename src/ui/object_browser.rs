@@ -16,7 +16,7 @@ use crate::db::{
     lock_connection, ConstraintInfo, IndexInfo, ObjectBrowser, ProcedureArgument, SequenceInfo,
     SharedConnection, TableColumnDetail,
 };
-use crate::ui::configured_editor_profile;
+use crate::ui::{configured_editor_profile, configured_ui_font_size};
 use crate::ui::constants::*;
 use crate::ui::theme;
 
@@ -170,6 +170,13 @@ impl ObjectBrowserWidget {
 
     pub fn get_widget(&self) -> Flex {
         self.flex.clone()
+    }
+
+    pub fn apply_ui_font_size(&mut self, ui_size: i32) {
+        self.filter_input.set_text_size(ui_size);
+        self.tree.set_item_label_size(ui_size);
+        self.filter_input.redraw();
+        self.tree.redraw();
     }
 
     fn setup_filter_callback(&mut self) {
@@ -1196,7 +1203,7 @@ impl ObjectBrowserWidget {
         display.set_color(theme::editor_bg());
         display.set_text_color(theme::text_primary());
         display.set_text_font(configured_editor_profile().normal);
-        display.set_text_size(DEFAULT_FONT_SIZE);
+        display.set_text_size(configured_ui_font_size());
 
         let mut buffer = fltk::text::TextBuffer::default();
         buffer.set_text(content);

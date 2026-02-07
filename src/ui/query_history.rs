@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ui::center_on_main;
-use crate::ui::configured_editor_profile;
+use crate::ui::{configured_editor_profile, configured_ui_font_size};
 use crate::ui::constants::*;
 use crate::ui::theme;
 use crate::utils::config::{QueryHistory, QueryHistoryEntry};
@@ -104,7 +104,7 @@ impl QueryHistoryDialog {
         preview_display.set_color(theme::editor_bg());
         preview_display.set_text_color(theme::text_primary());
         preview_display.set_text_font(configured_editor_profile().normal);
-        preview_display.set_text_size(DEFAULT_FONT_SIZE);
+        preview_display.set_text_size(configured_ui_font_size());
 
         preview_flex.end();
 

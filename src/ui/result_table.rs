@@ -61,6 +61,109 @@ struct DragState {
 }
 
 impl ResultTableWidget {
+    fn apply_table_metrics_for_current_font(&mut self) {
+        let font_size = self.font_size.get();
+        self.table
+            .set_row_height_all(Self::row_height_for_font(font_size));
+        self.table
+            .set_col_header_height(Self::header_height_for_font(font_size));
+    }
+
+    fn row_height_for_font(size: u32) -> i32 {
+        (size as i32 + TABLE_CELL_PADDING * 2 + 4).max(TABLE_ROW_HEIGHT)
+    }
+
+    fn header_height_for_font(size: u32) -> i32 {
+        (size as i32 + TABLE_CELL_PADDING * 2 + 6).max(TABLE_COL_HEADER_HEIGHT)
+    }
+
+    fn min_col_width_for_font(size: u32) -> i32 {
+        (size as i32 * 6).max(80)
+    }
+
+    fn max_col_width_for_font(size: u32) -> i32 {
+        (size as i32 * 28).max(300)
+    }
+
+    fn estimate_text_width(text: &str, font_size: u32) -> i32 {
+        let char_count = text.chars().count() as i32;
+        let avg_char_px = ((font_size as i32 * 62) + 99) / 100;
+        let raw = char_count.saturating_mul(avg_char_px) + TABLE_CELL_PADDING * 2 + 2;
+        raw.clamp(
+            Self::min_col_width_for_font(font_size),
+            Self::max_col_width_for_font(font_size),
+        )
+    }
+
+    fn update_widths_with_row(widths: &mut Vec<i32>, row: &[String], font_size: u32) {
+        let min_width = Self::min_col_width_for_font(font_size);
+        if row.len() > widths.len() {
+            widths.resize(row.len(), min_width);
+        }
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(Self::estimate_text_width(cell, font_size));
+        }
+    }
+
+    fn compute_column_widths(headers: &[String], rows: &[Vec<String>], font_size: u32) -> Vec<i32> {
+        let mut widths: Vec<i32> = headers
+            .iter()
+            .map(|h| Self::estimate_text_width(h, font_size))
+            .collect();
+
+        let sample_count = rows.len().min(WIDTH_SAMPLE_ROWS);
+        for row in rows.iter().take(sample_count) {
+            Self::update_widths_with_row(&mut widths, row, font_size);
+        }
+
+        widths
+    }
+
+    fn apply_widths_to_table(&mut self, widths: &[i32]) {
+        if widths.is_empty() {
+            return;
+        }
+        if self.table.cols() < widths.len() as i32 {
+            self.table.set_cols(widths.len() as i32);
+        }
+        for (i, width) in widths.iter().enumerate() {
+            self.table.set_col_width(i as i32, *width);
+        }
+    }
+
+    fn recalculate_widths_for_current_font(&mut self) {
+        let headers = self.headers.borrow().clone();
+        if headers.is_empty() {
+            return;
+        }
+
+        let font_size = self.font_size.get();
+        let mut widths: Vec<i32> = headers
+            .iter()
+            .map(|h| Self::estimate_text_width(h, font_size))
+            .collect();
+
+        let mut sampled = 0usize;
+        {
+            let full_data = self.full_data.borrow();
+            for row in full_data.iter().take(WIDTH_SAMPLE_ROWS) {
+                Self::update_widths_with_row(&mut widths, row, font_size);
+                sampled += 1;
+            }
+        }
+
+        if sampled < WIDTH_SAMPLE_ROWS {
+            let pending = self.pending_rows.borrow();
+            let remaining = WIDTH_SAMPLE_ROWS - sampled;
+            for row in pending.iter().take(remaining) {
+                Self::update_widths_with_row(&mut widths, row, font_size);
+            }
+        }
+
+        *self.pending_widths.borrow_mut() = widths.clone();
+        self.apply_widths_to_table(&widths);
+    }
+
     pub fn new() -> Self {
         Self::with_size(0, 0, 100, 100)
     }
@@ -78,8 +181,8 @@ impl ResultTableWidget {
         table.set_row_header(true);
         table.set_row_header_width(TABLE_ROW_HEADER_WIDTH);
         table.set_col_header(true);
-        table.set_col_header_height(TABLE_COL_HEADER_HEIGHT);
-        table.set_row_height_all(TABLE_ROW_HEIGHT);
+        table.set_col_header_height(Self::header_height_for_font(DEFAULT_FONT_SIZE as u32));
+        table.set_row_height_all(Self::row_height_for_font(DEFAULT_FONT_SIZE as u32));
         table.set_rows(0);
         table.set_cols(0);
         table.end();
@@ -643,10 +746,14 @@ impl ResultTableWidget {
 
     pub fn display_result(&mut self, result: &QueryResult) {
         if !result.is_select {
+            let font_size = self.font_size.get();
             self.table.set_rows(1);
             self.table.set_cols(1);
-            self.table
-                .set_col_width(0, (result.message.len() * 8).max(200) as i32);
+            self.apply_table_metrics_for_current_font();
+            let message_width = Self::estimate_text_width(&result.message, font_size)
+                .max(200)
+                .min(1200);
+            self.table.set_col_width(0, message_width);
             *self.headers.borrow_mut() = vec!["Result".to_string()];
             *self.full_data.borrow_mut() = vec![vec![result.message.clone()]];
             self.table.redraw();
@@ -659,6 +766,7 @@ impl ResultTableWidget {
             if self.table.cols() < col_count {
                 self.table.set_cols(col_count);
             }
+            self.apply_table_metrics_for_current_font();
             *self.headers.borrow_mut() = col_names;
             self.table.redraw();
             return;
@@ -671,26 +779,12 @@ impl ResultTableWidget {
         // Update table dimensions — no internal CellMatrix to rebuild
         self.table.set_rows(row_count);
         self.table.set_cols(col_count);
+        self.apply_table_metrics_for_current_font();
 
-        // Calculate column widths (sample first N rows for large datasets)
-        let mut widths: Vec<i32> = col_names
-            .iter()
-            .map(|h| (h.len() * 10).max(80) as i32)
-            .collect();
-
-        let sample_count = result.rows.len().min(WIDTH_SAMPLE_ROWS);
-        for row in result.rows[..sample_count].iter() {
-            for (i, cell) in row.iter().enumerate() {
-                if i < widths.len() {
-                    let cell_width = (cell.len() * 8).max(80).min(300) as i32;
-                    widths[i] = widths[i].max(cell_width);
-                }
-            }
-        }
-
-        for (i, width) in widths.iter().enumerate() {
-            self.table.set_col_width(i as i32, *width);
-        }
+        let font_size = self.font_size.get();
+        let widths = Self::compute_column_widths(&col_names, &result.rows, font_size);
+        self.apply_widths_to_table(&widths);
+        *self.pending_widths.borrow_mut() = widths;
 
         // Store data directly — draw_cell reads from full_data on demand.
         // No per-cell set_cell_value calls needed!
@@ -710,14 +804,16 @@ impl ResultTableWidget {
         *self.width_sampled_rows.borrow_mut() = 0;
 
         // Initialize pending widths based on headers
+        let font_size = self.font_size.get();
         let initial_widths: Vec<i32> = headers
             .iter()
-            .map(|h| (h.len() * 10).max(80) as i32)
+            .map(|h| Self::estimate_text_width(h, font_size))
             .collect();
         *self.pending_widths.borrow_mut() = initial_widths.clone();
 
         self.table.set_rows(0);
         self.table.set_cols(col_count);
+        self.apply_table_metrics_for_current_font();
 
         for (i, _name) in headers.iter().enumerate() {
             self.table.set_col_width(i as i32, initial_widths[i]);
@@ -735,23 +831,17 @@ impl ResultTableWidget {
         if sampled < WIDTH_SAMPLE_ROWS {
             let max_cols = rows.iter().map(|row| row.len()).max().unwrap_or(0);
             let mut widths = self.pending_widths.borrow_mut();
+            let min_width = Self::min_col_width_for_font(self.font_size.get());
             if widths.len() < max_cols {
-                widths.resize(max_cols, 80);
+                widths.resize(max_cols, min_width);
             }
             let remaining = WIDTH_SAMPLE_ROWS - sampled;
             let sample_count = rows.len().min(remaining);
             for row in rows[..sample_count].iter() {
-                for (col_idx, cell) in row.iter().enumerate() {
-                    if col_idx < widths.len() {
-                        let cell_width = (cell.len() * 8).max(80).min(300) as i32;
-                        if cell_width > widths[col_idx] {
-                            widths[col_idx] = cell_width;
-                        }
-                    }
-                }
+                Self::update_widths_with_row(&mut widths, row, self.font_size.get());
             }
             drop(widths);
-            *self.width_sampled_rows.borrow_mut() = sampled + rows.len();
+            *self.width_sampled_rows.borrow_mut() = sampled + sample_count;
         }
 
         // Add rows to pending buffer
@@ -804,6 +894,7 @@ impl ResultTableWidget {
 
         // Just update row count — draw_cell reads from full_data on demand
         self.table.set_rows(new_total);
+        self.apply_table_metrics_for_current_font();
 
         *self.last_flush.borrow_mut() = Instant::now();
         self.table.redraw();
@@ -939,10 +1030,8 @@ impl ResultTableWidget {
     pub fn apply_font_settings(&mut self, profile: FontProfile, size: u32) {
         self.font_profile.set(profile);
         self.font_size.set(size);
-        let row_height = (size + 12) as i32;
-        let header_height = (size + 14) as i32;
-        self.table.set_row_height_all(row_height);
-        self.table.set_col_header_height(header_height);
+        self.apply_table_metrics_for_current_font();
+        self.recalculate_widths_for_current_font();
         self.table.redraw();
     }
 
