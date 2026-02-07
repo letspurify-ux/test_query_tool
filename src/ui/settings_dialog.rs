@@ -89,7 +89,7 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     }
 
     let width = 480;
-    let height = 460;
+    let height = 480;
     let mut dialog = Window::default()
         .with_size(width, height)
         .with_label("Settings");
@@ -122,9 +122,12 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     search_row.end();
     main_flex.fixed(&search_row, INPUT_ROW_HEIGHT);
 
-    let mut font_browser = HoldBrowser::default().with_size(0, 200);
+    let mut font_browser = HoldBrowser::default().with_size(0, 400);
     font_browser.set_color(theme::input_bg());
     font_browser.set_selection_color(theme::selection_strong());
+    // Expand extra vertical space into the font list instead of creating
+    // blank area below size settings.
+    main_flex.resizable(&font_browser);
 
     let mut selected_row = Flex::default().with_size(0, CHECKBOX_ROW_HEIGHT);
     selected_row.set_type(FlexType::Row);
@@ -172,10 +175,6 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     let mut size_hint = Frame::default().with_label("(8 ~ 48pt)");
     size_hint.set_label_color(theme::text_secondary());
     main_flex.fixed(&size_hint, LABEL_ROW_HEIGHT);
-
-    // Flexible spacer
-    let spacer = Frame::default();
-    main_flex.resizable(&spacer);
 
     // ── Buttons ──
     let mut button_row = Flex::default().with_size(0, BUTTON_ROW_HEIGHT);
