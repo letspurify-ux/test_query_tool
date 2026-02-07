@@ -2926,3 +2926,207 @@ SELECT * FROM cte;"#;
         "CTE body should be indented under WITH"
     );
 }
+
+// ── parse_ddl_object_type tests ──
+
+#[test]
+fn test_parse_ddl_object_type_create_table() {
+    assert_eq!(QueryExecutor::parse_ddl_object_type("CREATE TABLE MY_TABLE (ID NUMBER)"), "Table");
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_global_temp_table() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE GLOBAL TEMPORARY TABLE MY_TABLE (ID NUMBER)"),
+        "Table"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_view() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE VIEW MY_VIEW AS SELECT 1 FROM DUAL"),
+        "View"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_materialized_view() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE MATERIALIZED VIEW MY_MV AS SELECT 1 FROM DUAL"),
+        "View"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_index() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE INDEX MY_IDX ON MY_TABLE(ID)"),
+        "Index"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_unique_index() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE UNIQUE INDEX MY_IDX ON MY_TABLE(ID)"),
+        "Index"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_procedure() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE PROCEDURE MY_PROC AS BEGIN NULL; END;"),
+        "Procedure"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_or_replace_procedure() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE OR REPLACE PROCEDURE MY_PROC AS BEGIN NULL; END;"),
+        "Procedure"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_function() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE FUNCTION MY_FUNC RETURN NUMBER IS BEGIN RETURN 1; END;"),
+        "Function"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_or_replace_function() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE OR REPLACE FUNCTION MY_FUNC RETURN NUMBER IS BEGIN RETURN 1; END;"),
+        "Function"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_package() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE PACKAGE MY_PKG AS PROCEDURE PROC1; END MY_PKG;"),
+        "Package"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_package_body() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE PACKAGE BODY MY_PKG AS PROCEDURE PROC1 IS BEGIN NULL; END; END MY_PKG;"),
+        "Package Body"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_trigger() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE TRIGGER MY_TRIG BEFORE INSERT ON MY_TABLE BEGIN NULL; END;"),
+        "Trigger"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_sequence() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE SEQUENCE MY_SEQ START WITH 1"),
+        "Sequence"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_synonym() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE SYNONYM MY_SYN FOR OTHER_TABLE"),
+        "Synonym"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_public_synonym() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE PUBLIC SYNONYM MY_SYN FOR OTHER_TABLE"),
+        "Synonym"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_type() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE TYPE MY_TYPE AS OBJECT (ID NUMBER)"),
+        "Type"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_type_body() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE TYPE BODY MY_TYPE AS MEMBER FUNCTION GET_ID RETURN NUMBER IS BEGIN RETURN ID; END; END;"),
+        "Type Body"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_database_link() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE DATABASE LINK MY_LINK CONNECT TO USER IDENTIFIED BY PASS USING 'TNS'"),
+        "Database Link"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_or_replace_editionable_function() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE OR REPLACE EDITIONABLE FUNCTION MY_FUNC RETURN NUMBER IS BEGIN RETURN 1; END;"),
+        "Function"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_alter_table() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("ALTER TABLE MY_TABLE ADD (COL1 NUMBER)"),
+        "Table"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_drop_procedure() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("DROP PROCEDURE MY_PROC"),
+        "Procedure"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_drop_public_synonym() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("DROP PUBLIC SYNONYM MY_SYN"),
+        "Synonym"
+    );
+}
+
+/// Regression: CREATE FUNCTION with PROCEDURE keyword in body should return "Function"
+#[test]
+fn test_parse_ddl_object_type_function_with_procedure_in_body() {
+    let sql = "CREATE OR REPLACE FUNCTION MY_FUNC RETURN NUMBER IS BEGIN EXECUTE IMMEDIATE 'CALL MY_PROCEDURE ()'; RETURN 1; END;";
+    assert_eq!(QueryExecutor::parse_ddl_object_type(sql), "Function");
+}
+
+/// Regression: CREATE PACKAGE with FUNCTION/PROCEDURE in body should return "Package"
+#[test]
+fn test_parse_ddl_object_type_package_with_mixed_body() {
+    let sql = "CREATE OR REPLACE PACKAGE MY_PKG AS PROCEDURE PROC1; FUNCTION FUNC1 RETURN NUMBER; END MY_PKG;";
+    assert_eq!(QueryExecutor::parse_ddl_object_type(sql), "Package");
+}
+
+/// Regression: CREATE TRIGGER with TABLE in body should return "Trigger"
+#[test]
+fn test_parse_ddl_object_type_trigger_with_table_in_body() {
+    let sql = "CREATE OR REPLACE TRIGGER MY_TRIG BEFORE INSERT ON MY_TABLE FOR EACH ROW BEGIN INSERT INTO LOG_TABLE VALUES (SYSDATE); END;";
+    assert_eq!(QueryExecutor::parse_ddl_object_type(sql), "Trigger");
+}

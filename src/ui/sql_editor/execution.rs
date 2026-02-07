@@ -7241,33 +7241,14 @@ impl SqlEditorWidget {
 
     fn ddl_message(sql_upper: &str) -> String {
         if sql_upper.starts_with("CREATE") {
-            if sql_upper.contains(" TABLE ") {
-                "Table created".to_string()
-            } else if sql_upper.contains(" VIEW ") {
-                "View created".to_string()
-            } else if sql_upper.contains(" INDEX ") {
-                "Index created".to_string()
-            } else if sql_upper.contains(" PROCEDURE ") {
-                "Procedure created".to_string()
-            } else if sql_upper.contains(" FUNCTION ") {
-                "Function created".to_string()
-            } else if sql_upper.contains(" PACKAGE ") {
-                "Package created".to_string()
-            } else if sql_upper.contains(" TRIGGER ") {
-                "Trigger created".to_string()
-            } else if sql_upper.contains(" SEQUENCE ") {
-                "Sequence created".to_string()
-            } else if sql_upper.contains(" SYNONYM ") {
-                "Synonym created".to_string()
-            } else if sql_upper.contains(" TYPE ") {
-                "Type created".to_string()
-            } else {
-                "Object created".to_string()
-            }
+            let obj_type = QueryExecutor::parse_ddl_object_type(sql_upper);
+            format!("{} created", obj_type)
         } else if sql_upper.starts_with("ALTER") {
-            "Object altered".to_string()
+            let obj_type = QueryExecutor::parse_ddl_object_type(sql_upper);
+            format!("{} altered", obj_type)
         } else if sql_upper.starts_with("DROP") {
-            "Object dropped".to_string()
+            let obj_type = QueryExecutor::parse_ddl_object_type(sql_upper);
+            format!("{} dropped", obj_type)
         } else if sql_upper.starts_with("TRUNCATE") {
             "Table truncated".to_string()
         } else if sql_upper.starts_with("GRANT") {
