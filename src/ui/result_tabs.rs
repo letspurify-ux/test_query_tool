@@ -399,6 +399,45 @@ impl ResultTabsWidget {
         fltk::group::Group::delete(group);
     }
 
+    /// Close the currently active result tab, freeing its data and FLTK resources.
+    /// Returns true if a tab was closed.
+    pub fn close_current_tab(&mut self) -> bool {
+        let index = match *self.active_index.borrow() {
+            Some(idx) => idx,
+            None => return false, // Script Output tab cannot be closed
+        };
+
+        let tab = {
+            let mut data = self.data.borrow_mut();
+            if index >= data.len() {
+                return false;
+            }
+            data.remove(index)
+        };
+
+        self.delete_tab(tab);
+
+        // Update active index to nearest remaining tab
+        let remaining = self.data.borrow().len();
+        if remaining == 0 {
+            *self.active_index.borrow_mut() = None;
+            let script_group = self.script_output.borrow().group.clone();
+            let _ = self.tabs.set_value(&script_group);
+        } else {
+            let new_index = if index >= remaining {
+                remaining - 1
+            } else {
+                index
+            };
+            *self.active_index.borrow_mut() = Some(new_index);
+            let group = self.data.borrow()[new_index].group.clone();
+            let _ = self.tabs.set_value(&group);
+        }
+
+        self.tabs.redraw();
+        true
+    }
+
     pub fn select_script_output(&mut self) {
         let script_group = self.script_output.borrow().group.clone();
         let _ = self.tabs.set_value(&script_group);
@@ -407,10 +446,7 @@ impl ResultTabsWidget {
 
     fn clear_script_output(&self) {
         let mut script_output = self.script_output.borrow_mut();
-        let mut buffer = TextBuffer::default();
-        buffer.set_text("");
-        script_output.display.set_buffer(buffer.clone());
-        script_output.buffer = buffer;
+        script_output.buffer.set_text("");
     }
 }
 
