@@ -1,4 +1,5 @@
 use crate::ui::center_on_main;
+use crate::ui::constants::*;
 use crate::ui::theme;
 use fltk::{
     button::{Button, CheckButton},
@@ -73,20 +74,20 @@ impl FindReplaceDialog {
 
         let mut main_flex = Flex::default().with_pos(10, 10).with_size(430, height - 20);
         main_flex.set_type(fltk::group::FlexType::Column);
-        main_flex.set_spacing(5);
+        main_flex.set_spacing(DIALOG_SPACING);
 
         // Find input row
         let mut find_flex = Flex::default();
         find_flex.set_type(fltk::group::FlexType::Row);
         let mut find_label = fltk::frame::Frame::default().with_label("Find:");
         find_label.set_label_color(theme::text_primary());
-        find_flex.fixed(&find_label, 80);
+        find_flex.fixed(&find_label, FORM_LABEL_WIDTH);
         let mut find_input = Input::default();
         find_input.set_color(theme::input_bg());
         find_input.set_text_color(theme::text_primary());
         find_input.set_trigger(CallbackTrigger::EnterKeyAlways);
         find_flex.end();
-        main_flex.fixed(&find_flex, 30);
+        main_flex.fixed(&find_flex, INPUT_ROW_HEIGHT);
 
         // Replace input row (if show_replace)
         let replace_input = if show_replace {
@@ -94,12 +95,12 @@ impl FindReplaceDialog {
             replace_flex.set_type(fltk::group::FlexType::Row);
             let mut replace_label = fltk::frame::Frame::default().with_label("Replace:");
             replace_label.set_label_color(theme::text_primary());
-            replace_flex.fixed(&replace_label, 80);
+            replace_flex.fixed(&replace_label, FORM_LABEL_WIDTH);
             let mut input = Input::default();
             input.set_color(theme::input_bg());
             input.set_text_color(theme::text_primary());
             replace_flex.end();
-            main_flex.fixed(&replace_flex, 30);
+            main_flex.fixed(&replace_flex, INPUT_ROW_HEIGHT);
             Some(input)
         } else {
             None
@@ -113,26 +114,26 @@ impl FindReplaceDialog {
         let mut whole_word_check = CheckButton::default().with_label("Whole word");
         whole_word_check.set_label_color(theme::text_secondary());
         options_flex.end();
-        main_flex.fixed(&options_flex, 25);
+        main_flex.fixed(&options_flex, CHECKBOX_ROW_HEIGHT);
 
         // Buttons row
         let mut button_flex = Flex::default();
         button_flex.set_type(fltk::group::FlexType::Row);
-        button_flex.set_spacing(5);
+        button_flex.set_spacing(DIALOG_SPACING);
 
         let _spacer = fltk::frame::Frame::default();
 
-        let mut find_next_btn = Button::default().with_size(90, 20).with_label("Find Next");
+        let mut find_next_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Find Next");
         find_next_btn.set_color(theme::button_primary());
         find_next_btn.set_label_color(theme::text_primary());
         find_next_btn.set_frame(FrameType::RFlatBox);
 
         let replace_btn = if show_replace {
-            let mut btn = Button::default().with_size(90, 20).with_label("Replace");
+            let mut btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Replace");
             btn.set_color(theme::button_secondary());
             btn.set_label_color(theme::text_primary());
             btn.set_frame(FrameType::RFlatBox);
-            button_flex.fixed(&btn, 90);
+            button_flex.fixed(&btn, BUTTON_WIDTH);
             Some(btn)
         } else {
             None
@@ -140,26 +141,26 @@ impl FindReplaceDialog {
 
         let replace_all_btn = if show_replace {
             let mut btn = Button::default()
-                .with_size(90, 20)
+                .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
                 .with_label("Replace All");
             btn.set_color(theme::button_secondary());
             btn.set_label_color(theme::text_primary());
             btn.set_frame(FrameType::RFlatBox);
-            button_flex.fixed(&btn, 90);
+            button_flex.fixed(&btn, BUTTON_WIDTH);
             Some(btn)
         } else {
             None
         };
 
-        let mut close_btn = Button::default().with_size(70, 20).with_label("Close");
+        let mut close_btn = Button::default().with_size(BUTTON_WIDTH_SMALL, BUTTON_HEIGHT).with_label("Close");
         close_btn.set_color(theme::button_subtle());
         close_btn.set_label_color(theme::text_primary());
         close_btn.set_frame(FrameType::RFlatBox);
 
-        button_flex.fixed(&find_next_btn, 90);
-        button_flex.fixed(&close_btn, 70);
+        button_flex.fixed(&find_next_btn, BUTTON_WIDTH);
+        button_flex.fixed(&close_btn, BUTTON_WIDTH_SMALL);
         button_flex.end();
-        main_flex.fixed(&button_flex, 35);
+        main_flex.fixed(&button_flex, BUTTON_ROW_HEIGHT);
 
         main_flex.end();
         dialog.end();

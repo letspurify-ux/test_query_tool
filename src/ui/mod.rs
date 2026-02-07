@@ -1,4 +1,5 @@
 pub mod connection_dialog;
+pub mod constants;
 pub mod find_replace;
 pub mod font_settings;
 pub mod intellisense;

@@ -17,6 +17,7 @@ use crate::db::{
     SharedConnection, TableColumnDetail,
 };
 use crate::ui::configured_editor_profile;
+use crate::ui::constants::*;
 use crate::ui::theme;
 
 #[derive(Clone)]
@@ -93,14 +94,14 @@ impl ObjectBrowserWidget {
         // Create a flex container for the filter input and tree
         let mut flex = Flex::default().with_pos(x, y).with_size(w, h);
         flex.set_type(FlexType::Column);
-        flex.set_spacing(5);
+        flex.set_spacing(DIALOG_SPACING);
 
         // Filter input with modern styling
         let mut filter_input = Input::default();
         filter_input.set_color(theme::input_bg());
         filter_input.set_text_color(theme::text_primary());
         filter_input.set_tooltip("Type to filter objects...");
-        flex.fixed(&filter_input, 28);
+        flex.fixed(&filter_input, FILTER_INPUT_HEIGHT);
 
         // Tree view with modern styling
         let mut tree = Tree::default();
@@ -1195,7 +1196,7 @@ impl ObjectBrowserWidget {
         display.set_color(theme::editor_bg());
         display.set_text_color(theme::text_primary());
         display.set_text_font(configured_editor_profile().normal);
-        display.set_text_size(14);
+        display.set_text_size(DEFAULT_FONT_SIZE);
 
         let mut buffer = fltk::text::TextBuffer::default();
         buffer.set_text(content);
@@ -1203,7 +1204,7 @@ impl ObjectBrowserWidget {
 
         let mut close_btn = fltk::button::Button::default()
             .with_pos(300, 460)
-            .with_size(100, 20)
+            .with_size(BUTTON_WIDTH_LARGE, BUTTON_HEIGHT)
             .with_label("Close");
         close_btn.set_color(theme::button_secondary());
         close_btn.set_label_color(theme::text_primary());

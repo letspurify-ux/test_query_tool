@@ -12,6 +12,7 @@ use std::rc::Rc;
 
 use crate::ui::center_on_main;
 use crate::ui::configured_editor_profile;
+use crate::ui::constants::*;
 use crate::ui::theme;
 use crate::utils::config::{QueryHistory, QueryHistoryEntry};
 
@@ -52,22 +53,22 @@ impl QueryHistoryDialog {
 
         let mut main_flex = Flex::default().with_pos(10, 10).with_size(780, 480);
         main_flex.set_type(fltk::group::FlexType::Column);
-        main_flex.set_spacing(5);
+        main_flex.set_spacing(DIALOG_SPACING);
 
         // Top section with list and preview
         let mut content_flex = Flex::default();
         content_flex.set_type(fltk::group::FlexType::Row);
-        content_flex.set_spacing(5);
+        content_flex.set_spacing(DIALOG_SPACING);
 
         // Left - History list
         let mut list_flex = Flex::default();
         list_flex.set_type(fltk::group::FlexType::Column);
-        list_flex.set_spacing(5);
+        list_flex.set_spacing(DIALOG_SPACING);
 
         let mut list_label =
             fltk::frame::Frame::default().with_label("Query History (Most Recent First):");
         list_label.set_label_color(theme::text_primary());
-        list_flex.fixed(&list_label, 20);
+        list_flex.fixed(&list_label, LABEL_ROW_HEIGHT);
 
         let mut browser = HoldBrowser::default();
         browser.set_color(theme::input_bg());
@@ -91,11 +92,11 @@ impl QueryHistoryDialog {
         // Right - SQL preview
         let mut preview_flex = Flex::default();
         preview_flex.set_type(fltk::group::FlexType::Column);
-        preview_flex.set_spacing(5);
+        preview_flex.set_spacing(DIALOG_SPACING);
 
         let mut preview_label = fltk::frame::Frame::default().with_label("SQL Preview:");
         preview_label.set_label_color(theme::text_primary());
-        preview_flex.fixed(&preview_label, 20);
+        preview_flex.fixed(&preview_label, LABEL_ROW_HEIGHT);
 
         let preview_buffer = TextBuffer::default();
         let mut preview_display = TextDisplay::default();
@@ -103,7 +104,7 @@ impl QueryHistoryDialog {
         preview_display.set_color(theme::editor_bg());
         preview_display.set_text_color(theme::text_primary());
         preview_display.set_text_font(configured_editor_profile().normal);
-        preview_display.set_text_size(14);
+        preview_display.set_text_size(DEFAULT_FONT_SIZE);
 
         preview_flex.end();
 
@@ -112,32 +113,32 @@ impl QueryHistoryDialog {
         // Bottom buttons
         let mut button_flex = Flex::default();
         button_flex.set_type(fltk::group::FlexType::Row);
-        button_flex.set_spacing(5);
+        button_flex.set_spacing(DIALOG_SPACING);
 
         let _spacer = fltk::frame::Frame::default();
 
-        let mut use_btn = Button::default().with_size(120, 20).with_label("Use Query");
+        let mut use_btn = Button::default().with_size(BUTTON_WIDTH_LARGE, BUTTON_HEIGHT).with_label("Use Query");
         use_btn.set_color(theme::button_primary());
         use_btn.set_label_color(theme::text_primary());
         use_btn.set_frame(FrameType::RFlatBox);
 
         let mut clear_btn = Button::default()
-            .with_size(120, 20)
+            .with_size(BUTTON_WIDTH_LARGE, BUTTON_HEIGHT)
             .with_label("Clear History");
         clear_btn.set_color(theme::button_danger());
         clear_btn.set_label_color(theme::text_primary());
         clear_btn.set_frame(FrameType::RFlatBox);
 
-        let mut close_btn = Button::default().with_size(80, 20).with_label("Close");
+        let mut close_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Close");
         close_btn.set_color(theme::button_subtle());
         close_btn.set_label_color(theme::text_primary());
         close_btn.set_frame(FrameType::RFlatBox);
 
-        button_flex.fixed(&use_btn, 120);
-        button_flex.fixed(&clear_btn, 120);
-        button_flex.fixed(&close_btn, 80);
+        button_flex.fixed(&use_btn, BUTTON_WIDTH_LARGE);
+        button_flex.fixed(&clear_btn, BUTTON_WIDTH_LARGE);
+        button_flex.fixed(&close_btn, BUTTON_WIDTH);
         button_flex.end();
-        main_flex.fixed(&button_flex, 35);
+        main_flex.fixed(&button_flex, BUTTON_ROW_HEIGHT);
 
         main_flex.end();
         dialog.end();
