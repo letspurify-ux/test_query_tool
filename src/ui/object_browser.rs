@@ -13,8 +13,8 @@ use std::rc::Rc;
 use std::thread;
 
 use crate::db::{
-    lock_connection, ConstraintInfo, IndexInfo, ObjectBrowser, ProcedureArgument, SequenceInfo,
-    SharedConnection, TableColumnDetail,
+    lock_connection, CompilationError, ConstraintInfo, IndexInfo, ObjectBrowser,
+    ProcedureArgument, SequenceInfo, SharedConnection, TableColumnDetail,
 };
 use crate::ui::constants::*;
 use crate::ui::theme;
@@ -74,6 +74,12 @@ enum ObjectActionResult {
     ProcedureScript {
         qualified_name: String,
         result: Result<String, String>,
+    },
+    CompilationErrors {
+        object_name: String,
+        object_type: String,
+        status: String,
+        result: Result<Vec<CompilationError>, String>,
     },
 }
 
@@ -425,6 +431,54 @@ impl ObjectBrowserWidget {
                                 *sql_callback.borrow_mut() = Some(cb);
                             }
                         }
+                        ObjectActionResult::CompilationErrors {
+                            object_name,
+                            object_type,
+                            status,
+                            result,
+                        } => match result {
+                            Ok(errors) => {
+                                let mut info = format!(
+                                    "=== Compilation Status: {} ({}) ===\n\n",
+                                    object_name, object_type
+                                );
+                                info.push_str(&format!("Status: {}\n\n", status));
+
+                                if errors.is_empty() {
+                                    info.push_str(
+                                        "No compilation errors found. Object is valid.\n",
+                                    );
+                                } else {
+                                    info.push_str(&format!(
+                                        "Found {} error(s)/warning(s):\n\n",
+                                        errors.len()
+                                    ));
+                                    info.push_str(&format!(
+                                        "{:<10} {:<10} {:<10} {}\n",
+                                        "Line", "Position", "Type", "Message"
+                                    ));
+                                    info.push_str(&format!("{}\n", "-".repeat(80)));
+
+                                    for err in &errors {
+                                        info.push_str(&format!(
+                                            "{:<10} {:<10} {:<10} {}\n",
+                                            err.line, err.position, err.attribute, err.text
+                                        ));
+                                    }
+                                }
+
+                                ObjectBrowserWidget::show_info_dialog(
+                                    "Compilation Status",
+                                    &info,
+                                );
+                            }
+                            Err(err) => {
+                                fltk::dialog::alert_default(&format!(
+                                    "Failed to check compilation status: {}",
+                                    err
+                                ));
+                            }
+                        },
                     },
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -925,9 +979,9 @@ impl ObjectBrowserWidget {
                     if object_type == "PROCEDURES" || object_type == "FUNCTIONS" =>
                 {
                     if object_type == "PROCEDURES" {
-                        "Execute Procedure|Generate DDL"
+                        "Execute Procedure|Check Compilation|Generate DDL"
                     } else {
-                        "Generate DDL"
+                        "Check Compilation|Generate DDL"
                     }
                 }
                 ObjectItem::Simple { object_type, .. } if object_type == "SEQUENCES" => {
@@ -937,7 +991,7 @@ impl ObjectBrowserWidget {
                     "Execute Procedure"
                 }
                 ObjectItem::Simple { object_type, .. } if object_type == "PACKAGES" => {
-                    "Generate DDL"
+                    "Check Compilation|Generate DDL"
                 }
                 _ => return,
             };
@@ -1041,6 +1095,95 @@ impl ObjectBrowserWidget {
                                 qualified_name,
                                 result,
                             });
+                            app::awake();
+                        });
+                    }
+                    (
+                        "Check Compilation",
+                        ObjectItem::Simple {
+                            object_type,
+                            object_name,
+                        },
+                    ) => {
+                        let db_object_type = match object_type.as_str() {
+                            "PROCEDURES" => "PROCEDURE",
+                            "FUNCTIONS" => "FUNCTION",
+                            "PACKAGES" => "PACKAGE",
+                            _ => return,
+                        };
+                        let connection = connection.clone();
+                        let sender = action_sender.clone();
+                        let object_name = object_name.clone();
+                        let object_type = db_object_type.to_string();
+                        thread::spawn(move || {
+                            let conn = {
+                                let conn_guard = lock_connection(&connection);
+                                if !conn_guard.is_connected() {
+                                    None
+                                } else {
+                                    conn_guard.get_connection()
+                                }
+                            };
+                            if let Some(db_conn) = conn {
+                                let status = ObjectBrowser::get_object_status(
+                                    db_conn.as_ref(),
+                                    &object_name,
+                                    &object_type,
+                                )
+                                .unwrap_or_else(|_| "UNKNOWN".to_string());
+
+                                // Also check PACKAGE BODY status for packages
+                                let body_status = if object_type == "PACKAGE" {
+                                    ObjectBrowser::get_object_status(
+                                        db_conn.as_ref(),
+                                        &object_name,
+                                        "PACKAGE BODY",
+                                    )
+                                    .ok()
+                                } else {
+                                    None
+                                };
+
+                                let mut errors = ObjectBrowser::get_compilation_errors(
+                                    db_conn.as_ref(),
+                                    &object_name,
+                                    &object_type,
+                                )
+                                .unwrap_or_default();
+
+                                // For packages, also get PACKAGE BODY errors
+                                if object_type == "PACKAGE" {
+                                    if let Ok(body_errors) =
+                                        ObjectBrowser::get_compilation_errors(
+                                            db_conn.as_ref(),
+                                            &object_name,
+                                            "PACKAGE BODY",
+                                        )
+                                    {
+                                        errors.extend(body_errors);
+                                    }
+                                }
+
+                                let combined_status = if let Some(bs) = body_status {
+                                    format!("Spec: {} / Body: {}", status, bs)
+                                } else {
+                                    status
+                                };
+
+                                let _ = sender.send(ObjectActionResult::CompilationErrors {
+                                    object_name,
+                                    object_type,
+                                    status: combined_status,
+                                    result: Ok(errors),
+                                });
+                            } else {
+                                let _ = sender.send(ObjectActionResult::CompilationErrors {
+                                    object_name,
+                                    object_type,
+                                    status: String::new(),
+                                    result: Err("Not connected to database".to_string()),
+                                });
+                            }
                             app::awake();
                         });
                     }

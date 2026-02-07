@@ -3072,6 +3072,96 @@ impl ObjectBrowser {
         };
         Ok(ddl)
     }
+
+    /// Get compilation errors for a compilable object (procedure, function, package, etc.)
+    pub fn get_compilation_errors(
+        conn: &Connection,
+        object_name: &str,
+        object_type: &str,
+    ) -> Result<Vec<CompilationError>, OracleError> {
+        let sql = "SELECT line, position, text, attribute \
+                   FROM user_errors \
+                   WHERE name = :1 AND type = :2 \
+                   ORDER BY sequence";
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let rows = match stmt.query(&[
+            &object_name.to_uppercase(),
+            &object_type.to_uppercase(),
+        ]) {
+            Ok(rows) => rows,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+
+        let mut errors = Vec::new();
+        for row_result in rows {
+            let row = match row_result {
+                Ok(row) => row,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let line: i32 = row.get(0).unwrap_or(0);
+            let position: i32 = row.get(1).unwrap_or(0);
+            let text: String = row.get::<_, Option<String>>(2).unwrap_or(None).unwrap_or_default();
+            let attribute: String = row.get::<_, Option<String>>(3).unwrap_or(None).unwrap_or_default();
+
+            errors.push(CompilationError {
+                line,
+                position,
+                text: text.trim().to_string(),
+                attribute,
+            });
+        }
+
+        Ok(errors)
+    }
+
+    /// Get the compilation status of an object from user_objects
+    pub fn get_object_status(
+        conn: &Connection,
+        object_name: &str,
+        object_type: &str,
+    ) -> Result<String, OracleError> {
+        let sql = "SELECT status FROM user_objects WHERE object_name = :1 AND object_type = :2";
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let row = match stmt.query_row(&[
+            &object_name.to_uppercase(),
+            &object_type.to_uppercase(),
+        ]) {
+            Ok(row) => row,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let status: String = row.get::<_, Option<String>>(0).unwrap_or(None).unwrap_or_default();
+        Ok(status)
+    }
+}
+
+/// Compilation error information from USER_ERRORS
+#[derive(Debug, Clone)]
+pub struct CompilationError {
+    pub line: i32,
+    pub position: i32,
+    pub text: String,
+    pub attribute: String,
 }
 
 /// Detailed column information for table structure
