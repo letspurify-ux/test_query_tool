@@ -44,9 +44,6 @@ pub const TOOLBAR_SPACING: i32 = 6;
 /// Width of left-side labels in form layouts (e.g. "Username:", "Host:").
 pub const FORM_LABEL_WIDTH: i32 = 100;
 
-/// Width of left-side labels in settings dialogs.
-pub const SETTINGS_LABEL_WIDTH: i32 = 110;
-
 // -- Numeric input widths --
 
 /// Width for small numeric input fields (e.g. font size, timeout).
@@ -104,11 +101,6 @@ pub const MIN_RESULTS_BODY_HEIGHT: i32 = 160;
 
 /// Minimum total height for the results section.
 pub const MIN_RESULTS_HEIGHT: i32 = RESULT_TOOLBAR_HEIGHT + MIN_RESULTS_BODY_HEIGHT;
-
-// -- Saved connection browser height --
-
-/// Height of the saved connections browser in the connection dialog.
-pub const SAVED_BROWSER_HEIGHT: i32 = 80;
 
 // -- Default font size --
 
