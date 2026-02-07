@@ -1930,12 +1930,12 @@ fn test_set_trimspool_command_parsed() {
     let sql = "SET TRIMSPOOL ON";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_trimspool = items.iter().any(
-        |item| matches!(
+    let has_trimspool = items.iter().any(|item| {
+        matches!(
             item,
             ScriptItem::ToolCommand(ToolCommand::SetTrimSpool { enabled: true })
-        ),
-    );
+        )
+    });
     assert!(
         has_trimspool,
         "SET TRIMSPOOL should be recognized, got: {:?}",
@@ -1948,15 +1948,15 @@ fn test_set_define_single_quoted_char_parsed() {
     let sql = "SET DEFINE '^'";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_set_define = items.iter().any(
-        |item| matches!(
+    let has_set_define = items.iter().any(|item| {
+        matches!(
             item,
             ScriptItem::ToolCommand(ToolCommand::SetDefine {
                 enabled: true,
                 define_char: Some('^')
             })
-        ),
-    );
+        )
+    });
     assert!(
         has_set_define,
         "SET DEFINE '^' should be recognized, got: {:?}",
@@ -1990,12 +1990,12 @@ fn test_set_colsep_command_parsed() {
     let sql = "SET COLSEP ||";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_colsep = items.iter().any(
-        |item| matches!(
+    let has_colsep = items.iter().any(|item| {
+        matches!(
             item,
             ScriptItem::ToolCommand(ToolCommand::SetColSep { separator }) if separator == "||"
-        ),
-    );
+        )
+    });
     assert!(
         has_colsep,
         "SET COLSEP should be recognized, got: {:?}",
@@ -2008,12 +2008,12 @@ fn test_set_null_command_parsed() {
     let sql = "SET NULL (null)";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_set_null = items.iter().any(
-        |item| matches!(
+    let has_set_null = items.iter().any(|item| {
+        matches!(
             item,
             ScriptItem::ToolCommand(ToolCommand::SetNull { null_text }) if null_text == "(null)"
-        ),
-    );
+        )
+    });
     assert!(
         has_set_null,
         "SET NULL should be recognized, got: {:?}",
@@ -2026,13 +2026,13 @@ fn test_spool_file_command_parsed() {
     let sql = "SPOOL output.log";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_spool_file = items.iter().any(
-        |item| matches!(
+    let has_spool_file = items.iter().any(|item| {
+        matches!(
             item,
             ScriptItem::ToolCommand(ToolCommand::Spool { path: Some(path), append: false })
                 if path == "output.log"
-        ),
-    );
+        )
+    });
     assert!(
         has_spool_file,
         "SPOOL file should be recognized, got: {:?}",
@@ -2045,12 +2045,15 @@ fn test_spool_append_command_parsed() {
     let sql = "SPOOL APPEND";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_spool_append = items.iter().any(
-        |item| matches!(
+    let has_spool_append = items.iter().any(|item| {
+        matches!(
             item,
-            ScriptItem::ToolCommand(ToolCommand::Spool { path: None, append: true })
-        ),
-    );
+            ScriptItem::ToolCommand(ToolCommand::Spool {
+                path: None,
+                append: true
+            })
+        )
+    });
     assert!(
         has_spool_append,
         "SPOOL APPEND should be recognized, got: {:?}",
@@ -2063,12 +2066,15 @@ fn test_spool_off_command_parsed() {
     let sql = "SPOOL OFF";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_spool_off = items.iter().any(
-        |item| matches!(
+    let has_spool_off = items.iter().any(|item| {
+        matches!(
             item,
-            ScriptItem::ToolCommand(ToolCommand::Spool { path: None, append: false })
-        ),
-    );
+            ScriptItem::ToolCommand(ToolCommand::Spool {
+                path: None,
+                append: false
+            })
+        )
+    });
     assert!(
         has_spool_off,
         "SPOOL OFF should be recognized, got: {:?}",
@@ -2081,12 +2087,12 @@ fn test_break_on_command_parsed() {
     let sql = "BREAK ON deptno";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_break_on = items.iter().any(
-        |item| matches!(
+    let has_break_on = items.iter().any(|item| {
+        matches!(
             item,
             ScriptItem::ToolCommand(ToolCommand::BreakOn { column_name }) if column_name == "deptno"
-        ),
-    );
+        )
+    });
     assert!(
         has_break_on,
         "BREAK ON should be recognized, got: {:?}",
@@ -2114,16 +2120,16 @@ fn test_compute_sum_command_parsed() {
     let sql = "COMPUTE SUM";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_compute_sum = items.iter().any(
-        |item| matches!(
+    let has_compute_sum = items.iter().any(|item| {
+        matches!(
             item,
             ScriptItem::ToolCommand(ToolCommand::Compute {
                 mode: crate::db::ComputeMode::Sum,
                 of_column: None,
                 on_column: None
             })
-        ),
-    );
+        )
+    });
     assert!(
         has_compute_sum,
         "COMPUTE SUM should be recognized, got: {:?}",
@@ -2136,16 +2142,16 @@ fn test_compute_count_command_parsed() {
     let sql = "COMPUTE COUNT";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_compute_count = items.iter().any(
-        |item| matches!(
+    let has_compute_count = items.iter().any(|item| {
+        matches!(
             item,
             ScriptItem::ToolCommand(ToolCommand::Compute {
                 mode: crate::db::ComputeMode::Count,
                 of_column: None,
                 on_column: None
             })
-        ),
-    );
+        )
+    });
     assert!(
         has_compute_count,
         "COMPUTE COUNT should be recognized, got: {:?}",
@@ -2173,16 +2179,16 @@ fn test_compute_count_of_on_command_parsed() {
     let sql = "COMPUTE COUNT OF id ON grp";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_compute_count_of_on = items.iter().any(
-        |item| matches!(
+    let has_compute_count_of_on = items.iter().any(|item| {
+        matches!(
             item,
             ScriptItem::ToolCommand(ToolCommand::Compute {
                 mode: crate::db::ComputeMode::Count,
                 of_column: Some(of_col),
                 on_column: Some(on_col)
             }) if of_col == "id" && on_col == "grp"
-        ),
-    );
+        )
+    });
     assert!(
         has_compute_count_of_on,
         "COMPUTE COUNT OF ... ON ... should be recognized, got: {:?}",
@@ -2195,16 +2201,16 @@ fn test_compute_sum_of_on_command_parsed() {
     let sql = "COMPUTE SUM OF val ON grp";
     let items = QueryExecutor::split_script_items(sql);
 
-    let has_compute_sum_of_on = items.iter().any(
-        |item| matches!(
+    let has_compute_sum_of_on = items.iter().any(|item| {
+        matches!(
             item,
             ScriptItem::ToolCommand(ToolCommand::Compute {
                 mode: crate::db::ComputeMode::Sum,
                 of_column: Some(of_col),
                 on_column: Some(on_col)
             }) if of_col == "val" && on_col == "grp"
-        ),
-    );
+        )
+    });
     assert!(
         has_compute_sum_of_on,
         "COMPUTE SUM OF ... ON ... should be recognized, got: {:?}",
@@ -2216,9 +2222,12 @@ fn test_compute_sum_of_on_command_parsed() {
 fn test_clear_breaks_computes_parsed() {
     let sql = "CLEAR BREAKS CLEAR COMPUTES";
     let items = QueryExecutor::split_script_items(sql);
-    let has_clear_both = items
-        .iter()
-        .any(|item| matches!(item, ScriptItem::ToolCommand(ToolCommand::ClearBreaksComputes)));
+    let has_clear_both = items.iter().any(|item| {
+        matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::ClearBreaksComputes)
+        )
+    });
     assert!(
         has_clear_both,
         "CLEAR BREAKS CLEAR COMPUTES should be recognized, got: {:?}",
@@ -2931,7 +2940,10 @@ SELECT * FROM cte;"#;
 
 #[test]
 fn test_parse_ddl_object_type_create_table() {
-    assert_eq!(QueryExecutor::parse_ddl_object_type("CREATE TABLE MY_TABLE (ID NUMBER)"), "Table");
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE TABLE MY_TABLE (ID NUMBER)"),
+        "Table"
+    );
 }
 
 #[test]
@@ -2953,7 +2965,9 @@ fn test_parse_ddl_object_type_create_view() {
 #[test]
 fn test_parse_ddl_object_type_create_materialized_view() {
     assert_eq!(
-        QueryExecutor::parse_ddl_object_type("CREATE MATERIALIZED VIEW MY_MV AS SELECT 1 FROM DUAL"),
+        QueryExecutor::parse_ddl_object_type(
+            "CREATE MATERIALIZED VIEW MY_MV AS SELECT 1 FROM DUAL"
+        ),
         "View"
     );
 }
@@ -2985,7 +2999,9 @@ fn test_parse_ddl_object_type_create_procedure() {
 #[test]
 fn test_parse_ddl_object_type_create_or_replace_procedure() {
     assert_eq!(
-        QueryExecutor::parse_ddl_object_type("CREATE OR REPLACE PROCEDURE MY_PROC AS BEGIN NULL; END;"),
+        QueryExecutor::parse_ddl_object_type(
+            "CREATE OR REPLACE PROCEDURE MY_PROC AS BEGIN NULL; END;"
+        ),
         "Procedure"
     );
 }
@@ -2993,7 +3009,9 @@ fn test_parse_ddl_object_type_create_or_replace_procedure() {
 #[test]
 fn test_parse_ddl_object_type_create_function() {
     assert_eq!(
-        QueryExecutor::parse_ddl_object_type("CREATE FUNCTION MY_FUNC RETURN NUMBER IS BEGIN RETURN 1; END;"),
+        QueryExecutor::parse_ddl_object_type(
+            "CREATE FUNCTION MY_FUNC RETURN NUMBER IS BEGIN RETURN 1; END;"
+        ),
         "Function"
     );
 }
@@ -3001,7 +3019,9 @@ fn test_parse_ddl_object_type_create_function() {
 #[test]
 fn test_parse_ddl_object_type_create_or_replace_function() {
     assert_eq!(
-        QueryExecutor::parse_ddl_object_type("CREATE OR REPLACE FUNCTION MY_FUNC RETURN NUMBER IS BEGIN RETURN 1; END;"),
+        QueryExecutor::parse_ddl_object_type(
+            "CREATE OR REPLACE FUNCTION MY_FUNC RETURN NUMBER IS BEGIN RETURN 1; END;"
+        ),
         "Function"
     );
 }
@@ -3009,7 +3029,9 @@ fn test_parse_ddl_object_type_create_or_replace_function() {
 #[test]
 fn test_parse_ddl_object_type_create_package() {
     assert_eq!(
-        QueryExecutor::parse_ddl_object_type("CREATE PACKAGE MY_PKG AS PROCEDURE PROC1; END MY_PKG;"),
+        QueryExecutor::parse_ddl_object_type(
+            "CREATE PACKAGE MY_PKG AS PROCEDURE PROC1; END MY_PKG;"
+        ),
         "Package"
     );
 }
@@ -3017,7 +3039,9 @@ fn test_parse_ddl_object_type_create_package() {
 #[test]
 fn test_parse_ddl_object_type_create_package_body() {
     assert_eq!(
-        QueryExecutor::parse_ddl_object_type("CREATE PACKAGE BODY MY_PKG AS PROCEDURE PROC1 IS BEGIN NULL; END; END MY_PKG;"),
+        QueryExecutor::parse_ddl_object_type(
+            "CREATE PACKAGE BODY MY_PKG AS PROCEDURE PROC1 IS BEGIN NULL; END; END MY_PKG;"
+        ),
         "Package Body"
     );
 }
@@ -3025,7 +3049,9 @@ fn test_parse_ddl_object_type_create_package_body() {
 #[test]
 fn test_parse_ddl_object_type_create_trigger() {
     assert_eq!(
-        QueryExecutor::parse_ddl_object_type("CREATE TRIGGER MY_TRIG BEFORE INSERT ON MY_TABLE BEGIN NULL; END;"),
+        QueryExecutor::parse_ddl_object_type(
+            "CREATE TRIGGER MY_TRIG BEFORE INSERT ON MY_TABLE BEGIN NULL; END;"
+        ),
         "Trigger"
     );
 }
@@ -3073,7 +3099,9 @@ fn test_parse_ddl_object_type_create_type_body() {
 #[test]
 fn test_parse_ddl_object_type_create_database_link() {
     assert_eq!(
-        QueryExecutor::parse_ddl_object_type("CREATE DATABASE LINK MY_LINK CONNECT TO USER IDENTIFIED BY PASS USING 'TNS'"),
+        QueryExecutor::parse_ddl_object_type(
+            "CREATE DATABASE LINK MY_LINK CONNECT TO USER IDENTIFIED BY PASS USING 'TNS'"
+        ),
         "Database Link"
     );
 }
@@ -3081,7 +3109,9 @@ fn test_parse_ddl_object_type_create_database_link() {
 #[test]
 fn test_parse_ddl_object_type_create_or_replace_editionable_function() {
     assert_eq!(
-        QueryExecutor::parse_ddl_object_type("CREATE OR REPLACE EDITIONABLE FUNCTION MY_FUNC RETURN NUMBER IS BEGIN RETURN 1; END;"),
+        QueryExecutor::parse_ddl_object_type(
+            "CREATE OR REPLACE EDITIONABLE FUNCTION MY_FUNC RETURN NUMBER IS BEGIN RETURN 1; END;"
+        ),
         "Function"
     );
 }

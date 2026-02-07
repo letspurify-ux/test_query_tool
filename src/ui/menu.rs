@@ -9,9 +9,9 @@ use fltk::{
 };
 
 use crate::ui::center_on_main;
-use crate::ui::{configured_editor_profile, configured_ui_font_size};
 use crate::ui::constants::*;
 use crate::ui::theme;
+use crate::ui::{configured_editor_profile, configured_ui_font_size};
 
 pub struct MenuBarBuilder;
 
@@ -182,6 +182,12 @@ impl MenuBarBuilder {
         menu.add(
             "&Edit/&Find...\t",
             Shortcut::Ctrl | Shortcut::Command | 'f',
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&Edit/Find &Next\t",
+            Shortcut::from_key(fltk::enums::Key::F3),
             MenuFlag::Normal,
             forward_menu_callback,
         );
@@ -367,6 +373,7 @@ impl MenuBarBuilder {
                     Ctrl+V - Paste\n\
                     Ctrl+A - Select All\n\
                     Ctrl+F - Find\n\
+                    F3 - Find Next\n\
                     Ctrl+H - Replace\n\
                     Ctrl+Shift+F - Format SQL\n\
                     Ctrl+/ - Toggle Comment\n\

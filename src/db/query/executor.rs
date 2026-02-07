@@ -1778,7 +1778,7 @@ impl QueryExecutor {
             rows: vec![],
             row_count: 0,
             execution_time,
-            message: "PL/SQL procedure successfully completed".to_string(),
+            message: "PL/SQL block executed successfully".to_string(),
             is_select: false,
             success: true,
         })
@@ -1842,7 +1842,7 @@ impl QueryExecutor {
             rows: vec![],
             row_count: 0,
             execution_time,
-            message: "PL/SQL procedure successfully completed".to_string(),
+            message: "PL/SQL block executed successfully".to_string(),
             is_select: false,
             success: true,
         })
@@ -2253,7 +2253,43 @@ pub struct SequenceInfo {
     pub last_number: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct PackageRoutine {
+    pub name: String,
+    pub routine_type: String,
+}
+
 impl ObjectBrowser {
+    fn normalize_generated_ddl(ddl: String) -> String {
+        let normalized_newlines = ddl.replace("\r\n", "\n");
+        let trimmed = normalized_newlines.trim_matches('\n');
+        let lines: Vec<&str> = trimmed.lines().collect();
+        if lines.is_empty() {
+            return String::new();
+        }
+
+        let common_indent = lines
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.chars().take_while(|c| *c == ' ').count())
+            .min()
+            .unwrap_or(0);
+
+        let mut out = String::with_capacity(trimmed.len());
+        for (idx, line) in lines.iter().enumerate() {
+            if idx > 0 {
+                out.push('\n');
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            let cut = common_indent.min(line.len());
+            out.push_str(&line[cut..]);
+        }
+        out.trim_start_matches(|c| c == ' ' || c == '\t')
+            .to_string()
+    }
+
     pub fn get_tables(conn: &Connection) -> Result<Vec<String>, OracleError> {
         let sql = "SELECT table_name FROM user_tables ORDER BY table_name";
         Self::get_object_list(conn, sql)
@@ -2337,17 +2373,32 @@ impl ObjectBrowser {
         Self::get_object_list(conn, sql)
     }
 
-    pub fn get_package_procedures(
+    pub fn get_package_routines(
         conn: &Connection,
         package_name: &str,
-    ) -> Result<Vec<String>, OracleError> {
+    ) -> Result<Vec<PackageRoutine>, OracleError> {
         let sql = r#"
-            SELECT procedure_name
-            FROM user_procedures
-            WHERE object_type = 'PACKAGE'
-              AND object_name = :1
-              AND procedure_name IS NOT NULL
-            ORDER BY procedure_name
+            SELECT
+                p.procedure_name,
+                CASE
+                    WHEN EXISTS (
+                        SELECT 1
+                        FROM user_arguments a
+                        WHERE a.package_name = p.object_name
+                          AND a.object_name = p.procedure_name
+                          AND a.position = 0
+                          AND a.argument_name IS NULL
+                    ) THEN 'FUNCTION'
+                    ELSE 'PROCEDURE'
+                END AS routine_type
+            FROM (
+                SELECT DISTINCT object_name, procedure_name
+                FROM user_procedures
+                WHERE object_type = 'PACKAGE'
+                  AND object_name = :1
+                  AND procedure_name IS NOT NULL
+            ) p
+            ORDER BY p.procedure_name
         "#;
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
@@ -2364,7 +2415,7 @@ impl ObjectBrowser {
             }
         };
 
-        let mut procedures: Vec<String> = Vec::new();
+        let mut routines: Vec<PackageRoutine> = Vec::new();
         for row_result in rows {
             let row: Row = match row_result {
                 Ok(row) => row,
@@ -2380,10 +2431,17 @@ impl ObjectBrowser {
                     return Err(err);
                 }
             };
-            procedures.push(name);
+            let routine_type: String = match row.get(1) {
+                Ok(routine_type) => routine_type,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            routines.push(PackageRoutine { name, routine_type });
         }
 
-        Ok(procedures)
+        Ok(routines)
     }
 
     pub fn get_procedure_arguments(
@@ -2990,7 +3048,7 @@ impl ObjectBrowser {
                 return Err(err);
             }
         };
-        Ok(ddl)
+        Ok(Self::normalize_generated_ddl(ddl))
     }
 
     /// Generate DDL for a view
@@ -3017,7 +3075,7 @@ impl ObjectBrowser {
                 return Err(err);
             }
         };
-        Ok(ddl)
+        Ok(Self::normalize_generated_ddl(ddl))
     }
 
     /// Generate DDL for a procedure
@@ -3044,7 +3102,7 @@ impl ObjectBrowser {
                 return Err(err);
             }
         };
-        Ok(ddl)
+        Ok(Self::normalize_generated_ddl(ddl))
     }
 
     /// Generate DDL for a function
@@ -3071,7 +3129,7 @@ impl ObjectBrowser {
                 return Err(err);
             }
         };
-        Ok(ddl)
+        Ok(Self::normalize_generated_ddl(ddl))
     }
 
     /// Generate DDL for a sequence
@@ -3098,7 +3156,7 @@ impl ObjectBrowser {
                 return Err(err);
             }
         };
-        Ok(ddl)
+        Ok(Self::normalize_generated_ddl(ddl))
     }
 
     /// Generate DDL for a package specification
@@ -3128,7 +3186,7 @@ impl ObjectBrowser {
                 return Err(err);
             }
         };
-        Ok(ddl)
+        Ok(Self::normalize_generated_ddl(ddl))
     }
 
     /// Get compilation errors for a compilable object (procedure, function, package, etc.)
@@ -3148,10 +3206,7 @@ impl ObjectBrowser {
                 return Err(err);
             }
         };
-        let rows = match stmt.query(&[
-            &object_name.to_uppercase(),
-            &object_type.to_uppercase(),
-        ]) {
+        let rows = match stmt.query(&[&object_name.to_uppercase(), &object_type.to_uppercase()]) {
             Ok(rows) => rows,
             Err(err) => {
                 eprintln!("Database operation failed: {err}");
@@ -3170,8 +3225,14 @@ impl ObjectBrowser {
             };
             let line: i32 = row.get(0).unwrap_or(0);
             let position: i32 = row.get(1).unwrap_or(0);
-            let text: String = row.get::<_, Option<String>>(2).unwrap_or(None).unwrap_or_default();
-            let attribute: String = row.get::<_, Option<String>>(3).unwrap_or(None).unwrap_or_default();
+            let text: String = row
+                .get::<_, Option<String>>(2)
+                .unwrap_or(None)
+                .unwrap_or_default();
+            let attribute: String = row
+                .get::<_, Option<String>>(3)
+                .unwrap_or(None)
+                .unwrap_or_default();
 
             errors.push(CompilationError {
                 line,
@@ -3198,17 +3259,18 @@ impl ObjectBrowser {
                 return Err(err);
             }
         };
-        let row = match stmt.query_row(&[
-            &object_name.to_uppercase(),
-            &object_type.to_uppercase(),
-        ]) {
+        let row = match stmt.query_row(&[&object_name.to_uppercase(), &object_type.to_uppercase()])
+        {
             Ok(row) => row,
             Err(err) => {
                 eprintln!("Database operation failed: {err}");
                 return Err(err);
             }
         };
-        let status: String = row.get::<_, Option<String>>(0).unwrap_or(None).unwrap_or_default();
+        let status: String = row
+            .get::<_, Option<String>>(0)
+            .unwrap_or(None)
+            .unwrap_or_default();
         Ok(status)
     }
 }

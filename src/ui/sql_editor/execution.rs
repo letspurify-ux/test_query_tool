@@ -801,13 +801,12 @@ impl SqlEditorWidget {
                         if indent_level > 0 {
                             indent_level -= 1;
                         }
-                        let end_extra = if case_expression_end
-                            && (in_sql_case_clause || !in_plsql_block)
-                        {
-                            1
-                        } else {
-                            0
-                        };
+                        let end_extra =
+                            if case_expression_end && (in_sql_case_clause || !in_plsql_block) {
+                                1
+                            } else {
+                                0
+                            };
                         newline_with(
                             &mut out,
                             base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent),
@@ -1685,9 +1684,8 @@ impl SqlEditorWidget {
             let previous_line_ends_with_open_paren = last_code_line_trimmed
                 .as_deref()
                 .is_some_and(|prev| prev.ends_with('('));
-            let starts_paren_case_expression = !in_dml_statement
-                && trimmed_upper == "CASE"
-                && previous_line_ends_with_open_paren;
+            let starts_paren_case_expression =
+                !in_dml_statement && trimmed_upper == "CASE" && previous_line_ends_with_open_paren;
             if starts_paren_case_expression {
                 paren_case_expression_depth += 1;
             }
@@ -2893,9 +2891,9 @@ impl SqlEditorWidget {
                                                     ];
                                                     let rows = vec![vec![
                                                         key.clone(),
-                                                        value.clone().unwrap_or_else(|| {
-                                                            null_text.clone()
-                                                        }),
+                                                        value
+                                                            .clone()
+                                                            .unwrap_or_else(|| null_text.clone()),
                                                     ]];
                                                     SqlEditorWidget::emit_script_table(
                                                         &sender,
@@ -3844,7 +3842,10 @@ impl SqlEditorWidget {
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
                                         &session,
-                                        &format!("COLUMN {} NEW_VALUE {}", column_key, variable_key),
+                                        &format!(
+                                            "COLUMN {} NEW_VALUE {}",
+                                            column_key, variable_key
+                                        ),
                                         &format!(
                                             "Registered NEW_VALUE mapping: {} -> {}",
                                             column_key, variable_key
@@ -3990,10 +3991,7 @@ impl SqlEditorWidget {
                                         _ => mode_text.to_string(),
                                     };
                                     SqlEditorWidget::emit_script_message(
-                                        &sender,
-                                        &session,
-                                        "COMPUTE",
-                                        &label,
+                                        &sender, &session, "COMPUTE", &label,
                                     );
                                 }
                                 ToolCommand::ComputeOff => {
@@ -5018,13 +5016,18 @@ impl SqlEditorWidget {
                                 };
 
                                 let timing_duration = statement_start.elapsed();
+                                let base_message = if is_plsql_block {
+                                    "PL/SQL block executed successfully".to_string()
+                                } else {
+                                    "Call executed successfully".to_string()
+                                };
                                 let mut result = QueryResult {
                                     sql: sql_text.to_string(),
                                     columns: vec![],
                                     rows: vec![],
                                     row_count: 0,
                                     execution_time: timing_duration,
-                                    message: "PL/SQL procedure successfully completed".to_string(),
+                                    message: base_message,
                                     is_select: false,
                                     success: true,
                                 };
@@ -5524,7 +5527,9 @@ impl SqlEditorWidget {
                                 let (colsep, null_text, _trimspool_enabled) =
                                     SqlEditorWidget::current_text_output_settings(&session);
                                 let (break_column, compute_config) = match session.lock() {
-                                    Ok(guard) => (guard.break_column.clone(), guard.compute.clone()),
+                                    Ok(guard) => {
+                                        (guard.break_column.clone(), guard.compute.clone())
+                                    }
                                     Err(poisoned) => {
                                         eprintln!(
                                             "Warning: session state lock was poisoned; recovering."
@@ -5601,8 +5606,7 @@ impl SqlEditorWidget {
                                                 if compute_config
                                                     .as_ref()
                                                     .map(|config| {
-                                                        config.mode
-                                                            == crate::db::ComputeMode::Sum
+                                                        config.mode == crate::db::ComputeMode::Sum
                                                             && config.of_column.is_none()
                                                     })
                                                     .unwrap_or(false)
@@ -5642,17 +5646,21 @@ impl SqlEditorWidget {
                                             {
                                                 let mut state = transform_state.borrow_mut();
                                                 if let Some(config) = compute_config.as_ref() {
-                                                    let grouped_compute = config.of_column.is_some()
-                                                        && config.on_column.is_some()
-                                                        && state.compute_of_index.is_some()
-                                                        && state.compute_on_index.is_some();
+                                                    let grouped_compute =
+                                                        config.of_column.is_some()
+                                                            && config.on_column.is_some()
+                                                            && state.compute_of_index.is_some()
+                                                            && state.compute_on_index.is_some();
                                                     if grouped_compute {
-                                                        if let Some(on_idx) = state.compute_on_index {
+                                                        if let Some(on_idx) = state.compute_on_index
+                                                        {
                                                             if let Some(current_group_value) =
                                                                 row.get(on_idx).cloned()
                                                             {
                                                                 if let Some(previous_group_value) =
-                                                                    state.compute_group_value.clone()
+                                                                    state
+                                                                        .compute_group_value
+                                                                        .clone()
                                                                 {
                                                                     if previous_group_value
                                                                         != current_group_value
@@ -5683,9 +5691,7 @@ impl SqlEditorWidget {
                                                         }
                                                     }
                                                     SqlEditorWidget::accumulate_compute(
-                                                        config,
-                                                        &row,
-                                                        &mut state,
+                                                        config, &row, &mut state,
                                                     );
                                                 }
                                                 if let Some(idx) = state.break_index {
@@ -5695,7 +5701,9 @@ impl SqlEditorWidget {
                                                         if state
                                                             .previous_break_value
                                                             .as_ref()
-                                                            .map(|prev| prev == &current_break_value)
+                                                            .map(|prev| {
+                                                                prev == &current_break_value
+                                                            })
                                                             .unwrap_or(false)
                                                         {
                                                             if let Some(cell) = row.get_mut(idx) {
@@ -5793,14 +5801,17 @@ impl SqlEditorWidget {
                                         .unwrap_or(false);
                                     if grouped_compute {
                                         if transform_state.compute_group_value.is_some() {
-                                            if let Some(summary_row) = SqlEditorWidget::build_compute_summary_row(
-                                                select_column_names.len(),
-                                                compute_config.as_ref(),
-                                                &transform_state,
-                                            ) {
+                                            if let Some(summary_row) =
+                                                SqlEditorWidget::build_compute_summary_row(
+                                                    select_column_names.len(),
+                                                    compute_config.as_ref(),
+                                                    &transform_state,
+                                                )
+                                            {
                                                 let rows = vec![summary_row];
                                                 SqlEditorWidget::append_spool_rows(&session, &rows);
-                                                let _ = sender.send(QueryProgress::Rows { index, rows });
+                                                let _ = sender
+                                                    .send(QueryProgress::Rows { index, rows });
                                                 app::awake();
                                             }
                                         }
@@ -6266,7 +6277,8 @@ impl SqlEditorWidget {
                 }
                 for (idx, column_name) in column_names.iter().enumerate() {
                     let column_key = SessionState::normalize_name(column_name);
-                    let Some(variable_key) = guard.column_new_values.get(&column_key).cloned() else {
+                    let Some(variable_key) = guard.column_new_values.get(&column_key).cloned()
+                    else {
                         continue;
                     };
                     let Some(value) = row_values.get(idx).cloned() else {
@@ -6283,7 +6295,8 @@ impl SqlEditorWidget {
                 }
                 for (idx, column_name) in column_names.iter().enumerate() {
                     let column_key = SessionState::normalize_name(column_name);
-                    let Some(variable_key) = guard.column_new_values.get(&column_key).cloned() else {
+                    let Some(variable_key) = guard.column_new_values.get(&column_key).cloned()
+                    else {
                         continue;
                     };
                     let Some(value) = row_values.get(idx).cloned() else {
@@ -6382,8 +6395,9 @@ impl SqlEditorWidget {
             }
             crate::db::ComputeMode::Sum => {
                 if let Some(of_idx) = state.compute_of_index {
-                    if let Some(number) =
-                        row.get(of_idx).and_then(|value| SqlEditorWidget::parse_numeric_value(value))
+                    if let Some(number) = row
+                        .get(of_idx)
+                        .and_then(|value| SqlEditorWidget::parse_numeric_value(value))
                     {
                         state.compute_sum += number;
                         state.compute_sum_seen = true;
@@ -6473,7 +6487,12 @@ impl SqlEditorWidget {
                     row[0] = "SUM".to_string();
                     let mut has_any_numeric = false;
                     for idx in 1..column_count {
-                        if state.compute_seen_numeric.get(idx).copied().unwrap_or(false) {
+                        if state
+                            .compute_seen_numeric
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(false)
+                        {
                             let total = state.compute_sums.get(idx).copied().unwrap_or(0.0);
                             row[idx] = SqlEditorWidget::format_number(total);
                             has_any_numeric = true;

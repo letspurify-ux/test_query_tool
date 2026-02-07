@@ -1,30 +1,33 @@
 use fltk::{
-    app, draw,
+    app,
+    button::Button,
+    draw,
     enums::{Align, Event, FrameType, Key, Shortcut},
+    group::Group,
     menu::MenuButton,
     prelude::*,
     table::{Table, TableContext},
+    text::{TextBuffer, TextDisplay},
     widget::Widget,
+    window::Window,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::db::QueryResult;
-use crate::ui::font_settings::{configured_editor_profile, FontProfile};
 use crate::ui::constants::*;
+use crate::ui::font_settings::{configured_editor_profile, FontProfile};
 use crate::ui::theme;
 
-/// Find the largest valid UTF-8 boundary at or before `index`.
-fn floor_char_boundary(s: &str, index: usize) -> usize {
-    if index >= s.len() {
-        return s.len();
+fn byte_index_after_n_chars(s: &str, n: usize) -> usize {
+    if n == 0 {
+        return 0;
     }
-    let mut i = index;
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
+    s.char_indices()
+        .nth(n)
+        .map(|(idx, _)| idx)
+        .unwrap_or_else(|| s.len())
 }
 
 /// Minimum interval between UI updates during streaming
@@ -47,6 +50,8 @@ pub struct ResultTableWidget {
     /// The sole data store: full original data (non-truncated).
     /// draw_cell reads from here on demand — no data duplication.
     full_data: Rc<RefCell<Vec<Vec<String>>>>,
+    /// Maximum displayed characters per cell; full text remains in full_data for copy/export.
+    max_cell_display_chars: Rc<Cell<usize>>,
     /// How many rows have been sampled for column width calculation
     width_sampled_rows: Rc<RefCell<usize>>,
     font_profile: Rc<Cell<FontProfile>>,
@@ -61,6 +66,63 @@ struct DragState {
 }
 
 impl ResultTableWidget {
+    fn truncate_for_display(text: &str, max_chars: usize) -> Option<String> {
+        if max_chars == 0 {
+            return None;
+        }
+        let char_count = text.chars().count();
+        if char_count <= max_chars {
+            return None;
+        }
+        if max_chars == 1 {
+            return Some("…".to_string());
+        }
+        let keep_chars = max_chars.saturating_sub(1);
+        let end = byte_index_after_n_chars(text, keep_chars);
+        Some(format!("{}…", &text[..end]))
+    }
+
+    fn show_cell_text_dialog(value: &str, font_profile: FontProfile, font_size: u32) {
+        let current_group = Group::try_current();
+        Group::set_current(None::<&Group>);
+
+        let mut dialog = Window::default()
+            .with_size(760, 520)
+            .with_label("Cell Value");
+        dialog.set_color(theme::panel_raised());
+        dialog.make_modal(true);
+
+        let mut display = TextDisplay::new(10, 10, 740, 460, None);
+        display.set_color(theme::editor_bg());
+        display.set_text_color(theme::text_primary());
+        display.set_text_font(font_profile.normal);
+        display.set_text_size(font_size as i32);
+        display.wrap_mode(fltk::text::WrapMode::AtBounds, 0);
+
+        let mut buf = TextBuffer::default();
+        buf.set_text(value);
+        display.set_buffer(buf);
+
+        let mut close_btn = Button::new(335, 480, BUTTON_WIDTH, BUTTON_HEIGHT, "Close");
+        close_btn.set_color(theme::button_secondary());
+        close_btn.set_label_color(theme::text_primary());
+        close_btn.set_frame(FrameType::RFlatBox);
+
+        let mut dialog_for_close = dialog.clone();
+        close_btn.set_callback(move |_| {
+            dialog_for_close.hide();
+            app::awake();
+        });
+
+        dialog.end();
+        dialog.show();
+        Group::set_current(current_group.as_ref());
+
+        while dialog.shown() {
+            app::wait();
+        }
+    }
+
     fn should_consume_boundary_arrow(table: &Table, key: Key) -> bool {
         let rows = table.rows();
         let cols = table.cols();
@@ -123,17 +185,39 @@ impl ResultTableWidget {
         )
     }
 
-    fn update_widths_with_row(widths: &mut Vec<i32>, row: &[String], font_size: u32) {
+    fn estimate_display_width(text: &str, font_size: u32, max_cell_display_chars: usize) -> i32 {
+        if let Some(truncated) = Self::truncate_for_display(text, max_cell_display_chars) {
+            Self::estimate_text_width(&truncated, font_size)
+        } else {
+            Self::estimate_text_width(text, font_size)
+        }
+    }
+
+    fn update_widths_with_row(
+        widths: &mut Vec<i32>,
+        row: &[String],
+        font_size: u32,
+        max_cell_display_chars: usize,
+    ) {
         let min_width = Self::min_col_width_for_font(font_size);
         if row.len() > widths.len() {
             widths.resize(row.len(), min_width);
         }
         for (i, cell) in row.iter().enumerate() {
-            widths[i] = widths[i].max(Self::estimate_text_width(cell, font_size));
+            widths[i] = widths[i].max(Self::estimate_display_width(
+                cell,
+                font_size,
+                max_cell_display_chars,
+            ));
         }
     }
 
-    fn compute_column_widths(headers: &[String], rows: &[Vec<String>], font_size: u32) -> Vec<i32> {
+    fn compute_column_widths(
+        headers: &[String],
+        rows: &[Vec<String>],
+        font_size: u32,
+        max_cell_display_chars: usize,
+    ) -> Vec<i32> {
         let mut widths: Vec<i32> = headers
             .iter()
             .map(|h| Self::estimate_text_width(h, font_size))
@@ -141,7 +225,7 @@ impl ResultTableWidget {
 
         let sample_count = rows.len().min(WIDTH_SAMPLE_ROWS);
         for row in rows.iter().take(sample_count) {
-            Self::update_widths_with_row(&mut widths, row, font_size);
+            Self::update_widths_with_row(&mut widths, row, font_size, max_cell_display_chars);
         }
 
         widths
@@ -166,6 +250,7 @@ impl ResultTableWidget {
         }
 
         let font_size = self.font_size.get();
+        let max_cell_display_chars = self.max_cell_display_chars.get();
         let mut widths: Vec<i32> = headers
             .iter()
             .map(|h| Self::estimate_text_width(h, font_size))
@@ -175,7 +260,7 @@ impl ResultTableWidget {
         {
             let full_data = self.full_data.borrow();
             for row in full_data.iter().take(WIDTH_SAMPLE_ROWS) {
-                Self::update_widths_with_row(&mut widths, row, font_size);
+                Self::update_widths_with_row(&mut widths, row, font_size, max_cell_display_chars);
                 sampled += 1;
             }
         }
@@ -184,7 +269,7 @@ impl ResultTableWidget {
             let pending = self.pending_rows.borrow();
             let remaining = WIDTH_SAMPLE_ROWS - sampled;
             for row in pending.iter().take(remaining) {
-                Self::update_widths_with_row(&mut widths, row, font_size);
+                Self::update_widths_with_row(&mut widths, row, font_size, max_cell_display_chars);
             }
         }
 
@@ -201,6 +286,8 @@ impl ResultTableWidget {
         let full_data: Rc<RefCell<Vec<Vec<String>>>> = Rc::new(RefCell::new(Vec::new()));
         let font_profile = Rc::new(Cell::new(configured_editor_profile()));
         let font_size = Rc::new(Cell::new(DEFAULT_FONT_SIZE as u32));
+        let max_cell_display_chars =
+            Rc::new(Cell::new(RESULT_CELL_MAX_DISPLAY_CHARS_DEFAULT as usize));
 
         let mut table = Table::new(x, y, w, h, None);
 
@@ -230,6 +317,7 @@ impl ResultTableWidget {
         let table_for_draw = table.clone();
         let font_profile_for_draw = font_profile.clone();
         let font_size_for_draw = font_size.clone();
+        let max_cell_display_chars_for_draw = max_cell_display_chars.clone();
 
         table.draw_cell(move |_t, ctx, row, col, x, y, w, h| {
             let font_profile = font_profile_for_draw.get();
@@ -245,7 +333,14 @@ impl ResultTableWidget {
                     draw::set_font(font_profile.bold, font_size);
                     if let Ok(hdrs) = headers_for_draw.try_borrow() {
                         if let Some(text) = hdrs.get(col as usize) {
-                            draw::draw_text2(text, x + TABLE_CELL_PADDING, y, w - TABLE_CELL_PADDING * 2, h, Align::Left);
+                            draw::draw_text2(
+                                text,
+                                x + TABLE_CELL_PADDING,
+                                y,
+                                w - TABLE_CELL_PADDING * 2,
+                                h,
+                                Align::Left,
+                            );
                         }
                     }
                     draw::set_draw_color(border_color);
@@ -274,12 +369,27 @@ impl ResultTableWidget {
                     if let Ok(data) = full_data_for_draw.try_borrow() {
                         if let Some(row_data) = data.get(row as usize) {
                             if let Some(cell_val) = row_data.get(col as usize) {
-                                if cell_val.len() > 50 {
-                                    let end = floor_char_boundary(cell_val, 47);
-                                    let truncated = format!("{}...", &cell_val[..end]);
-                                    draw::draw_text2(&truncated, x + TABLE_CELL_PADDING, y, w - TABLE_CELL_PADDING * 2, h, Align::Left);
+                                let max_chars = max_cell_display_chars_for_draw.get();
+                                if let Some(truncated) =
+                                    Self::truncate_for_display(cell_val, max_chars)
+                                {
+                                    draw::draw_text2(
+                                        &truncated,
+                                        x + TABLE_CELL_PADDING,
+                                        y,
+                                        w - TABLE_CELL_PADDING * 2,
+                                        h,
+                                        Align::Left,
+                                    );
                                 } else {
-                                    draw::draw_text2(cell_val, x + TABLE_CELL_PADDING, y, w - TABLE_CELL_PADDING * 2, h, Align::Left);
+                                    draw::draw_text2(
+                                        cell_val,
+                                        x + TABLE_CELL_PADDING,
+                                        y,
+                                        w - TABLE_CELL_PADDING * 2,
+                                        h,
+                                        Align::Left,
+                                    );
                                 }
                             }
                         }
@@ -300,6 +410,8 @@ impl ResultTableWidget {
 
         let mut table_for_handle = table.clone();
         let full_data_for_handle = full_data.clone();
+        let font_profile_for_handle = font_profile.clone();
+        let font_size_for_handle = font_size.clone();
         table.handle(move |_, ev| {
             if !table_for_handle.active() {
                 return false;
@@ -318,6 +430,20 @@ impl ResultTableWidget {
                     if app::event_mouse_button() == app::MouseButton::Left {
                         let _ = table_for_handle.take_focus();
                         if let Some((row, col)) = Self::get_cell_at_mouse(&table_for_handle) {
+                            if app::event_clicks() {
+                                if let Ok(data) = full_data_for_handle.try_borrow() {
+                                    if let Some(cell_val) =
+                                        data.get(row as usize).and_then(|r| r.get(col as usize))
+                                    {
+                                        Self::show_cell_text_dialog(
+                                            cell_val,
+                                            font_profile_for_handle.get(),
+                                            font_size_for_handle.get(),
+                                        );
+                                        return true;
+                                    }
+                                }
+                            }
                             let mut state = drag_state_for_handle.borrow_mut();
                             state.is_dragging = true;
                             state.start_row = row;
@@ -449,6 +575,7 @@ impl ResultTableWidget {
             pending_widths: Rc::new(RefCell::new(Vec::new())),
             last_flush: Rc::new(RefCell::new(Instant::now())),
             full_data,
+            max_cell_display_chars,
             width_sampled_rows: Rc::new(RefCell::new(0)),
             font_profile,
             font_size,
@@ -779,12 +906,14 @@ impl ResultTableWidget {
     pub fn display_result(&mut self, result: &QueryResult) {
         if !result.is_select {
             let font_size = self.font_size.get();
+            let max_cell_display_chars = self.max_cell_display_chars.get();
             self.table.set_rows(1);
             self.table.set_cols(1);
             self.apply_table_metrics_for_current_font();
-            let message_width = Self::estimate_text_width(&result.message, font_size)
-                .max(200)
-                .min(1200);
+            let message_width =
+                Self::estimate_display_width(&result.message, font_size, max_cell_display_chars)
+                    .max(200)
+                    .min(1200);
             self.table.set_col_width(0, message_width);
             *self.headers.borrow_mut() = vec!["Result".to_string()];
             *self.full_data.borrow_mut() = vec![vec![result.message.clone()]];
@@ -814,7 +943,13 @@ impl ResultTableWidget {
         self.apply_table_metrics_for_current_font();
 
         let font_size = self.font_size.get();
-        let widths = Self::compute_column_widths(&col_names, &result.rows, font_size);
+        let max_cell_display_chars = self.max_cell_display_chars.get();
+        let widths = Self::compute_column_widths(
+            &col_names,
+            &result.rows,
+            font_size,
+            max_cell_display_chars,
+        );
         self.apply_widths_to_table(&widths);
         *self.pending_widths.borrow_mut() = widths;
 
@@ -864,13 +999,19 @@ impl ResultTableWidget {
             let max_cols = rows.iter().map(|row| row.len()).max().unwrap_or(0);
             let mut widths = self.pending_widths.borrow_mut();
             let min_width = Self::min_col_width_for_font(self.font_size.get());
+            let max_cell_display_chars = self.max_cell_display_chars.get();
             if widths.len() < max_cols {
                 widths.resize(max_cols, min_width);
             }
             let remaining = WIDTH_SAMPLE_ROWS - sampled;
             let sample_count = rows.len().min(remaining);
             for row in rows[..sample_count].iter() {
-                Self::update_widths_with_row(&mut widths, row, self.font_size.get());
+                Self::update_widths_with_row(
+                    &mut widths,
+                    row,
+                    self.font_size.get(),
+                    max_cell_display_chars,
+                );
             }
             drop(widths);
             *self.width_sampled_rows.borrow_mut() = sampled + sample_count;
@@ -1079,6 +1220,12 @@ impl ResultTableWidget {
         self.font_profile.set(profile);
         self.font_size.set(size);
         self.apply_table_metrics_for_current_font();
+        self.recalculate_widths_for_current_font();
+        self.table.redraw();
+    }
+
+    pub fn set_max_cell_display_chars(&mut self, max_chars: usize) {
+        self.max_cell_display_chars.set(max_chars.max(1));
         self.recalculate_widths_for_current_font();
         self.table.redraw();
     }

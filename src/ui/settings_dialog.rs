@@ -4,7 +4,7 @@ use fltk::{
     button::Button,
     enums::{CallbackTrigger, FrameType},
     frame::Frame,
-    group::{Flex, FlexType},
+    group::{Flex, FlexType, Group, Tabs},
     input::{Input, IntInput},
     prelude::*,
     window::Window,
@@ -21,6 +21,7 @@ pub struct FontSettings {
     pub ui_size: u32,
     pub editor_size: u32,
     pub result_size: u32,
+    pub result_cell_max_chars: u32,
 }
 
 fn validate_size(label: &str, value: &str) -> Option<u32> {
@@ -41,6 +42,24 @@ fn validate_ui_size(value: &str) -> Option<u32> {
         Ok(size) if (8..=24).contains(&size) => Some(size),
         _ => {
             fltk::dialog::alert_default("Global UI size must be a number between 8 and 24.");
+            None
+        }
+    }
+}
+
+fn validate_result_cell_max_chars(value: &str) -> Option<u32> {
+    match value.trim().parse::<u32>() {
+        Ok(size)
+            if (RESULT_CELL_MAX_DISPLAY_CHARS_MIN..=RESULT_CELL_MAX_DISPLAY_CHARS_MAX)
+                .contains(&size) =>
+        {
+            Some(size)
+        }
+        _ => {
+            fltk::dialog::alert_default(&format!(
+                "Cell preview max length must be a number between {} and {}.",
+                RESULT_CELL_MAX_DISPLAY_CHARS_MIN, RESULT_CELL_MAX_DISPLAY_CHARS_MAX
+            ));
             None
         }
     }
@@ -99,8 +118,8 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
         font_names.push(current_font.clone());
     }
 
-    let width = 480;
-    let height = 480;
+    let width = 520;
+    let height = 560;
     let mut dialog = Window::default()
         .with_size(width, height)
         .with_label("Settings");
@@ -108,17 +127,37 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     dialog.set_color(theme::panel_raised());
     dialog.make_modal(true);
 
-    let mut main_flex = Flex::default()
-        .with_pos(0, 0)
-        .with_size(width, height);
-    main_flex.set_type(FlexType::Column);
-    main_flex.set_margin(DIALOG_MARGIN + 4);
-    main_flex.set_spacing(DIALOG_SPACING);
+    let content_margin = DIALOG_MARGIN + 4;
+    let content_x = content_margin;
+    let content_y = content_margin;
+    let content_w = width - content_margin * 2;
+    let button_h = BUTTON_ROW_HEIGHT;
+    let tabs_h = height - content_margin * 2 - DIALOG_SPACING - button_h;
 
-    // ── Font section header ──
-    let mut font_header = Frame::default().with_label("Font");
-    font_header.set_label_color(theme::text_secondary());
-    main_flex.fixed(&font_header, LABEL_ROW_HEIGHT);
+    let mut tabs = Tabs::new(content_x, content_y, content_w, tabs_h, None);
+    tabs.set_color(theme::panel_bg());
+    tabs.set_selection_color(theme::selection_strong());
+    tabs.set_label_color(theme::text_secondary());
+
+    tabs.begin();
+
+    let tab_body_y = content_y + TAB_HEADER_HEIGHT;
+    let tab_body_h = (tabs_h - TAB_HEADER_HEIGHT).max(120);
+
+    let mut font_group = Group::new(content_x, tab_body_y, content_w, tab_body_h, None);
+    font_group.set_label("Font");
+    font_group.set_color(theme::panel_bg());
+    font_group.begin();
+
+    let mut font_flex = Flex::new(
+        content_x + DIALOG_MARGIN,
+        tab_body_y + DIALOG_MARGIN,
+        content_w - DIALOG_MARGIN * 2,
+        tab_body_h - DIALOG_MARGIN * 2,
+        None,
+    );
+    font_flex.set_type(FlexType::Column);
+    font_flex.set_spacing(DIALOG_SPACING);
 
     let mut search_row = Flex::default().with_size(0, INPUT_ROW_HEIGHT);
     search_row.set_type(FlexType::Row);
@@ -131,14 +170,12 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     search_input.set_trigger(CallbackTrigger::Changed);
     search_row.fixed(&search_label, FORM_LABEL_WIDTH);
     search_row.end();
-    main_flex.fixed(&search_row, INPUT_ROW_HEIGHT);
+    font_flex.fixed(&search_row, INPUT_ROW_HEIGHT);
 
-    let mut font_browser = HoldBrowser::default().with_size(0, 400);
+    let mut font_browser = HoldBrowser::default().with_size(0, 260);
     font_browser.set_color(theme::input_bg());
     font_browser.set_selection_color(theme::selection_strong());
-    // Expand extra vertical space into the font list instead of creating
-    // blank area below size settings.
-    main_flex.resizable(&font_browser);
+    font_flex.resizable(&font_browser);
 
     let mut selected_row = Flex::default().with_size(0, CHECKBOX_ROW_HEIGHT);
     selected_row.set_type(FlexType::Row);
@@ -150,40 +187,38 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     selected_value.set_label_color(theme::text_secondary());
     selected_row.fixed(&selected_label, FORM_LABEL_WIDTH);
     selected_row.end();
-    main_flex.fixed(&selected_row, CHECKBOX_ROW_HEIGHT);
+    font_flex.fixed(&selected_row, CHECKBOX_ROW_HEIGHT);
 
-    // ── Font Size section header ──
-    let mut size_header = Frame::default().with_label("Font Size");
-    size_header.set_label_color(theme::text_secondary());
-    main_flex.fixed(&size_header, LABEL_ROW_HEIGHT);
-
-    // Editor + Results size on one row
-    let mut size_row = Flex::default().with_size(0, INPUT_ROW_HEIGHT);
-    size_row.set_type(FlexType::Row);
-    size_row.set_spacing(DIALOG_SPACING);
+    let mut editor_size_row = Flex::default().with_size(0, INPUT_ROW_HEIGHT);
+    editor_size_row.set_type(FlexType::Row);
+    editor_size_row.set_spacing(DIALOG_SPACING);
     let mut editor_size_label = Frame::default().with_label("Editor:");
     editor_size_label.set_label_color(theme::text_primary());
-    size_row.fixed(&editor_size_label, FORM_LABEL_WIDTH);
+    editor_size_row.fixed(&editor_size_label, FORM_LABEL_WIDTH);
     let mut editor_size_input = IntInput::default();
     editor_size_input.set_value(&config.editor_font_size.to_string());
     editor_size_input.set_color(theme::input_bg());
     editor_size_input.set_text_color(theme::text_primary());
-    size_row.fixed(&editor_size_input, NUMERIC_INPUT_WIDTH);
+    editor_size_row.fixed(&editor_size_input, NUMERIC_INPUT_WIDTH);
+    let _editor_size_spacer = Frame::default();
+    editor_size_row.end();
+    font_flex.fixed(&editor_size_row, INPUT_ROW_HEIGHT);
 
-    let mut result_size_label = Frame::default().with_label("Results:");
+    let mut result_size_row = Flex::default().with_size(0, INPUT_ROW_HEIGHT);
+    result_size_row.set_type(FlexType::Row);
+    result_size_row.set_spacing(DIALOG_SPACING);
+    let mut result_size_label = Frame::default().with_label("Result Font:");
     result_size_label.set_label_color(theme::text_primary());
-    size_row.fixed(&result_size_label, FORM_LABEL_WIDTH);
+    result_size_row.fixed(&result_size_label, FORM_LABEL_WIDTH);
     let mut result_size_input = IntInput::default();
     result_size_input.set_value(&config.result_font_size.to_string());
     result_size_input.set_color(theme::input_bg());
     result_size_input.set_text_color(theme::text_primary());
-    size_row.fixed(&result_size_input, NUMERIC_INPUT_WIDTH);
+    result_size_row.fixed(&result_size_input, NUMERIC_INPUT_WIDTH);
+    let _result_size_spacer = Frame::default();
+    result_size_row.end();
+    font_flex.fixed(&result_size_row, INPUT_ROW_HEIGHT);
 
-    let _size_spacer = Frame::default();
-    size_row.end();
-    main_flex.fixed(&size_row, INPUT_ROW_HEIGHT);
-
-    // Global UI font size row
     let mut global_size_row = Flex::default().with_size(0, INPUT_ROW_HEIGHT);
     global_size_row.set_type(FlexType::Row);
     global_size_row.set_spacing(DIALOG_SPACING);
@@ -197,14 +232,68 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     global_size_row.fixed(&global_size_input, NUMERIC_INPUT_WIDTH);
     let _global_size_spacer = Frame::default();
     global_size_row.end();
-    main_flex.fixed(&global_size_row, INPUT_ROW_HEIGHT);
+    font_flex.fixed(&global_size_row, INPUT_ROW_HEIGHT);
 
-    let mut size_hint = Frame::default().with_label("(8 ~ 48pt)");
+    let mut size_hint = Frame::default().with_label("Font size: 8 ~ 48pt, Global UI: 8 ~ 24pt");
     size_hint.set_label_color(theme::text_secondary());
-    main_flex.fixed(&size_hint, LABEL_ROW_HEIGHT);
+    font_flex.fixed(&size_hint, LABEL_ROW_HEIGHT);
 
-    // ── Buttons ──
-    let mut button_row = Flex::default().with_size(0, BUTTON_ROW_HEIGHT);
+    font_flex.end();
+    font_group.resizable(&font_flex);
+    font_group.end();
+
+    let mut result_group = Group::new(content_x, tab_body_y, content_w, tab_body_h, None);
+    result_group.set_label("Result View");
+    result_group.set_color(theme::panel_bg());
+    result_group.begin();
+
+    let mut result_flex = Flex::new(
+        content_x + DIALOG_MARGIN,
+        tab_body_y + DIALOG_MARGIN,
+        content_w - DIALOG_MARGIN * 2,
+        tab_body_h - DIALOG_MARGIN * 2,
+        None,
+    );
+    result_flex.set_type(FlexType::Column);
+    result_flex.set_spacing(DIALOG_SPACING);
+
+    let mut result_cell_max_row = Flex::default().with_size(0, INPUT_ROW_HEIGHT);
+    result_cell_max_row.set_type(FlexType::Row);
+    result_cell_max_row.set_spacing(DIALOG_SPACING);
+    let mut result_cell_max_label = Frame::default().with_label("Cell Preview:");
+    result_cell_max_label.set_label_color(theme::text_primary());
+    result_cell_max_row.fixed(&result_cell_max_label, FORM_LABEL_WIDTH);
+    let mut result_cell_max_input = IntInput::default();
+    result_cell_max_input.set_value(&config.result_cell_max_chars.to_string());
+    result_cell_max_input.set_color(theme::input_bg());
+    result_cell_max_input.set_text_color(theme::text_primary());
+    result_cell_max_row.fixed(&result_cell_max_input, NUMERIC_INPUT_WIDTH);
+    let _result_cell_max_spacer = Frame::default();
+    result_cell_max_row.end();
+    result_flex.fixed(&result_cell_max_row, INPUT_ROW_HEIGHT);
+
+    let mut preview_hint = Frame::default().with_label(&format!(
+        "Cell preview max: {} ~ {} chars",
+        RESULT_CELL_MAX_DISPLAY_CHARS_MIN, RESULT_CELL_MAX_DISPLAY_CHARS_MAX
+    ));
+    preview_hint.set_label_color(theme::text_secondary());
+    result_flex.fixed(&preview_hint, LABEL_ROW_HEIGHT);
+
+    let filler = Frame::default();
+    result_flex.resizable(&filler);
+    result_flex.end();
+    result_group.resizable(&result_flex);
+    result_group.end();
+
+    tabs.end();
+
+    let mut button_row = Flex::new(
+        content_x,
+        content_y + tabs_h + DIALOG_SPACING,
+        content_w,
+        button_h,
+        None,
+    );
     button_row.set_type(FlexType::Row);
     button_row.set_spacing(DIALOG_SPACING);
     let btn_spacer = Frame::default();
@@ -224,9 +313,7 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     button_row.fixed(&cancel_btn, BUTTON_WIDTH);
     button_row.fixed(&ok_btn, BUTTON_WIDTH);
     button_row.end();
-    main_flex.fixed(&button_row, BUTTON_ROW_HEIGHT);
 
-    main_flex.end();
     dialog.end();
     dialog.show();
     fltk::group::Group::set_current(current_group.as_ref());
@@ -281,6 +368,7 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
     let editor_size_input_ok = editor_size_input.clone();
     let result_size_input_ok = result_size_input.clone();
     let global_size_input_ok = global_size_input.clone();
+    let result_cell_max_input_ok = result_cell_max_input.clone();
     let selected_font_ok = selected_font.clone();
     ok_btn.set_callback(move |_| {
         let ui_size = match validate_ui_size(&global_size_input_ok.value()) {
@@ -295,6 +383,11 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
             Some(size) => size,
             None => return,
         };
+        let result_cell_max_chars =
+            match validate_result_cell_max_chars(&result_cell_max_input_ok.value()) {
+                Some(size) => size,
+                None => return,
+            };
         let font = selected_font_ok.borrow().trim().to_string();
         if font.is_empty() {
             fltk::dialog::alert_default("Please select a font.");
@@ -305,6 +398,7 @@ pub fn show_settings_dialog(config: &AppConfig) -> Option<FontSettings> {
             ui_size,
             editor_size,
             result_size,
+            result_cell_max_chars,
         });
         dialog_handle.hide();
         app::awake();

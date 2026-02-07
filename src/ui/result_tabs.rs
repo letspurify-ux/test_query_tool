@@ -9,8 +9,8 @@ use fltk::{
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::ui::font_settings::{configured_editor_profile, FontProfile};
 use crate::ui::constants;
+use crate::ui::font_settings::{configured_editor_profile, FontProfile};
 use crate::ui::theme;
 use crate::ui::ResultTableWidget;
 
@@ -22,6 +22,7 @@ pub struct ResultTabsWidget {
     script_output: Rc<RefCell<ScriptOutputTab>>,
     font_profile: Rc<Cell<FontProfile>>,
     font_size: Rc<Cell<u32>>,
+    max_cell_display_chars: Rc<Cell<usize>>,
 }
 
 #[derive(Clone)]
@@ -82,6 +83,9 @@ impl ResultTabsWidget {
         let active_index = Rc::new(RefCell::new(None));
         let font_profile = Rc::new(Cell::new(configured_editor_profile()));
         let font_size = Rc::new(Cell::new(constants::DEFAULT_FONT_SIZE as u32));
+        let max_cell_display_chars = Rc::new(Cell::new(
+            constants::RESULT_CELL_MAX_DISPLAY_CHARS_DEFAULT as usize,
+        ));
 
         tabs.begin();
         let x = tabs.x();
@@ -183,6 +187,7 @@ impl ResultTabsWidget {
             script_output,
             font_profile,
             font_size,
+            max_cell_display_chars,
         }
     }
 
@@ -202,6 +207,14 @@ impl ResultTabsWidget {
         let mut data = self.data.borrow_mut();
         for tab in data.iter_mut() {
             tab.table.apply_font_settings(profile, size);
+        }
+    }
+
+    pub fn set_max_cell_display_chars(&mut self, max_chars: usize) {
+        self.max_cell_display_chars.set(max_chars);
+        let mut data = self.data.borrow_mut();
+        for tab in data.iter_mut() {
+            tab.table.set_max_cell_display_chars(max_chars);
         }
     }
 
@@ -276,6 +289,7 @@ impl ResultTabsWidget {
         group.begin();
         let mut table = ResultTableWidget::with_size(x, y, w, h);
         table.apply_font_settings(self.font_profile.get(), self.font_size.get());
+        table.set_max_cell_display_chars(self.max_cell_display_chars.get());
         let widget = table.get_widget();
         group.resizable(&widget);
         group.end();

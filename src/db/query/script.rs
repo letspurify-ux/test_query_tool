@@ -1844,9 +1844,8 @@ impl QueryExecutor {
 
         ToolCommand::Unsupported {
             raw: raw.to_string(),
-            message:
-                "CLEAR supports: CLEAR BREAKS, CLEAR COMPUTES, CLEAR BREAKS CLEAR COMPUTES."
-                    .to_string(),
+            message: "CLEAR supports: CLEAR BREAKS, CLEAR COMPUTES, CLEAR BREAKS CLEAR COMPUTES."
+                .to_string(),
             is_error: true,
         }
     }
@@ -1935,10 +1934,7 @@ impl QueryExecutor {
         }
 
         let mut append = false;
-        let path_part = if rest
-            .to_uppercase()
-            .ends_with(" APPEND")
-        {
+        let path_part = if rest.to_uppercase().ends_with(" APPEND") {
             append = true;
             rest[..rest.len() - "APPEND".len()].trim()
         } else {

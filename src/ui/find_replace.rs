@@ -67,6 +67,10 @@ fn save_find_replace_state(
 }
 
 impl FindReplaceDialog {
+    pub fn has_search_text() -> bool {
+        FIND_REPLACE_SESSION.with(|state| !state.borrow().find_text.is_empty())
+    }
+
     pub fn show_find_with_registry(
         editor: &mut TextEditor,
         buffer: &mut TextBuffer,
@@ -173,13 +177,17 @@ impl FindReplaceDialog {
 
         let _spacer = fltk::frame::Frame::default();
 
-        let mut find_next_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Find Next");
+        let mut find_next_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Find Next");
         find_next_btn.set_color(theme::button_primary());
         find_next_btn.set_label_color(theme::text_primary());
         find_next_btn.set_frame(FrameType::RFlatBox);
 
         let replace_btn = if show_replace {
-            let mut btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Replace");
+            let mut btn = Button::default()
+                .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+                .with_label("Replace");
             btn.set_color(theme::button_secondary());
             btn.set_label_color(theme::text_primary());
             btn.set_frame(FrameType::RFlatBox);
@@ -202,7 +210,9 @@ impl FindReplaceDialog {
             None
         };
 
-        let mut close_btn = Button::default().with_size(BUTTON_WIDTH_SMALL, BUTTON_HEIGHT).with_label("Close");
+        let mut close_btn = Button::default()
+            .with_size(BUTTON_WIDTH_SMALL, BUTTON_HEIGHT)
+            .with_label("Close");
         close_btn.set_color(theme::button_subtle());
         close_btn.set_label_color(theme::text_primary());
         close_btn.set_frame(FrameType::RFlatBox);
@@ -494,6 +504,43 @@ impl FindReplaceDialog {
         popups
             .borrow_mut()
             .retain(|w| w.as_widget_ptr() != dialog.as_widget_ptr());
+    }
+
+    pub fn find_next_from_session(editor: &mut TextEditor, buffer: &mut TextBuffer) -> bool {
+        let session = FIND_REPLACE_SESSION.with(|state| state.borrow().clone());
+        if session.find_text.is_empty() {
+            return false;
+        }
+
+        let text = buffer.text();
+        let start_pos = if session.last_search_text != session.find_text {
+            0
+        } else {
+            normalize_search_pos(&text, session.search_pos)
+        };
+
+        let found = find_next_match(&text, &session.find_text, start_pos, session.case_sensitive)
+            .or_else(|| {
+                if start_pos > 0 {
+                    find_next_match(&text, &session.find_text, 0, session.case_sensitive)
+                } else {
+                    None
+                }
+            });
+
+        if let Some((match_start, match_end)) = found {
+            buffer.select(match_start as i32, match_end as i32);
+            editor.set_insert_position(match_end as i32);
+            editor.show_insert_position();
+            FIND_REPLACE_SESSION.with(|state| {
+                let mut state = state.borrow_mut();
+                state.last_search_text = session.find_text.clone();
+                state.search_pos = match_end as i32;
+            });
+            true
+        } else {
+            false
+        }
     }
 
     /// Find next occurrence (for F3 shortcut)

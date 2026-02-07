@@ -18,6 +18,7 @@ pub struct AppConfig {
     pub editor_font_size: u32,
     pub result_font: String,
     pub result_font_size: u32,
+    pub result_cell_max_chars: u32,
     pub max_rows: u32,
     pub auto_commit: bool,
 }
@@ -32,6 +33,7 @@ impl AppConfig {
             editor_font_size: 14,
             result_font: "Helvetica".to_string(),
             result_font_size: 14,
+            result_cell_max_chars: crate::ui::constants::RESULT_CELL_MAX_DISPLAY_CHARS_DEFAULT,
             max_rows: 1000,
             auto_commit: false,
         }

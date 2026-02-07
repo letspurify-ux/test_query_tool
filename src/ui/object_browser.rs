@@ -13,7 +13,7 @@ use std::rc::Rc;
 use std::thread;
 
 use crate::db::{
-    lock_connection, CompilationError, ConstraintInfo, IndexInfo, ObjectBrowser,
+    lock_connection, CompilationError, ConstraintInfo, IndexInfo, ObjectBrowser, PackageRoutine,
     ProcedureArgument, SequenceInfo, SharedConnection, TableColumnDetail,
 };
 use crate::ui::constants::*;
@@ -37,9 +37,10 @@ enum ObjectItem {
         object_type: String,
         object_name: String,
     },
-    PackageProcedure {
+    PackageRoutine {
         package_name: String,
-        procedure_name: String,
+        routine_name: String,
+        routine_type: String,
     },
 }
 
@@ -52,7 +53,7 @@ struct ObjectCache {
     functions: Vec<String>,
     sequences: Vec<String>,
     packages: Vec<String>,
-    package_procedures: HashMap<String, Vec<String>>,
+    package_routines: HashMap<String, Vec<PackageRoutine>>,
 }
 
 #[derive(Clone)]
@@ -71,8 +72,9 @@ enum ObjectActionResult {
     },
     SequenceInfo(Result<SequenceInfo, String>),
     Ddl(Result<String, String>),
-    ProcedureScript {
+    RoutineScript {
         qualified_name: String,
+        routine_type: String,
         result: Result<String, String>,
     },
     CompilationErrors {
@@ -409,20 +411,27 @@ impl ObjectBrowserWidget {
                                 ));
                             }
                         },
-                        ObjectActionResult::ProcedureScript {
+                        ObjectActionResult::RoutineScript {
                             qualified_name,
+                            routine_type,
                             result,
                         } => {
                             let sql = match result {
                                 Ok(sql) => sql,
                                 Err(err) => {
                                     fltk::dialog::alert_default(&format!(
-                                        "Failed to load procedure arguments: {}",
+                                        "Failed to load routine arguments: {}",
                                         err
                                     ));
-                                    ObjectBrowserWidget::build_simple_procedure_script(
-                                        &qualified_name,
-                                    )
+                                    if routine_type.eq_ignore_ascii_case("FUNCTION") {
+                                        ObjectBrowserWidget::build_simple_function_script(
+                                            &qualified_name,
+                                        )
+                                    } else {
+                                        ObjectBrowserWidget::build_simple_procedure_script(
+                                            &qualified_name,
+                                        )
+                                    }
                                 }
                             };
                             let cb_opt = sql_callback.borrow_mut().take();
@@ -467,10 +476,7 @@ impl ObjectBrowserWidget {
                                     }
                                 }
 
-                                ObjectBrowserWidget::show_info_dialog(
-                                    "Compilation Status",
-                                    &info,
-                                );
+                                ObjectBrowserWidget::show_info_dialog("Compilation Status", &info);
                             }
                             Err(err) => {
                                 fltk::dialog::alert_default(&format!(
@@ -617,16 +623,22 @@ impl ObjectBrowserWidget {
         };
         let parent_type_upper = parent_label.to_uppercase();
 
-        // Make sure this is not a category item
-        if parent_type_upper == "PROCEDURES" {
+        // Package member item: Packages/<pkg>/(Procedures|Functions)/<name>
+        if parent_type_upper == "PROCEDURES" || parent_type_upper == "FUNCTIONS" {
             if let Some(grandparent) = parent.parent() {
                 if let Some(package_label) = grandparent.label() {
                     if let Some(root) = grandparent.parent() {
                         if let Some(root_label) = root.label() {
                             if root_label.trim().eq_ignore_ascii_case("Packages") {
-                                return Some(ObjectItem::PackageProcedure {
+                                let routine_type = if parent_type_upper == "FUNCTIONS" {
+                                    "FUNCTION"
+                                } else {
+                                    "PROCEDURE"
+                                };
+                                return Some(ObjectItem::PackageRoutine {
                                     package_name: package_label.trim().to_string(),
-                                    procedure_name: object_name,
+                                    routine_name: object_name,
+                                    routine_type: routine_type.to_string(),
                                 });
                             }
                         }
@@ -649,16 +661,28 @@ impl ObjectBrowserWidget {
     fn get_insert_text(item: &TreeItem) -> Option<String> {
         match Self::get_item_info(item) {
             Some(ObjectItem::Simple { object_name, .. }) => Some(object_name),
-            Some(ObjectItem::PackageProcedure {
+            Some(ObjectItem::PackageRoutine {
                 package_name,
-                procedure_name,
-            }) => Some(format!("{}.{}", package_name, procedure_name)),
+                routine_name,
+                ..
+            }) => Some(format!("{}.{}", package_name, routine_name)),
             None => None,
         }
     }
 
     fn build_simple_procedure_script(qualified_name: &str) -> String {
         format!("BEGIN\n  {};\nEND;\n/\n", qualified_name)
+    }
+
+    fn build_simple_function_script(qualified_name: &str) -> String {
+        format!(
+            "SELECT {} AS result\nFROM dual;\n",
+            if qualified_name.contains('(') {
+                qualified_name.to_string()
+            } else {
+                format!("{}()", qualified_name)
+            }
+        )
     }
 
     fn build_procedure_script(qualified_name: &str, arguments: &[ProcedureArgument]) -> String {
@@ -674,7 +698,8 @@ impl ObjectBrowserWidget {
         let mut used_names: HashSet<String> = HashSet::new();
         let mut local_decls: Vec<String> = Vec::new();
         let mut call_args: Vec<String> = Vec::new();
-        let mut cursor_binds: Vec<String> = Vec::new();
+        let mut bind_decls: Vec<(String, String)> = Vec::new();
+        let mut print_binds: Vec<String> = Vec::new();
         // Function return value (position=0, name=NULL) must be assigned
         // via ':=' rather than passed as a call argument.
         let mut return_var: Option<String> = None;
@@ -701,13 +726,20 @@ impl ObjectBrowserWidget {
             let var_name = Self::unique_var_name(var_base, arg.position, &mut used_names);
 
             if is_return_value {
-                // Declare the return variable without assignment; it will
-                // receive the value via ':=' in the BEGIN block.
                 let type_str = Self::format_argument_type(arg);
-                local_decls.push(format!("  {} {};", var_name, type_str));
-                return_var = Some(var_name);
+                if let Some(bind_type) = Self::bind_type_for_return(&type_str) {
+                    // Use bind variable for return value so PRINT can show it in results.
+                    bind_decls.push((var_name.clone(), bind_type));
+                    print_binds.push(var_name.clone());
+                    return_var = Some(format!(":{}", var_name));
+                } else {
+                    // Fallback for unsupported return types: keep local variable assignment.
+                    local_decls.push(format!("  {} {};", var_name, type_str));
+                    return_var = Some(var_name);
+                }
             } else if is_out && Self::is_ref_cursor(arg) {
-                cursor_binds.push(var_name.clone());
+                bind_decls.push((var_name.clone(), "REFCURSOR".to_string()));
+                print_binds.push(var_name.clone());
                 let target = format!(":{}", var_name);
                 let call_expr = match &arg_label {
                     Some(label) => format!("{} => {}", label, target),
@@ -731,8 +763,8 @@ impl ObjectBrowserWidget {
         }
 
         let mut script = String::new();
-        for cursor in &cursor_binds {
-            script.push_str(&format!("VAR {} REFCURSOR\n", cursor));
+        for (name, bind_type) in &bind_decls {
+            script.push_str(&format!("VAR {} {}\n", name, bind_type));
         }
 
         if !local_decls.is_empty() {
@@ -768,11 +800,53 @@ impl ObjectBrowserWidget {
 
         script.push_str("END;\n/\n");
 
-        for cursor in cursor_binds {
-            script.push_str(&format!("PRINT {}\n", cursor));
+        for bind_name in print_binds {
+            script.push_str(&format!("PRINT {}\n", bind_name));
         }
 
         script
+    }
+
+    fn bind_type_for_return(type_str: &str) -> Option<String> {
+        let upper = type_str.trim().to_uppercase();
+        if upper.is_empty() {
+            return None;
+        }
+        let base = Self::normalize_type_base(&upper);
+        if base.contains('.') {
+            return None;
+        }
+
+        match base.as_str() {
+            "NUMBER" | "NUMERIC" | "DECIMAL" | "INTEGER" | "INT" | "PLS_INTEGER"
+            | "BINARY_INTEGER" | "NATURAL" | "NATURALN" | "POSITIVE" | "POSITIVEN"
+            | "SIMPLE_INTEGER" | "FLOAT" | "BINARY_FLOAT" | "BINARY_DOUBLE" => {
+                Some("NUMBER".to_string())
+            }
+            "DATE" => Some("DATE".to_string()),
+            "TIMESTAMP" => {
+                let precision = Self::extract_parenthesized_u32(&upper)
+                    .unwrap_or(6)
+                    .clamp(0, 9);
+                Some(format!("TIMESTAMP({})", precision))
+            }
+            "CLOB" | "NCLOB" => Some("CLOB".to_string()),
+            "VARCHAR2" | "NVARCHAR2" | "VARCHAR" | "CHAR" | "NCHAR" | "RAW" => {
+                let size = Self::extract_parenthesized_u32(&upper)
+                    .unwrap_or(4000)
+                    .clamp(1, 4000);
+                Some(format!("VARCHAR2({})", size))
+            }
+            _ => None,
+        }
+    }
+
+    fn extract_parenthesized_u32(value: &str) -> Option<u32> {
+        let start = value.find('(')?;
+        let end = value[start + 1..].find(')')? + start + 1;
+        let inner = value[start + 1..end].trim();
+        let head = inner.split(',').next().unwrap_or(inner).trim();
+        head.parse::<u32>().ok()
     }
 
     fn select_overload_arguments(arguments: &[ProcedureArgument]) -> Vec<ProcedureArgument> {
@@ -981,14 +1055,18 @@ impl ObjectBrowserWidget {
                     if object_type == "PROCEDURES" {
                         "Execute Procedure|Check Compilation|Generate DDL"
                     } else {
-                        "Check Compilation|Generate DDL"
+                        "Execute Function|Check Compilation|Generate DDL"
                     }
                 }
                 ObjectItem::Simple { object_type, .. } if object_type == "SEQUENCES" => {
                     "View Info|Generate DDL"
                 }
-                ObjectItem::PackageProcedure { .. } => {
-                    "Execute Procedure"
+                ObjectItem::PackageRoutine { routine_type, .. } => {
+                    if routine_type == "FUNCTION" {
+                        "Execute Function"
+                    } else {
+                        "Execute Procedure"
+                    }
                 }
                 ObjectItem::Simple { object_type, .. } if object_type == "PACKAGES" => {
                     "Check Compilation|Generate DDL"
@@ -1017,10 +1095,23 @@ impl ObjectBrowserWidget {
                             *sql_callback.borrow_mut() = Some(cb);
                         }
                     }
-                    ("Execute Procedure", ObjectItem::Simple { object_name, .. }) => {
+                    (
+                        label @ ("Execute Procedure" | "Execute Function"),
+                        ObjectItem::Simple {
+                            object_name,
+                            object_type,
+                        },
+                    ) if (label == "Execute Procedure" && object_type == "PROCEDURES")
+                        || (label == "Execute Function" && object_type == "FUNCTIONS") =>
+                    {
                         let connection = connection.clone();
                         let sender = action_sender.clone();
                         let object_name = object_name.clone();
+                        let routine_type = if label == "Execute Function" {
+                            "FUNCTION".to_string()
+                        } else {
+                            "PROCEDURE".to_string()
+                        };
                         thread::spawn(move || {
                             let conn = {
                                 let conn_guard = lock_connection(&connection);
@@ -1046,25 +1137,30 @@ impl ObjectBrowserWidget {
                                 Err("Not connected to database".to_string())
                             };
 
-                            let _ = sender.send(ObjectActionResult::ProcedureScript {
+                            let _ = sender.send(ObjectActionResult::RoutineScript {
                                 qualified_name: object_name,
+                                routine_type,
                                 result,
                             });
                             app::awake();
                         });
                     }
                     (
-                        "Execute Procedure",
-                        ObjectItem::PackageProcedure {
+                        label @ ("Execute Procedure" | "Execute Function"),
+                        ObjectItem::PackageRoutine {
                             package_name,
-                            procedure_name,
+                            routine_name,
+                            routine_type,
                         },
-                    ) => {
+                    ) if (label == "Execute Procedure" && routine_type == "PROCEDURE")
+                        || (label == "Execute Function" && routine_type == "FUNCTION") =>
+                    {
                         let connection = connection.clone();
                         let sender = action_sender.clone();
-                        let qualified_name = format!("{}.{}", package_name, procedure_name);
+                        let qualified_name = format!("{}.{}", package_name, routine_name);
                         let package_name = package_name.clone();
-                        let procedure_name = procedure_name.clone();
+                        let routine_name = routine_name.clone();
+                        let routine_type = routine_type.clone();
                         thread::spawn(move || {
                             let conn = {
                                 let conn_guard = lock_connection(&connection);
@@ -1078,7 +1174,7 @@ impl ObjectBrowserWidget {
                                 ObjectBrowser::get_package_procedure_arguments(
                                     db_conn.as_ref(),
                                     &package_name,
-                                    &procedure_name,
+                                    &routine_name,
                                 )
                                 .map(|arguments| {
                                     ObjectBrowserWidget::build_procedure_script(
@@ -1091,8 +1187,9 @@ impl ObjectBrowserWidget {
                                 Err("Not connected to database".to_string())
                             };
 
-                            let _ = sender.send(ObjectActionResult::ProcedureScript {
+                            let _ = sender.send(ObjectActionResult::RoutineScript {
                                 qualified_name,
+                                routine_type,
                                 result,
                             });
                             app::awake();
@@ -1153,13 +1250,11 @@ impl ObjectBrowserWidget {
 
                                 // For packages, also get PACKAGE BODY errors
                                 if object_type == "PACKAGE" {
-                                    if let Ok(body_errors) =
-                                        ObjectBrowser::get_compilation_errors(
-                                            db_conn.as_ref(),
-                                            &object_name,
-                                            "PACKAGE BODY",
-                                        )
-                                    {
+                                    if let Ok(body_errors) = ObjectBrowser::get_compilation_errors(
+                                        db_conn.as_ref(),
+                                        &object_name,
+                                        "PACKAGE BODY",
+                                    ) {
                                         errors.extend(body_errors);
                                     }
                                 }
@@ -1455,10 +1550,10 @@ impl ObjectBrowserWidget {
 
             if let Ok(packages) = ObjectBrowser::get_packages(db_conn.as_ref()) {
                 for package in &packages {
-                    if let Ok(procs) =
-                        ObjectBrowser::get_package_procedures(db_conn.as_ref(), package)
+                    if let Ok(routines) =
+                        ObjectBrowser::get_package_routines(db_conn.as_ref(), package)
                     {
-                        cache.package_procedures.insert(package.clone(), procs);
+                        cache.package_routines.insert(package.clone(), routines);
                     }
                 }
                 cache.packages = packages;
@@ -1526,26 +1621,30 @@ impl ObjectBrowserWidget {
         }
 
         for package in &cache.packages {
-            let procedures = cache
-                .package_procedures
+            let routines = cache
+                .package_routines
                 .get(package)
                 .cloned()
                 .unwrap_or_default();
             let package_matches =
                 filter_text.is_empty() || package.to_lowercase().contains(filter_text);
-            let matching_procs: Vec<String> = procedures
+            let matching_routines: Vec<PackageRoutine> = routines
                 .into_iter()
-                .filter(|proc_name| {
+                .filter(|routine| {
                     filter_text.is_empty()
-                        || proc_name.to_lowercase().contains(filter_text)
+                        || routine.name.to_lowercase().contains(filter_text)
                         || package_matches
                 })
                 .collect();
 
-            if package_matches || !matching_procs.is_empty() {
+            if package_matches || !matching_routines.is_empty() {
                 tree.add(&format!("Packages/{}", package));
-                for proc_name in matching_procs {
-                    tree.add(&format!("Packages/{}/Procedures/{}", package, proc_name));
+                for routine in matching_routines {
+                    if routine.routine_type == "FUNCTION" {
+                        tree.add(&format!("Packages/{}/Functions/{}", package, routine.name));
+                    } else {
+                        tree.add(&format!("Packages/{}/Procedures/{}", package, routine.name));
+                    }
                 }
             }
         }

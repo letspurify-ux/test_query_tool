@@ -11,9 +11,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::ui::center_on_main;
-use crate::ui::{configured_editor_profile, configured_ui_font_size};
 use crate::ui::constants::*;
 use crate::ui::theme;
+use crate::ui::{configured_editor_profile, configured_ui_font_size};
 use crate::utils::config::{QueryHistory, QueryHistoryEntry};
 
 /// Find the largest valid UTF-8 boundary at or before `index`.
@@ -117,7 +117,9 @@ impl QueryHistoryDialog {
 
         let _spacer = fltk::frame::Frame::default();
 
-        let mut use_btn = Button::default().with_size(BUTTON_WIDTH_LARGE, BUTTON_HEIGHT).with_label("Use Query");
+        let mut use_btn = Button::default()
+            .with_size(BUTTON_WIDTH_LARGE, BUTTON_HEIGHT)
+            .with_label("Use Query");
         use_btn.set_color(theme::button_primary());
         use_btn.set_label_color(theme::text_primary());
         use_btn.set_frame(FrameType::RFlatBox);
@@ -129,7 +131,9 @@ impl QueryHistoryDialog {
         clear_btn.set_label_color(theme::text_primary());
         clear_btn.set_frame(FrameType::RFlatBox);
 
-        let mut close_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Close");
+        let mut close_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Close");
         close_btn.set_color(theme::button_subtle());
         close_btn.set_label_color(theme::text_primary());
         close_btn.set_frame(FrameType::RFlatBox);

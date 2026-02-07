@@ -15,6 +15,7 @@ use crate::db::{lock_connection, ObjectBrowser, SharedConnection, TableColumnDet
 use crate::ui::intellisense::{
     detect_sql_context, get_word_at_cursor, IntellisenseData, IntellisensePopup, SqlContext,
 };
+use crate::ui::FindReplaceDialog;
 
 use super::*;
 
@@ -269,6 +270,20 @@ impl SqlEditorWidget {
                     // F4 - Quick Describe (handle on KeyDown for immediate response)
                     if key == Key::F4 {
                         widget_for_shortcuts.quick_describe_at_cursor();
+                        return true;
+                    }
+
+                    if key == Key::F3 {
+                        let mut editor_for_find = ed.clone();
+                        if !FindReplaceDialog::find_next_from_session(
+                            &mut editor_for_find,
+                            &mut buffer_for_handle,
+                        ) && !FindReplaceDialog::has_search_text()
+                        {
+                            if let Some(ref mut cb) = *find_callback_for_handle.borrow_mut() {
+                                cb();
+                            }
+                        }
                         return true;
                     }
 

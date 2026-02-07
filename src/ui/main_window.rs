@@ -344,13 +344,17 @@ impl MainWindow {
     }
 
     fn apply_font_settings(state: &mut AppState) {
-        let (unified_profile, ui_size, editor_size, result_size) = {
+        let (unified_profile, ui_size, editor_size, result_size, result_cell_max_chars) = {
             let config = state.config.borrow();
             (
                 font_settings::profile_by_name(&config.editor_font),
                 config.ui_font_size.clamp(8, 24) as i32,
                 config.editor_font_size,
                 config.result_font_size,
+                config.result_cell_max_chars.clamp(
+                    RESULT_CELL_MAX_DISPLAY_CHARS_MIN,
+                    RESULT_CELL_MAX_DISPLAY_CHARS_MAX,
+                ),
             )
         };
         app::set_font(unified_profile.normal);
@@ -364,6 +368,9 @@ impl MainWindow {
         state
             .result_tabs
             .apply_font_settings(unified_profile, result_size);
+        state
+            .result_tabs
+            .set_max_cell_display_chars(result_cell_max_chars as usize);
         state.object_browser.apply_ui_font_size(ui_size);
         Self::apply_runtime_ui_font_size(state, ui_size);
         app::redraw();
@@ -562,10 +569,8 @@ impl MainWindow {
                         let s = state_for_window.borrow();
                         s.sql_editor.clone()
                     };
-                    sql_editor.hide_intellisense_if_outside(
-                        app::event_x_root(),
-                        app::event_y_root(),
-                    );
+                    sql_editor
+                        .hide_intellisense_if_outside(app::event_x_root(), app::event_y_root());
                     false
                 }
                 fltk::enums::Event::Resize => {
@@ -1193,6 +1198,21 @@ impl MainWindow {
                             };
                             FindReplaceDialog::show_find_with_registry(&mut editor, &mut buffer, popups);
                         }
+                        "Edit/Find Next" => {
+                            let (mut editor, mut buffer, popups) = {
+                                let s = state_for_menu.borrow_mut();
+                                (s.sql_editor.get_editor(), s.sql_buffer.clone(), s.popups.clone())
+                            };
+                            if !FindReplaceDialog::find_next_from_session(&mut editor, &mut buffer)
+                                && !FindReplaceDialog::has_search_text()
+                            {
+                                FindReplaceDialog::show_find_with_registry(
+                                    &mut editor,
+                                    &mut buffer,
+                                    popups,
+                                );
+                            }
+                        }
                         "Edit/Replace..." => {
                             let (mut editor, mut buffer, popups) = {
                                 let s = state_for_menu.borrow_mut();
@@ -1288,6 +1308,7 @@ impl MainWindow {
                                     config.editor_font_size = settings.editor_size;
                                     config.result_font = settings.font;
                                     config.result_font_size = settings.result_size;
+                                    config.result_cell_max_chars = settings.result_cell_max_chars;
                                     config.save()
                                 };
                                 if let Err(err) = save_result {
@@ -1317,7 +1338,11 @@ impl MainWindow {
             if let Some(state) = weak_state_for_close.upgrade() {
                 let (popups, sql_editor, mut result_tabs) = {
                     let s = state.borrow();
-                    (s.popups.clone(), s.sql_editor.clone(), s.result_tabs.clone())
+                    (
+                        s.popups.clone(),
+                        s.sql_editor.clone(),
+                        s.result_tabs.clone(),
+                    )
                 };
                 let mut popups = popups.borrow_mut();
                 for mut popup in popups.drain(..) {

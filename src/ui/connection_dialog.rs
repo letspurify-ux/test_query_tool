@@ -49,9 +49,7 @@ impl ConnectionDialog {
         dialog.make_modal(true);
 
         // Root layout: horizontal split — left panel (saved list) | right panel (form)
-        let mut root = Flex::default()
-            .with_pos(0, 0)
-            .with_size(dialog_w, dialog_h);
+        let mut root = Flex::default().with_pos(0, 0).with_size(dialog_w, dialog_h);
         root.set_type(fltk::group::FlexType::Row);
         root.set_margin(DIALOG_MARGIN);
         root.set_spacing(DIALOG_SPACING + 4);
@@ -78,8 +76,7 @@ impl ConnectionDialog {
             }
         }
 
-        let mut delete_btn =
-            Button::default().with_label("Delete");
+        let mut delete_btn = Button::default().with_label("Delete");
         delete_btn.set_color(theme::button_danger());
         delete_btn.set_label_color(theme::text_primary());
         delete_btn.set_frame(FrameType::RFlatBox);
@@ -247,8 +244,8 @@ impl ConnectionDialog {
                     name_input_cb.set_value(&conn.name);
                     user_input_cb.set_value(&conn.username);
                     // Load password from OS keyring on demand.
-                    let password = AppConfig::get_password_for_connection(&conn.name)
-                        .unwrap_or_default();
+                    let password =
+                        AppConfig::get_password_for_connection(&conn.name).unwrap_or_default();
                     pass_input_cb.set_value(&password);
                     host_input_cb.set_value(&conn.host);
                     port_input_cb.set_value(&conn.port.to_string());
@@ -323,8 +320,7 @@ impl ConnectionDialog {
                 &service_input_conn.value(),
             );
 
-            let _ =
-                sender_for_connect.send(DialogMessage::Connect(info, save_check_conn.value()));
+            let _ = sender_for_connect.send(DialogMessage::Connect(info, save_check_conn.value()));
             app::awake();
         });
 

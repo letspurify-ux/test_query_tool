@@ -18,6 +18,7 @@ use crate::db::{
     lock_connection, ConnectionInfo, QueryExecutor, QueryResult, SharedConnection,
     TableColumnDetail,
 };
+use crate::ui::constants::*;
 use crate::ui::font_settings::{configured_editor_profile, configured_ui_font_size, FontProfile};
 use crate::ui::intellisense::{IntellisenseData, IntellisensePopup};
 use crate::ui::query_history::QueryHistoryDialog;
@@ -26,7 +27,6 @@ use crate::ui::syntax_highlight::{
     STYLE_STRING,
 };
 use crate::ui::theme;
-use crate::ui::constants::*;
 use crate::utils::AppConfig;
 
 mod execution;
@@ -148,32 +148,44 @@ impl SqlEditorWidget {
         button_pack.set_type(PackType::Horizontal);
         button_pack.set_spacing(TOOLBAR_SPACING);
 
-        let mut execute_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("@> Execute");
+        let mut execute_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("@> Execute");
         execute_btn.set_color(theme::button_primary());
         execute_btn.set_label_color(theme::text_primary());
         execute_btn.set_frame(FrameType::RFlatBox);
 
-        let mut cancel_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Cancel");
+        let mut cancel_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Cancel");
         cancel_btn.set_color(theme::button_warning());
         cancel_btn.set_label_color(theme::text_primary());
         cancel_btn.set_frame(FrameType::RFlatBox);
 
-        let mut explain_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Explain");
+        let mut explain_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Explain");
         explain_btn.set_color(theme::button_secondary());
         explain_btn.set_label_color(theme::text_primary());
         explain_btn.set_frame(FrameType::RFlatBox);
 
-        let mut clear_btn = Button::default().with_size(BUTTON_WIDTH_SMALL, BUTTON_HEIGHT).with_label("Clear");
+        let mut clear_btn = Button::default()
+            .with_size(BUTTON_WIDTH_SMALL, BUTTON_HEIGHT)
+            .with_label("Clear");
         clear_btn.set_color(theme::button_subtle());
         clear_btn.set_label_color(theme::text_secondary());
         clear_btn.set_frame(FrameType::RFlatBox);
 
-        let mut commit_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Commit");
+        let mut commit_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Commit");
         commit_btn.set_color(theme::button_success());
         commit_btn.set_label_color(theme::text_primary());
         commit_btn.set_frame(FrameType::RFlatBox);
 
-        let mut rollback_btn = Button::default().with_size(BUTTON_WIDTH, BUTTON_HEIGHT).with_label("Rollback");
+        let mut rollback_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Rollback");
         rollback_btn.set_color(theme::button_danger());
         rollback_btn.set_label_color(theme::text_primary());
         rollback_btn.set_frame(FrameType::RFlatBox);
