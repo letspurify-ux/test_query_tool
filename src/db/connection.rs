@@ -8,6 +8,7 @@ use crate::db::session::SessionState;
 pub struct ConnectionInfo {
     pub name: String,
     pub username: String,
+    #[serde(skip_serializing, default)]
     pub password: String,
     pub host: String,
     pub port: u16,
