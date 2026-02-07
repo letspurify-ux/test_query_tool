@@ -16,9 +16,9 @@ use crate::db::{
     lock_connection, ConstraintInfo, IndexInfo, ObjectBrowser, ProcedureArgument, SequenceInfo,
     SharedConnection, TableColumnDetail,
 };
-use crate::ui::{configured_editor_profile, configured_ui_font_size};
 use crate::ui::constants::*;
 use crate::ui::theme;
+use crate::ui::{configured_editor_profile, configured_ui_font_size};
 
 #[derive(Clone)]
 pub enum SqlAction {
@@ -621,11 +621,12 @@ impl ObjectBrowserWidget {
         let mut local_decls: Vec<String> = Vec::new();
         let mut call_args: Vec<String> = Vec::new();
         let mut cursor_binds: Vec<String> = Vec::new();
+        // Function return value (position=0, name=NULL) must be assigned
+        // via ':=' rather than passed as a call argument.
+        let mut return_var: Option<String> = None;
 
         for arg in &selected_args {
             let arg_label = arg.name.clone();
-            let var_base = arg_label.as_deref().unwrap_or("ARG");
-            let var_name = Self::unique_var_name(var_base, arg.position, &mut used_names);
             let direction = arg
                 .in_out
                 .clone()
@@ -635,7 +636,23 @@ impl ObjectBrowserWidget {
             let is_out = direction.contains("OUT");
             let is_in = direction.contains("IN");
 
-            if is_out && Self::is_ref_cursor(arg) {
+            // Detect function return value: position=0 with no argument name
+            // and direction is OUT (not IN OUT).
+            let is_return_value = arg.position == 0 && arg.name.is_none() && is_out && !is_in;
+
+            let var_base =
+                arg_label
+                    .as_deref()
+                    .unwrap_or(if is_return_value { "RESULT" } else { "ARG" });
+            let var_name = Self::unique_var_name(var_base, arg.position, &mut used_names);
+
+            if is_return_value {
+                // Declare the return variable without assignment; it will
+                // receive the value via ':=' in the BEGIN block.
+                let type_str = Self::format_argument_type(arg);
+                local_decls.push(format!("  {} {};", var_name, type_str));
+                return_var = Some(var_name);
+            } else if is_out && Self::is_ref_cursor(arg) {
                 cursor_binds.push(var_name.clone());
                 let target = format!(":{}", var_name);
                 let call_expr = match &arg_label {
@@ -673,16 +690,28 @@ impl ObjectBrowserWidget {
         }
 
         script.push_str("BEGIN\n");
-        if call_args.is_empty() {
-            script.push_str(&format!("  {};\n", qualified_name));
+
+        // Build the call expression (with or without arguments)
+        let call_str = if call_args.is_empty() {
+            format!("{}", qualified_name)
         } else {
-            script.push_str(&format!("  {}(\n", qualified_name));
+            let mut s = format!("{}(\n", qualified_name);
             for (idx, arg) in call_args.iter().enumerate() {
                 let suffix = if idx + 1 == call_args.len() { "" } else { "," };
-                script.push_str(&format!("    {}{}\n", arg, suffix));
+                s.push_str(&format!("    {}{}\n", arg, suffix));
             }
-            script.push_str("  );\n");
+            s.push_str("  )");
+            s
+        };
+
+        if let Some(ref ret_var) = return_var {
+            // Function: assign return value via ':='
+            script.push_str(&format!("  {} := {};\n", ret_var, call_str));
+        } else {
+            // Procedure: plain call
+            script.push_str(&format!("  {};\n", call_str));
         }
+
         script.push_str("END;\n/\n");
 
         for cursor in cursor_binds {
