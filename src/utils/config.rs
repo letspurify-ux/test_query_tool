@@ -2,7 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use crate::db::ConnectionInfo;
+use crate::utils::credential_store;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
@@ -40,16 +44,50 @@ impl AppConfig {
     }
 
     pub fn load() -> Self {
-        if let Some(path) = Self::config_path() {
+        let mut config = if let Some(path) = Self::config_path() {
             if path.exists() {
                 if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(config) = serde_json::from_str(&content) {
-                        return config;
-                    }
+                    serde_json::from_str(&content).unwrap_or_else(|_| Self::new())
+                } else {
+                    Self::new()
                 }
+            } else {
+                Self::new()
+            }
+        } else {
+            Self::new()
+        };
+
+        // Migrate plain-text passwords from old config to keyring,
+        // then load passwords from keyring for all connections.
+        let mut needs_resave = false;
+        for conn in &mut config.recent_connections {
+            // Migration: if password was deserialized from old config, store it in keyring
+            if !conn.password.is_empty() {
+                if let Err(e) = credential_store::store_password(&conn.name, &conn.password) {
+                    eprintln!("Keyring migration warning: {}", e);
+                }
+                // Clear from memory; will be reloaded from keyring below
+                conn.password.clear();
+                needs_resave = true;
+            }
+
+            // Load password from keyring
+            match credential_store::get_password(&conn.name) {
+                Ok(Some(password)) => conn.password = password,
+                Ok(None) => {} // No stored password
+                Err(e) => eprintln!("Keyring load warning: {}", e),
             }
         }
-        Self::new()
+
+        // Re-save to strip plain-text passwords from config.json
+        if needs_resave {
+            if let Err(e) = config.save() {
+                eprintln!("Failed to re-save config after keyring migration: {}", e);
+            }
+        }
+
+        config
     }
 
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -70,11 +108,20 @@ impl AppConfig {
                     return Err(Box::new(err));
                 }
             };
-            match fs::write(path, content) {
+            match fs::write(&path, content) {
                 Ok(()) => {}
                 Err(err) => {
                     eprintln!("Config persistence error: {err}");
                     return Err(Box::new(err));
+                }
+            }
+
+            // Restrict file permissions to owner-only (0600) on Unix
+            #[cfg(unix)]
+            {
+                let permissions = fs::Permissions::from_mode(0o600);
+                if let Err(e) = fs::set_permissions(&path, permissions) {
+                    eprintln!("Warning: could not set config file permissions: {}", e);
                 }
             }
         }
@@ -82,6 +129,13 @@ impl AppConfig {
     }
 
     pub fn add_recent_connection(&mut self, info: ConnectionInfo) {
+        // Store password securely in OS keyring
+        if !info.password.is_empty() {
+            if let Err(e) = credential_store::store_password(&info.name, &info.password) {
+                eprintln!("Keyring store warning: {}", e);
+            }
+        }
+
         // Remove existing connection with same name
         self.recent_connections.retain(|c| c.name != info.name);
 
@@ -97,6 +151,10 @@ impl AppConfig {
     }
 
     pub fn remove_connection(&mut self, name: &str) {
+        // Remove password from OS keyring
+        if let Err(e) = credential_store::delete_password(name) {
+            eprintln!("Keyring delete warning: {}", e);
+        }
         self.recent_connections.retain(|c| c.name != name);
     }
 
