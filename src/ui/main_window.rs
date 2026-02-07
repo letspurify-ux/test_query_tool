@@ -896,6 +896,9 @@ impl MainWindow {
                                                     poisoned.into_inner().reset();
                                                 }
                                             }
+                                            // Clear password before sending info across channel
+                                            let mut info = info;
+                                            info.clear_password();
                                             let _ = conn_sender.send(ConnectionResult::Success(info));
                                             app::awake();
                                         }

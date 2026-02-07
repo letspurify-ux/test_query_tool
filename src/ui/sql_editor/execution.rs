@@ -563,14 +563,13 @@ impl SqlEditorWidget {
             }
             ToolCommand::Connect {
                 username,
-                password,
                 host,
                 port,
                 service_name,
                 ..
             } => format!(
-                "CONNECT {}/{}@{}:{}/{}",
-                username, password, host, port, service_name
+                "CONNECT {}/****@{}:{}/{}",
+                username, host, port, service_name
             ),
             ToolCommand::Disconnect => "DISCONNECT".to_string(),
             ToolCommand::Unsupported { raw, .. } => raw.clone(),

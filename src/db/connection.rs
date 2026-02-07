@@ -44,6 +44,20 @@ impl ConnectionInfo {
             self.name, self.username, self.host, self.port, self.service_name
         )
     }
+
+    /// Securely clear the password from memory by overwriting with zeros
+    /// then releasing the allocation.
+    pub fn clear_password(&mut self) {
+        // Overwrite the existing bytes with zeros before dropping
+        // SAFETY: we write zeros over the valid UTF-8 bytes (zeros are valid UTF-8)
+        let bytes = unsafe { self.password.as_bytes_mut() };
+        for b in bytes.iter_mut() {
+            // Use write_volatile to prevent the compiler from optimizing away the zeroing
+            unsafe { std::ptr::write_volatile(b, 0) };
+        }
+        self.password.clear();
+        self.password.shrink_to_fit();
+    }
 }
 
 impl Default for ConnectionInfo {
@@ -92,6 +106,8 @@ impl DatabaseConnection {
 
         self.connection = Some(connection);
         self.info = info;
+        // Clear password from memory now that the connection is established
+        self.info.clear_password();
         self.connected = true;
 
         Ok(())

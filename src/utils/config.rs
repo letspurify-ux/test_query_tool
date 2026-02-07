@@ -58,8 +58,8 @@ impl AppConfig {
             Self::new()
         };
 
-        // Migrate plain-text passwords from old config to keyring,
-        // then load passwords from keyring for all connections.
+        // Migrate plain-text passwords from old config to keyring.
+        // Passwords are NOT loaded eagerly; use get_password_for_connection() on demand.
         let mut needs_resave = false;
         for conn in &mut config.recent_connections {
             // Migration: if password was deserialized from old config, store it in keyring
@@ -67,16 +67,8 @@ impl AppConfig {
                 if let Err(e) = credential_store::store_password(&conn.name, &conn.password) {
                     eprintln!("Keyring migration warning: {}", e);
                 }
-                // Clear from memory; will be reloaded from keyring below
-                conn.password.clear();
+                conn.clear_password();
                 needs_resave = true;
-            }
-
-            // Load password from keyring
-            match credential_store::get_password(&conn.name) {
-                Ok(Some(password)) => conn.password = password,
-                Ok(None) => {} // No stored password
-                Err(e) => eprintln!("Keyring load warning: {}", e),
             }
         }
 
@@ -128,13 +120,15 @@ impl AppConfig {
         Ok(())
     }
 
-    pub fn add_recent_connection(&mut self, info: ConnectionInfo) {
+    pub fn add_recent_connection(&mut self, mut info: ConnectionInfo) {
         // Store password securely in OS keyring
         if !info.password.is_empty() {
             if let Err(e) = credential_store::store_password(&info.name, &info.password) {
                 eprintln!("Keyring store warning: {}", e);
             }
         }
+        // Clear password from memory after storing in keyring
+        info.clear_password();
 
         // Remove existing connection with same name
         self.recent_connections.retain(|c| c.name != info.name);
@@ -148,6 +142,19 @@ impl AppConfig {
 
     pub fn get_connection_by_name(&self, name: &str) -> Option<&ConnectionInfo> {
         self.recent_connections.iter().find(|c| c.name == name)
+    }
+
+    /// Retrieve the password for a saved connection from the OS keyring on demand.
+    /// Returns None if no password is stored or the connection name is not found.
+    pub fn get_password_for_connection(name: &str) -> Option<String> {
+        match credential_store::get_password(name) {
+            Ok(Some(password)) => Some(password),
+            Ok(None) => None,
+            Err(e) => {
+                eprintln!("Keyring load warning: {}", e);
+                None
+            }
+        }
     }
 
     pub fn remove_connection(&mut self, name: &str) {
