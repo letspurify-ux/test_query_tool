@@ -8,8 +8,8 @@ PROMPT [START] Complex depth / nested structures / SQL*Plus delimiters test
 PROMPT =======================================================================
 
 -- (툴이 지원한다면) 오류 시 중단/계속 옵션도 확인
-WHENEVER SQLERROR CONTINUE
-WHENEVER OSERROR CONTINUE
+--WHENEVER SQLERROR CONTINUE
+--WHENEVER OSERROR CONTINUE
 
 PROMPT [1] Cleanup previous objects (ignore errors)
 BEGIN

@@ -549,6 +549,13 @@ impl SqlEditorWidget {
                     _ => format!("WHENEVER SQLERROR {}", mode),
                 }
             }
+            ToolCommand::WheneverOsError { exit } => {
+                if *exit {
+                    "WHENEVER OSERROR EXIT".to_string()
+                } else {
+                    "WHENEVER OSERROR CONTINUE".to_string()
+                }
+            }
             ToolCommand::Exit => "EXIT".to_string(),
             ToolCommand::Quit => "QUIT".to_string(),
             ToolCommand::RunScript {
@@ -4402,7 +4409,44 @@ impl SqlEditorWidget {
                                         );
                                     }
                                 },
-                                ToolCommand::WheneverSqlError { exit, .. } => {
+                                ToolCommand::WheneverSqlError { exit, action } => {
+                                    if exit
+                                        && action
+                                            .as_deref()
+                                            .map(|v| v.trim().eq_ignore_ascii_case("SQL.SQLCODE"))
+                                            .unwrap_or(false)
+                                        && !script_mode
+                                    {
+                                        SqlEditorWidget::emit_script_message(
+                                            &sender,
+                                            &session,
+                                            "WHENEVER SQLERROR",
+                                            "Error: EXIT SQL.SQLCODE is supported only in batch(script) execution.",
+                                        );
+                                        command_error = true;
+                                    } else {
+                                        {
+                                            let mut guard = match session.lock() {
+                                                Ok(guard) => guard,
+                                                Err(poisoned) => {
+                                                    eprintln!(
+                                                        "Warning: session state lock was poisoned; recovering."
+                                                    );
+                                                    poisoned.into_inner()
+                                                }
+                                            };
+                                            guard.continue_on_error = !exit;
+                                        }
+                                        continue_on_error = !exit;
+                                        SqlEditorWidget::emit_script_message(
+                                            &sender,
+                                            &session,
+                                            "WHENEVER SQLERROR",
+                                            if exit { "Mode EXIT" } else { "Mode CONTINUE" },
+                                        );
+                                    }
+                                }
+                                ToolCommand::WheneverOsError { exit } => {
                                     {
                                         let mut guard = match session.lock() {
                                             Ok(guard) => guard,
@@ -4419,7 +4463,7 @@ impl SqlEditorWidget {
                                     SqlEditorWidget::emit_script_message(
                                         &sender,
                                         &session,
-                                        "WHENEVER SQLERROR",
+                                        "WHENEVER OSERROR",
                                         if exit { "Mode EXIT" } else { "Mode CONTINUE" },
                                     );
                                 }

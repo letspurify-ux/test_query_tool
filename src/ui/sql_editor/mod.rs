@@ -10,6 +10,7 @@ use fltk::{
     text::{TextBuffer, TextEditor, WrapMode},
 };
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
@@ -130,6 +131,7 @@ pub struct SqlEditorWidget {
     status_callback: Rc<RefCell<Option<Box<dyn FnMut(&str)>>>>,
     find_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>>,
     replace_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>>,
+    file_drop_callback: Rc<RefCell<Option<Box<dyn FnMut(PathBuf)>>>>,
     completion_range: Rc<RefCell<Option<(usize, usize)>>>,
     pending_intellisense: Rc<RefCell<Option<PendingIntellisense>>>,
 }
@@ -251,6 +253,8 @@ impl SqlEditorWidget {
             Rc::new(RefCell::new(None));
         let find_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
         let replace_callback: Rc<RefCell<Option<Box<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+        let file_drop_callback: Rc<RefCell<Option<Box<dyn FnMut(PathBuf)>>>> =
+            Rc::new(RefCell::new(None));
         let completion_range = Rc::new(RefCell::new(None::<(usize, usize)>));
         let pending_intellisense = Rc::new(RefCell::new(None::<PendingIntellisense>));
 
@@ -273,6 +277,7 @@ impl SqlEditorWidget {
             status_callback,
             find_callback,
             replace_callback,
+            file_drop_callback,
             completion_range,
             pending_intellisense,
         };
@@ -933,6 +938,13 @@ impl SqlEditorWidget {
         F: FnMut() + 'static,
     {
         *self.replace_callback.borrow_mut() = Some(Box::new(callback));
+    }
+
+    pub fn set_file_drop_callback<F>(&mut self, callback: F)
+    where
+        F: FnMut(PathBuf) + 'static,
+    {
+        *self.file_drop_callback.borrow_mut() = Some(Box::new(callback));
     }
 
     #[allow(dead_code)]

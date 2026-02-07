@@ -161,6 +161,9 @@ pub enum ToolCommand {
         exit: bool,
         action: Option<String>,
     },
+    WheneverOsError {
+        exit: bool,
+    },
     Exit,
     Quit,
     RunScript {

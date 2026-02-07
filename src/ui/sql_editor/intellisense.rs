@@ -7,6 +7,7 @@ use fltk::{
 };
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
@@ -103,11 +104,25 @@ impl SqlEditorWidget {
         let widget_for_shortcuts = self.clone();
         let find_callback_for_handle = self.find_callback.clone();
         let replace_callback_for_handle = self.replace_callback.clone();
+        let file_drop_callback_for_handle = self.file_drop_callback.clone();
         let ctrl_enter_handled_for_handle = ctrl_enter_handled.clone();
         let pending_intellisense_for_handle = pending_intellisense.clone();
+        let dnd_file_drop_pending_for_handle = Rc::new(RefCell::new(false));
 
         editor.handle(move |ed, ev| {
             match ev {
+                Event::DndEnter | Event::DndDrag => {
+                    *dnd_file_drop_pending_for_handle.borrow_mut() = true;
+                    true
+                }
+                Event::DndLeave => {
+                    *dnd_file_drop_pending_for_handle.borrow_mut() = false;
+                    true
+                }
+                Event::DndRelease => {
+                    *dnd_file_drop_pending_for_handle.borrow_mut() = true;
+                    true
+                }
                 Event::KeyDown => {
                     let key = fltk::app::event_key();
                     let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
@@ -524,10 +539,98 @@ impl SqlEditorWidget {
 
                     false
                 }
-                Event::Paste => false,
+                Event::Paste => {
+                    let from_drop = {
+                        let mut pending = dnd_file_drop_pending_for_handle.borrow_mut();
+                        let was_pending = *pending;
+                        *pending = false;
+                        was_pending
+                    };
+                    if !from_drop {
+                        return false;
+                    }
+
+                    let event_text = app::event_text();
+                    if let Some(path) = Self::extract_dropped_file_path(&event_text) {
+                        if let Some(ref mut cb) = *file_drop_callback_for_handle.borrow_mut() {
+                            cb(path);
+                            return true;
+                        }
+                    }
+                    false
+                }
                 _ => false,
             }
         });
+    }
+
+    fn extract_dropped_file_path(raw: &str) -> Option<PathBuf> {
+        for token in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
+            if token.starts_with('#') {
+                continue;
+            }
+            let Some(path) = Self::parse_dropped_file_token(token) else {
+                continue;
+            };
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        None
+    }
+
+    fn parse_dropped_file_token(token: &str) -> Option<PathBuf> {
+        let cleaned = token.trim_matches('\0').trim();
+        if cleaned.is_empty() {
+            return None;
+        }
+
+        let path_str = if cleaned.len() >= 7 && cleaned[..7].eq_ignore_ascii_case("file://") {
+            let mut uri_path = cleaned[7..].trim();
+            if uri_path.len() >= 10 && uri_path[..10].eq_ignore_ascii_case("localhost/") {
+                uri_path = &uri_path[9..];
+            }
+            #[cfg(windows)]
+            {
+                let bytes = uri_path.as_bytes();
+                if bytes.len() >= 3
+                    && bytes[0] == b'/'
+                    && bytes[1].is_ascii_alphabetic()
+                    && bytes[2] == b':'
+                {
+                    uri_path = &uri_path[1..];
+                }
+            }
+            Self::decode_uri_percent(uri_path)
+        } else {
+            cleaned.to_string()
+        };
+
+        if path_str.is_empty() {
+            return None;
+        }
+        Some(PathBuf::from(path_str))
+    }
+
+    fn decode_uri_percent(value: &str) -> String {
+        let bytes = value.as_bytes();
+        let mut out = String::with_capacity(value.len());
+        let mut i = 0usize;
+        while i < bytes.len() {
+            if bytes[i] == b'%' && i + 2 < bytes.len() {
+                let hex = [bytes[i + 1], bytes[i + 2]];
+                if let Ok(hex_str) = std::str::from_utf8(&hex) {
+                    if let Ok(v) = u8::from_str_radix(hex_str, 16) {
+                        out.push(v as char);
+                        i += 3;
+                        continue;
+                    }
+                }
+            }
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+        out
     }
 
     pub fn trigger_intellisense(

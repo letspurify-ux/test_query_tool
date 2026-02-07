@@ -1334,7 +1334,12 @@ impl QueryExecutor {
             return Some(Self::parse_accept_command(trimmed));
         }
 
-        if upper.starts_with("DEFINE") {
+        if Self::is_word_command(&upper, "DEFINE") {
+            let rest = trimmed.get(6..).unwrap_or_default().trim();
+            if rest.is_empty() {
+                // MATCH_RECOGNIZE DEFINE clause marker: keep it as SQL text.
+                return None;
+            }
             return Some(Self::parse_define_assign_command(trimmed));
         }
 
@@ -1342,7 +1347,7 @@ impl QueryExecutor {
             return Some(Self::parse_undefine_command(trimmed));
         }
 
-        if upper.starts_with("COLUMN") {
+        if Self::is_word_command(&upper, "COLUMN") {
             return Some(Self::parse_column_new_value_command(trimmed));
         }
 
@@ -1427,6 +1432,10 @@ impl QueryExecutor {
 
         if upper.starts_with("WHENEVER SQLERROR") {
             return Some(Self::parse_whenever_sqlerror_command(trimmed));
+        }
+
+        if upper.starts_with("WHENEVER OSERROR") {
+            return Some(Self::parse_whenever_oserror_command(trimmed));
         }
 
         if upper == "EXIT" || upper.starts_with("EXIT ") {
@@ -1987,6 +1996,39 @@ impl QueryExecutor {
         }
     }
 
+    fn parse_whenever_oserror_command(raw: &str) -> ToolCommand {
+        let rest = raw[16..].trim();
+        if rest.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "WHENEVER OSERROR requires EXIT or CONTINUE.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mut parts = rest.splitn(2, char::is_whitespace);
+        let token = parts.next().unwrap_or("").to_uppercase();
+        let extra = parts.next().map(str::trim).unwrap_or("");
+
+        if !extra.is_empty() {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "WHENEVER OSERROR supports only EXIT or CONTINUE.".to_string(),
+                is_error: true,
+            };
+        }
+
+        match token.as_str() {
+            "EXIT" => ToolCommand::WheneverOsError { exit: true },
+            "CONTINUE" => ToolCommand::WheneverOsError { exit: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "WHENEVER OSERROR supports EXIT or CONTINUE.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
     fn parse_connect_command(raw: &str) -> ToolCommand {
         // CONNECT syntax: CONNECT user/password@host:port/service_name
         // or: CONNECT user/password@//host:port/service_name
@@ -2464,12 +2506,30 @@ impl QueryExecutor {
             Some(tail) => tail,
             None => return false,
         };
-        tail.is_empty()
-            || tail
+        if tail.is_empty()
+            || !tail
                 .chars()
                 .next()
                 .map(|ch| ch.is_whitespace())
                 .unwrap_or(false)
+        {
+            return tail.is_empty();
+        }
+
+        // Hierarchical query clause "START WITH" must stay as SQL, not SQL*Plus START command.
+        let first_word = tail.split_whitespace().next().unwrap_or_default();
+        !first_word.eq_ignore_ascii_case("WITH")
+    }
+
+    fn is_word_command(upper: &str, command: &str) -> bool {
+        if upper == command {
+            return true;
+        }
+        upper
+            .strip_prefix(command)
+            .and_then(|tail| tail.chars().next())
+            .map(|ch| ch.is_whitespace())
+            .unwrap_or(false)
     }
 
     fn parse_bind_type(type_str: &str) -> Result<BindDataType, String> {

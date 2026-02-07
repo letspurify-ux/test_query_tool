@@ -1870,6 +1870,175 @@ CONNECT BY level <= 20;"#;
 }
 
 #[test]
+fn test_start_with_not_parsed_as_tool_command() {
+    let sql = r#"SELECT
+  node_id,
+  parent_id,
+  node_name,
+  LEVEL AS lvl,
+  SYS_CONNECT_BY_PATH(node_name, '/') AS path
+FROM oqt_t_tree
+START WITH parent_id IS NULL
+CONNECT BY PRIOR node_id = parent_id
+ORDER SIBLINGS BY node_id;"#;
+
+    let items = QueryExecutor::split_script_items(sql);
+    let statements: Vec<&str> = items
+        .iter()
+        .filter_map(|item| match item {
+            ScriptItem::Statement(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    let tool_commands: Vec<&ScriptItem> = items
+        .iter()
+        .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+        .collect();
+
+    assert_eq!(
+        statements.len(),
+        1,
+        "Should be 1 statement, got: {:?}",
+        statements
+    );
+    assert!(
+        statements[0].contains("START WITH"),
+        "Statement should contain START WITH, got: {}",
+        statements[0]
+    );
+    assert!(
+        statements[0].contains("ORDER SIBLINGS BY"),
+        "Statement should contain ORDER SIBLINGS BY, got: {}",
+        statements[0]
+    );
+    assert!(
+        tool_commands.is_empty(),
+        "Should have no tool commands, got: {:?}",
+        tool_commands
+    );
+}
+
+#[test]
+fn test_json_table_columns_not_parsed_as_column_tool_command() {
+    let sql = r#"SELECT
+  jt.order_id,
+  jt.cust_name,
+  jt.tier,
+  it.sku,
+  it.qty,
+  it.price,
+  (it.qty * it.price) AS line_amt
+FROM oqt_t_json j
+CROSS JOIN JSON_TABLE(
+  j.payload,
+  '$'
+  COLUMNS (
+    order_id   NUMBER       PATH '$.order_id',
+    cust_name  VARCHAR2(50) PATH '$.customer.name',
+    tier       VARCHAR2(20) PATH '$.customer.tier',
+    NESTED PATH '$.items[*]'
+    COLUMNS (
+      sku   VARCHAR2(30) PATH '$.sku',
+      qty   NUMBER       PATH '$.qty',
+      price NUMBER       PATH '$.price'
+    )
+  )
+) jt
+CROSS APPLY (
+  SELECT jt.sku, jt.qty, jt.price FROM dual
+) it
+ORDER BY jt.order_id, it.sku;"#;
+
+    let items = QueryExecutor::split_script_items(sql);
+    let statements: Vec<&str> = items
+        .iter()
+        .filter_map(|item| match item {
+            ScriptItem::Statement(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    let tool_commands: Vec<&ScriptItem> = items
+        .iter()
+        .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+        .collect();
+
+    assert_eq!(
+        statements.len(),
+        1,
+        "Should be 1 statement, got: {:?}",
+        statements
+    );
+    assert!(
+        statements[0].contains("JSON_TABLE"),
+        "Statement should contain JSON_TABLE, got: {}",
+        statements[0]
+    );
+    assert!(
+        statements[0].contains("COLUMNS ("),
+        "Statement should contain COLUMNS clause, got: {}",
+        statements[0]
+    );
+    assert!(
+        tool_commands.is_empty(),
+        "Should have no tool commands, got: {:?}",
+        tool_commands
+    );
+}
+
+#[test]
+fn test_match_recognize_define_not_parsed_as_tool_command() {
+    let sql = r#"SELECT *
+FROM oqt_t_emp
+MATCH_RECOGNIZE (
+  PARTITION BY deptno
+  ORDER BY hiredate, empno
+  MEASURES
+    FIRST(ename) AS start_name,
+    LAST(ename)  AS end_name,
+    COUNT(*)     AS run_len
+  ONE ROW PER MATCH
+  PATTERN (a b+)
+  DEFINE
+    b AS b.sal > PREV(b.sal)
+);"#;
+
+    let items = QueryExecutor::split_script_items(sql);
+    let statements: Vec<&str> = items
+        .iter()
+        .filter_map(|item| match item {
+            ScriptItem::Statement(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    let tool_commands: Vec<&ScriptItem> = items
+        .iter()
+        .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+        .collect();
+
+    assert_eq!(
+        statements.len(),
+        1,
+        "Should be 1 statement, got: {:?}",
+        statements
+    );
+    assert!(
+        statements[0].contains("MATCH_RECOGNIZE"),
+        "Statement should contain MATCH_RECOGNIZE, got: {}",
+        statements[0]
+    );
+    assert!(
+        statements[0].contains("\n  DEFINE\n"),
+        "Statement should contain DEFINE clause marker, got: {}",
+        statements[0]
+    );
+    assert!(
+        tool_commands.is_empty(),
+        "Should have no tool commands, got: {:?}",
+        tool_commands
+    );
+}
+
+#[test]
 fn test_connect_tool_command_still_works() {
     // 실제 CONNECT Tool Command는 여전히 동작해야 함
     let sql = "CONNECT user/pass@localhost:1521/ORCL";
@@ -3159,4 +3328,56 @@ fn test_parse_ddl_object_type_package_with_mixed_body() {
 fn test_parse_ddl_object_type_trigger_with_table_in_body() {
     let sql = "CREATE OR REPLACE TRIGGER MY_TRIG BEFORE INSERT ON MY_TABLE FOR EACH ROW BEGIN INSERT INTO LOG_TABLE VALUES (SYSDATE); END;";
     assert_eq!(QueryExecutor::parse_ddl_object_type(sql), "Trigger");
+}
+
+#[test]
+fn test_parse_whenever_oserror_continue() {
+    let sql = "WHENEVER OSERROR CONTINUE\nSELECT 1 FROM DUAL;";
+    let items = QueryExecutor::split_script_items(sql);
+
+    assert!(
+        matches!(
+            items.first(),
+            Some(ScriptItem::ToolCommand(ToolCommand::WheneverOsError {
+                exit: false
+            }))
+        ),
+        "Expected WHENEVER OSERROR CONTINUE tool command, got: {:?}",
+        items.first()
+    );
+}
+
+#[test]
+fn test_parse_whenever_oserror_exit() {
+    let sql = "WHENEVER OSERROR EXIT\nSELECT 1 FROM DUAL;";
+    let items = QueryExecutor::split_script_items(sql);
+
+    assert!(
+        matches!(
+            items.first(),
+            Some(ScriptItem::ToolCommand(ToolCommand::WheneverOsError {
+                exit: true
+            }))
+        ),
+        "Expected WHENEVER OSERROR EXIT tool command, got: {:?}",
+        items.first()
+    );
+}
+
+#[test]
+fn test_parse_whenever_sqlerror_exit_sql_sqlcode() {
+    let sql = "WHENEVER SQLERROR EXIT SQL.SQLCODE\nSELECT 1 FROM DUAL;";
+    let items = QueryExecutor::split_script_items(sql);
+
+    assert!(
+        matches!(
+            items.first(),
+            Some(ScriptItem::ToolCommand(ToolCommand::WheneverSqlError {
+                exit: true,
+                action: Some(action)
+            })) if action.eq_ignore_ascii_case("SQL.SQLCODE")
+        ),
+        "Expected WHENEVER SQLERROR EXIT SQL.SQLCODE tool command, got: {:?}",
+        items.first()
+    );
 }

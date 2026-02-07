@@ -718,6 +718,7 @@ impl MainWindow {
                 }
             });
 
+        drop(state_borrow);
         self.setup_menu_callbacks(schema_sender, schema_receiver);
     }
 
@@ -954,6 +955,30 @@ impl MainWindow {
             weak_state_for_poll,
             schema_sender_for_poll,
         );
+
+        let weak_state_for_file_drop = Rc::downgrade(&state);
+        let file_sender_for_drop = file_sender.clone();
+        state
+            .borrow_mut()
+            .sql_editor
+            .set_file_drop_callback(move |path| {
+                if let Some(state_for_drop) = weak_state_for_file_drop.upgrade() {
+                    let mut s = state_for_drop.borrow_mut();
+                    let conn_info = s.connection_info.borrow().clone();
+                    let file_label = path.file_name().unwrap_or_default().to_string_lossy();
+                    s.status_bar.set_label(&format_status(
+                        &format!("Opening {}", file_label),
+                        &conn_info,
+                    ));
+                }
+
+                let sender = file_sender_for_drop.clone();
+                thread::spawn(move || {
+                    let result = fs::read_to_string(&path).map_err(|err| err.to_string());
+                    let _ = sender.send(FileActionResult::Open { path, result });
+                    app::awake();
+                });
+            });
 
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
             let weak_state_for_menu = Rc::downgrade(&state);
