@@ -16,6 +16,7 @@ use crate::db::{
     ProcedureArgument, SequenceInfo, SharedConnection, TableColumnDetail,
 };
 use crate::ui::constants::*;
+use crate::ui::font_settings::FontProfile;
 use crate::ui::theme;
 use crate::ui::{configured_editor_profile, configured_ui_font_size};
 
@@ -179,8 +180,10 @@ impl ObjectBrowserWidget {
         self.flex.clone()
     }
 
-    pub fn apply_ui_font_size(&mut self, ui_size: i32) {
+    pub fn apply_font_settings(&mut self, profile: FontProfile, ui_size: i32) {
+        self.filter_input.set_text_font(profile.normal);
         self.filter_input.set_text_size(ui_size);
+        self.tree.set_item_label_font(profile.normal);
         self.tree.set_item_label_size(ui_size);
         self.filter_input.redraw();
         self.tree.redraw();

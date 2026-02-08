@@ -414,35 +414,49 @@ impl MainWindow {
         state
             .result_tabs
             .set_max_cell_display_chars(result_cell_max_chars as usize);
-        state.object_browser.apply_ui_font_size(ui_size);
-        Self::apply_runtime_ui_font_size(state, ui_size);
+        state
+            .object_browser
+            .apply_font_settings(unified_profile, ui_size);
+        Self::apply_runtime_ui_font(state, unified_profile.normal, ui_size);
         app::redraw();
     }
 
-    fn apply_runtime_ui_font_size(state: &mut AppState, ui_size: i32) {
-        fn apply_widget_label_size_recursive(widget: &mut Widget, size: i32) {
+    fn apply_runtime_ui_font(
+        state: &mut AppState,
+        font: fltk::enums::Font,
+        ui_size: i32,
+    ) {
+        fn apply_widget_font_recursive(
+            widget: &mut Widget,
+            font: fltk::enums::Font,
+            size: i32,
+        ) {
+            widget.set_label_font(font);
             widget.set_label_size(size);
             if let Some(group) = widget.as_group() {
                 for mut child in group.into_iter() {
-                    apply_widget_label_size_recursive(&mut child, size);
+                    apply_widget_font_recursive(&mut child, font, size);
                 }
             }
         }
 
         let mut window = state.window.clone();
+        window.set_label_font(font);
         window.set_label_size(ui_size);
         for mut child in window.clone().into_iter() {
-            apply_widget_label_size_recursive(&mut child, ui_size);
+            apply_widget_font_recursive(&mut child, font, ui_size);
         }
 
         if let Some(mut menu) = app::widget_from_id::<MenuBar>("main_menu") {
+            menu.set_text_font(font);
             menu.set_text_size(ui_size);
         }
 
         for popup in state.popups.borrow_mut().iter_mut() {
+            popup.set_label_font(font);
             popup.set_label_size(ui_size);
             for mut child in popup.clone().into_iter() {
-                apply_widget_label_size_recursive(&mut child, ui_size);
+                apply_widget_font_recursive(&mut child, font, ui_size);
             }
         }
     }

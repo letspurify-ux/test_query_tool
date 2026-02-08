@@ -30,16 +30,28 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
     i
 }
 
-fn history_writer_sender() -> &'static mpsc::Sender<QueryHistoryEntry> {
-    static HISTORY_WRITER: OnceLock<mpsc::Sender<QueryHistoryEntry>> = OnceLock::new();
+enum HistoryCommand {
+    Add(QueryHistoryEntry),
+    Clear,
+}
+
+fn history_writer_sender() -> &'static mpsc::Sender<HistoryCommand> {
+    static HISTORY_WRITER: OnceLock<mpsc::Sender<HistoryCommand>> = OnceLock::new();
     HISTORY_WRITER.get_or_init(|| {
-        let (sender, receiver) = mpsc::channel::<QueryHistoryEntry>();
+        let (sender, receiver) = mpsc::channel::<HistoryCommand>();
         thread::spawn(move || {
             let mut history = QueryHistory::load();
-            while let Ok(entry) = receiver.recv() {
-                history.add_entry(entry);
+            while let Ok(cmd) = receiver.recv() {
+                match cmd {
+                    HistoryCommand::Add(entry) => history.add_entry(entry),
+                    HistoryCommand::Clear => history.queries.clear(),
+                }
+                // Drain any pending commands before saving
                 while let Ok(next) = receiver.try_recv() {
-                    history.add_entry(next);
+                    match next {
+                        HistoryCommand::Add(entry) => history.add_entry(entry),
+                        HistoryCommand::Clear => history.queries.clear(),
+                    }
                 }
                 if let Err(err) = history.save() {
                     eprintln!("Query history save error: {err}");
@@ -343,8 +355,9 @@ impl QueryHistoryDialog {
                             "",
                         );
                         if choice == Some(1) {
-                            let new_history = QueryHistory::new();
-                            let _ = new_history.save();
+                            // Notify the background writer so its in-memory
+                            // history is cleared along with the file.
+                            let _ = history_writer_sender().send(HistoryCommand::Clear);
                             queries.borrow_mut().clear();
                             browser.clear();
                             preview_buffer.set_text("");
@@ -399,10 +412,13 @@ impl QueryHistoryDialog {
             error_line,
         };
 
-        if let Err(err) = history_writer_sender().send(entry) {
-            let mut history = QueryHistory::load();
-            history.add_entry(err.0);
-            let _ = history.save();
+        if let Err(err) = history_writer_sender().send(HistoryCommand::Add(entry)) {
+            // Fallback: if channel is disconnected, save directly
+            if let HistoryCommand::Add(entry) = err.0 {
+                let mut history = QueryHistory::load();
+                history.add_entry(entry);
+                let _ = history.save();
+            }
         }
     }
 }
