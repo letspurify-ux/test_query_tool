@@ -26,6 +26,45 @@ use crate::ui::FindReplaceDialog;
 use super::*;
 
 impl SqlEditorWidget {
+    fn invoke_void_callback(callback_slot: &Rc<RefCell<Option<Box<dyn FnMut()>>>>) -> bool {
+        let callback = {
+            let mut slot = callback_slot.borrow_mut();
+            slot.take()
+        };
+
+        if let Some(mut cb) = callback {
+            cb();
+            let mut slot = callback_slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(cb);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    fn invoke_file_drop_callback(
+        callback_slot: &Rc<RefCell<Option<Box<dyn FnMut(PathBuf)>>>>,
+        path: PathBuf,
+    ) -> bool {
+        let callback = {
+            let mut slot = callback_slot.borrow_mut();
+            slot.take()
+        };
+
+        if let Some(mut cb) = callback {
+            cb(path);
+            let mut slot = callback_slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(cb);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn setup_intellisense(&mut self) {
         let buffer = self.buffer.clone();
         let mut editor = self.editor.clone();
@@ -310,9 +349,7 @@ impl SqlEditorWidget {
                                 return true;
                             }
                             k if k == Key::from_char('f') || k == Key::from_char('F') => {
-                                if let Some(ref mut cb) = *find_callback_for_handle.borrow_mut() {
-                                    cb();
-                                }
+                                Self::invoke_void_callback(&find_callback_for_handle);
                                 return true;
                             }
                             k if k == Key::from_char('/') || k == Key::from_char('?') => {
@@ -328,10 +365,7 @@ impl SqlEditorWidget {
                                 return true;
                             }
                             k if k == Key::from_char('h') || k == Key::from_char('H') => {
-                                if let Some(ref mut cb) = *replace_callback_for_handle.borrow_mut()
-                                {
-                                    cb();
-                                }
+                                Self::invoke_void_callback(&replace_callback_for_handle);
                                 return true;
                             }
                             _ => {}
@@ -351,9 +385,7 @@ impl SqlEditorWidget {
                             &mut buffer_for_handle,
                         ) && !FindReplaceDialog::has_search_text()
                         {
-                            if let Some(ref mut cb) = *find_callback_for_handle.borrow_mut() {
-                                cb();
-                            }
+                            Self::invoke_void_callback(&find_callback_for_handle);
                         }
                         return true;
                     }
@@ -608,8 +640,7 @@ impl SqlEditorWidget {
 
                     let event_text = app::event_text();
                     if let Some(path) = Self::extract_dropped_file_path(&event_text) {
-                        if let Some(ref mut cb) = *file_drop_callback_for_handle.borrow_mut() {
-                            cb(path);
+                        if Self::invoke_file_drop_callback(&file_drop_callback_for_handle, path) {
                             return true;
                         }
                     }

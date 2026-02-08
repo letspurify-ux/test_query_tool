@@ -5,7 +5,6 @@ use fltk::{
     input::Input,
     prelude::*,
     tree::{Tree, TreeItem, TreeSelect},
-    widget::Widget,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -1449,10 +1448,7 @@ impl ObjectBrowserWidget {
             }
 
             // FLTK memory management: widgets created without a parent must be deleted.
-            unsafe {
-                let widget = Widget::from_widget_ptr(menu.as_widget_ptr());
-                Widget::delete(widget);
-            }
+            fltk::menu::MenuButton::delete(menu);
         }
     }
 

@@ -4,7 +4,6 @@ use fltk::{
     group::{Group, Tabs, TabsOverflow},
     prelude::*,
     text::{TextBuffer, TextDisplay},
-    widget::Widget,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -412,12 +411,7 @@ impl ResultTabsWidget {
         let table_widget = tab.table.get_widget();
         let mut group = tab.group;
         group.remove(&table_widget);
-
-        // Delete the Table widget
-        unsafe {
-            let widget = Widget::from_widget_ptr(table_widget.as_widget_ptr());
-            Widget::delete(widget);
-        }
+        fltk::table::Table::delete(table_widget);
 
         // Step 4: Remove group from tabs and delete
         if self.tabs.find(&group) >= 0 {

@@ -8,7 +8,6 @@ use fltk::{
     prelude::*,
     table::{Table, TableContext},
     text::{TextBuffer, TextDisplay},
-    widget::Widget,
     window::Window,
 };
 use std::cell::{Cell, RefCell};
@@ -818,10 +817,7 @@ impl ResultTableWidget {
             }
         }
 
-        unsafe {
-            let widget = Widget::from_widget_ptr(menu.as_widget_ptr());
-            Widget::delete(widget);
-        }
+        MenuButton::delete(menu);
     }
 
     fn copy_selected_to_clipboard(

@@ -147,6 +147,60 @@ pub struct SqlEditorWidget {
 }
 
 impl SqlEditorWidget {
+    fn invoke_query_result_callback(
+        callback_slot: &Rc<RefCell<Option<Box<dyn FnMut(&QueryResult)>>>>,
+        result: &QueryResult,
+    ) {
+        let callback = {
+            let mut slot = callback_slot.borrow_mut();
+            slot.take()
+        };
+
+        if let Some(mut cb) = callback {
+            cb(result);
+            let mut slot = callback_slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(cb);
+            }
+        }
+    }
+
+    fn invoke_progress_callback(
+        callback_slot: &Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>>,
+        message: QueryProgress,
+    ) {
+        let callback = {
+            let mut slot = callback_slot.borrow_mut();
+            slot.take()
+        };
+
+        if let Some(mut cb) = callback {
+            cb(message);
+            let mut slot = callback_slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(cb);
+            }
+        }
+    }
+
+    fn invoke_status_callback(
+        callback_slot: &Rc<RefCell<Option<Box<dyn FnMut(&str)>>>>,
+        message: &str,
+    ) {
+        let callback = {
+            let mut slot = callback_slot.borrow_mut();
+            slot.take()
+        };
+
+        if let Some(mut cb) = callback {
+            cb(message);
+            let mut slot = callback_slot.borrow_mut();
+            if slot.is_none() {
+                *slot = Some(cb);
+            }
+        }
+    }
+
     pub fn new(connection: SharedConnection) -> Self {
         let mut group = Flex::default();
         group.set_type(FlexType::Column);
@@ -375,9 +429,10 @@ impl SqlEditorWidget {
                                     result.success,
                                     &result.message,
                                 );
-                                if let Some(ref mut cb) = *execute_callback.borrow_mut() {
-                                    cb(result);
-                                }
+                                SqlEditorWidget::invoke_query_result_callback(
+                                    &execute_callback,
+                                    result,
+                                );
                             }
                             QueryProgress::BatchFinished => {
                                 *query_running.borrow_mut() = false;
@@ -387,9 +442,7 @@ impl SqlEditorWidget {
                             _ => {}
                         }
 
-                        if let Some(ref mut cb) = *progress_callback.borrow_mut() {
-                            cb(message);
-                        }
+                        SqlEditorWidget::invoke_progress_callback(&progress_callback, message);
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
@@ -854,9 +907,7 @@ impl SqlEditorWidget {
     }
 
     fn emit_status(&self, message: &str) {
-        if let Some(ref mut callback) = *self.status_callback.borrow_mut() {
-            callback(message);
-        }
+        Self::invoke_status_callback(&self.status_callback, message);
     }
 
     pub fn clear(&self) {

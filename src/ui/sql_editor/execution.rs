@@ -55,16 +55,27 @@ impl SqlEditorWidget {
     }
 
     pub fn execute_current(&self) {
-        // Check if there's a selection
-        let selected_text = self.buffer.selection_text();
-        if !selected_text.is_empty() {
-            // Execute selected text
-            self.execute_sql(&selected_text, false);
-        } else {
-            // Execute all text
-            let sql = self.buffer.text();
-            self.execute_sql(&sql, true);
+        let buffer = self.buffer.clone();
+        let sql = buffer.text();
+
+        if let Some((start, end)) = buffer.selection_position() {
+            let (start, end) = if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+
+            if start != end {
+                let selected_text = buffer.selection_text();
+                if !selected_text.is_empty() {
+                    // F5 runs script execution semantics even when only a range is selected.
+                    self.execute_sql(&selected_text, true);
+                    return;
+                }
+            }
         }
+
+        self.execute_sql(&sql, true);
     }
 
     pub fn execute_statement_at_cursor(&self) {
@@ -2912,7 +2923,7 @@ impl SqlEditorWidget {
                                             poisoned.into_inner().binds.clone()
                                         }
                                     };
-                                    let (heading_enabled, _feedback_enabled) =
+                                    let (heading_enabled, feedback_enabled) =
                                         SqlEditorWidget::current_output_settings(&session);
                                     let (_colsep, null_text, _trimspool_enabled) =
                                         SqlEditorWidget::current_text_output_settings(&session);
@@ -2932,25 +2943,43 @@ impl SqlEditorWidget {
                                                             .clone()
                                                             .unwrap_or_else(|| null_text.clone()),
                                                     ]];
-                                                    SqlEditorWidget::emit_script_table(
+                                                    let headers =
+                                                        SqlEditorWidget::apply_heading_setting(
+                                                            columns,
+                                                            heading_enabled,
+                                                        );
+                                                    SqlEditorWidget::emit_select_result(
                                                         &sender,
                                                         &session,
+                                                        &conn_name,
+                                                        result_index,
                                                         &format!("PRINT {}", key),
-                                                        columns,
+                                                        headers,
                                                         rows,
-                                                        heading_enabled,
+                                                        true,
+                                                        feedback_enabled,
                                                     );
+                                                    result_index += 1;
                                                 }
                                                 BindValue::Cursor(Some(cursor)) => {
                                                     let columns = cursor.columns.clone();
-                                                    SqlEditorWidget::emit_script_table(
+                                                    let headers =
+                                                        SqlEditorWidget::apply_heading_setting(
+                                                            columns,
+                                                            heading_enabled,
+                                                        );
+                                                    SqlEditorWidget::emit_select_result(
                                                         &sender,
                                                         &session,
+                                                        &conn_name,
+                                                        result_index,
                                                         &format!("PRINT {}", key),
-                                                        columns,
+                                                        headers,
                                                         cursor.rows.clone(),
-                                                        heading_enabled,
+                                                        true,
+                                                        feedback_enabled,
                                                     );
+                                                    result_index += 1;
                                                 }
                                                 BindValue::Cursor(None) => {
                                                     SqlEditorWidget::emit_script_message(
@@ -3014,29 +3043,45 @@ impl SqlEditorWidget {
                                             ]);
                                         }
 
-                                        SqlEditorWidget::emit_script_table(
-                                            &sender,
-                                            &session,
-                                            "PRINT",
+                                        let headers = SqlEditorWidget::apply_heading_setting(
                                             vec![
                                                 "NAME".to_string(),
                                                 "TYPE".to_string(),
                                                 "VALUE".to_string(),
                                             ],
-                                            summary_rows,
                                             heading_enabled,
                                         );
+                                        SqlEditorWidget::emit_select_result(
+                                            &sender,
+                                            &session,
+                                            &conn_name,
+                                            result_index,
+                                            "PRINT",
+                                            headers,
+                                            summary_rows,
+                                            true,
+                                            feedback_enabled,
+                                        );
+                                        result_index += 1;
 
                                         for (cursor_name, cursor) in cursor_results {
                                             let columns = cursor.columns.clone();
-                                            SqlEditorWidget::emit_script_table(
-                                                &sender,
-                                                &session,
-                                                &format!("PRINT {}", cursor_name),
+                                            let headers = SqlEditorWidget::apply_heading_setting(
                                                 columns,
-                                                cursor.rows.clone(),
                                                 heading_enabled,
                                             );
+                                            SqlEditorWidget::emit_select_result(
+                                                &sender,
+                                                &session,
+                                                &conn_name,
+                                                result_index,
+                                                &format!("PRINT {}", cursor_name),
+                                                headers,
+                                                cursor.rows.clone(),
+                                                true,
+                                                feedback_enabled,
+                                            );
+                                            result_index += 1;
                                         }
                                     }
                                 }
@@ -3257,22 +3302,31 @@ impl SqlEditorWidget {
                                                         "No errors found.",
                                                     );
                                                 } else {
-                                                    let (heading_enabled, _feedback_enabled) =
+                                                    let (heading_enabled, feedback_enabled) =
                                                         SqlEditorWidget::current_output_settings(
                                                             &session,
                                                         );
-                                                    SqlEditorWidget::emit_script_table(
+                                                    let headers =
+                                                        SqlEditorWidget::apply_heading_setting(
+                                                            vec![
+                                                                "LINE".to_string(),
+                                                                "POSITION".to_string(),
+                                                                "TEXT".to_string(),
+                                                            ],
+                                                            heading_enabled,
+                                                        );
+                                                    SqlEditorWidget::emit_select_result(
                                                         &sender,
                                                         &session,
+                                                        &conn_name,
+                                                        result_index,
                                                         "SHOW ERRORS",
-                                                        vec![
-                                                            "LINE".to_string(),
-                                                            "POSITION".to_string(),
-                                                            "TEXT".to_string(),
-                                                        ],
+                                                        headers,
                                                         rows,
-                                                        heading_enabled,
+                                                        true,
+                                                        feedback_enabled,
                                                     );
+                                                    result_index += 1;
                                                 }
                                             }
                                             Err(err) => {
@@ -3608,23 +3662,32 @@ impl SqlEditorWidget {
                                                     })
                                                     .collect::<Vec<Vec<String>>>();
                                                 if script_mode {
-                                                    let (heading_enabled, _feedback_enabled) =
+                                                    let (heading_enabled, feedback_enabled) =
                                                         SqlEditorWidget::current_output_settings(
                                                             &session,
                                                         );
-                                                    SqlEditorWidget::emit_script_table(
+                                                    let headers =
+                                                        SqlEditorWidget::apply_heading_setting(
+                                                            vec![
+                                                                "COLUMN".to_string(),
+                                                                "TYPE".to_string(),
+                                                                "NULLABLE".to_string(),
+                                                                "PK".to_string(),
+                                                            ],
+                                                            heading_enabled,
+                                                        );
+                                                    SqlEditorWidget::emit_select_result(
                                                         &sender,
                                                         &session,
+                                                        &conn_name,
+                                                        result_index,
                                                         &title,
-                                                        vec![
-                                                            "COLUMN".to_string(),
-                                                            "TYPE".to_string(),
-                                                            "NULLABLE".to_string(),
-                                                            "PK".to_string(),
-                                                        ],
+                                                        headers,
                                                         rows,
-                                                        heading_enabled,
+                                                        true,
+                                                        feedback_enabled,
                                                     );
+                                                    result_index += 1;
                                                 } else {
                                                     let (heading_enabled, feedback_enabled) =
                                                         SqlEditorWidget::current_output_settings(
@@ -6908,27 +6971,6 @@ impl SqlEditorWidget {
         lines.push(format!("[{}]", title));
         for line in message.lines() {
             lines.push(line.to_string());
-        }
-        SqlEditorWidget::emit_script_output(sender, session, lines);
-    }
-
-    fn emit_script_table(
-        sender: &mpsc::Sender<QueryProgress>,
-        session: &Arc<Mutex<SessionState>>,
-        title: &str,
-        columns: Vec<String>,
-        rows: Vec<Vec<String>>,
-        heading_enabled: bool,
-    ) {
-        let (colsep, null_text, _trimspool_enabled) =
-            SqlEditorWidget::current_text_output_settings(session);
-        let mut lines = Vec::new();
-        lines.push(format!("[{}]", title));
-        if heading_enabled && !columns.is_empty() {
-            lines.push(columns.join(&colsep));
-        }
-        for row in rows {
-            lines.push(SqlEditorWidget::format_row_line(&row, &colsep, &null_text));
         }
         SqlEditorWidget::emit_script_output(sender, session, lines);
     }

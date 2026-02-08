@@ -1,6 +1,5 @@
 use fltk::{app, enums::Font};
 use std::collections::HashSet;
-use std::mem;
 
 use crate::utils::AppConfig;
 
@@ -113,16 +112,11 @@ fn find_font_by_name(name: &str) -> Option<Font> {
         if raw_name.eq_ignore_ascii_case(name)
             || normalize_font_name(&raw_name).eq_ignore_ascii_case(name)
         {
-            return Some(font_from_index(idx));
+            return Some(Font::by_index(idx));
         }
     }
 
     None
-}
-
-fn font_from_index(idx: usize) -> Font {
-    // FLTK uses contiguous integer font ids and app::get_font_names order maps to those ids.
-    unsafe { mem::transmute(idx as i32) }
 }
 
 fn normalize_font_name(raw_name: &str) -> String {
