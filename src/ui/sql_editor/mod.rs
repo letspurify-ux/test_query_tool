@@ -1082,6 +1082,17 @@ impl SqlEditorWidget {
         self.editor
             .set_highlight_data(self.style_buffer.clone(), style_table);
         self.refresh_highlighting();
+        // Force FLTK to recalculate internal display metrics (line heights,
+        // character widths, scroll positions) by triggering a no-op resize.
+        // Without this, the TextEditor may render with stale cached metrics
+        // until an external event (e.g. window resize) forces recalculation.
+        let (x, y, w, h) = (
+            self.editor.x(),
+            self.editor.y(),
+            self.editor.w(),
+            self.editor.h(),
+        );
+        self.editor.resize(x, y, w, h);
         self.timeout_input.redraw();
         self.editor.redraw();
     }
