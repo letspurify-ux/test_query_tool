@@ -4,7 +4,7 @@ use fltk::{
     enums::FrameType,
     group::Flex,
     prelude::*,
-    text::{StyleTableEntry, TextBuffer, TextDisplay, TextEditor},
+    text::{StyleTableEntry, TextBuffer, TextDisplay},
     window::Window,
 };
 use std::cell::RefCell;
@@ -181,7 +181,7 @@ impl QueryHistoryDialog {
 
         let preview_buffer = TextBuffer::default();
         let preview_style_buffer = TextBuffer::default();
-        let mut preview_display = TextEditor::default();
+        let mut preview_display = TextDisplay::default();
         preview_display.set_buffer(preview_buffer.clone());
         preview_display.set_color(theme::editor_bg());
         preview_display.set_text_color(theme::text_primary());
@@ -193,17 +193,16 @@ impl QueryHistoryDialog {
         preview_display.set_linenumber_font(configured_editor_profile().normal);
         preview_display.set_linenumber_size((configured_ui_font_size().saturating_sub(2)) as i32);
         preview_display.set_highlight_data(preview_style_buffer.clone(), preview_style_table());
-        preview_display.set_readonly(true);
 
         let mut error_label = fltk::frame::Frame::default().with_label("Error details:");
-        error_label.set_label_color(theme::button_danger());
+        error_label.set_label_color(theme::text_primary());
         preview_flex.fixed(&error_label, LABEL_ROW_HEIGHT);
 
         let error_buffer = TextBuffer::default();
         let mut error_display = TextDisplay::default();
         error_display.set_buffer(error_buffer.clone());
         error_display.set_color(theme::panel_alt());
-        error_display.set_text_color(theme::button_danger());
+        error_display.set_text_color(theme::text_primary());
         error_display.set_text_font(configured_editor_profile().normal);
         error_display.set_text_size(configured_ui_font_size());
         error_display.hide();
@@ -294,7 +293,7 @@ impl QueryHistoryDialog {
         let mut error_buffer = error_buffer.clone();
         let mut error_display = error_display.clone();
         let mut error_label = error_label.clone();
-        let mut preview_flex_for_error = preview_flex.clone();
+        let preview_flex_for_error = preview_flex.clone();
         let mut browser = browser.clone();
         while dialog.shown() {
             fltk::app::wait();

@@ -102,11 +102,17 @@ pub(crate) struct PendingIntellisense {
 }
 
 #[derive(Clone)]
+pub(crate) enum QuickDescribeData {
+    TableColumns(Vec<TableColumnDetail>),
+    Text { title: String, content: String },
+}
+
+#[derive(Clone)]
 enum UiActionResult {
     ExplainPlan(Result<Vec<String>, String>),
     QuickDescribe {
         object_name: String,
-        result: Result<Vec<TableColumnDetail>, String>,
+        result: Result<QuickDescribeData, String>,
     },
     Commit(Result<(), String>),
     Rollback(Result<(), String>),
@@ -561,7 +567,7 @@ impl SqlEditorWidget {
                                 object_name,
                                 result,
                             } => match result {
-                                Ok(columns) => {
+                                Ok(QuickDescribeData::TableColumns(columns)) => {
                                     if columns.is_empty() {
                                         fltk::dialog::message_default(&format!(
                                             "No table or view found with name: {}",
@@ -573,6 +579,11 @@ impl SqlEditorWidget {
                                             &columns,
                                         );
                                     }
+                                }
+                                Ok(QuickDescribeData::Text { title, content }) => {
+                                    SqlEditorWidget::show_quick_describe_text_dialog(
+                                        &title, &content,
+                                    );
                                 }
                                 Err(err) => {
                                     if err.contains("Not connected") {
@@ -1057,7 +1068,7 @@ impl SqlEditorWidget {
         *self.query_running.borrow()
     }
 
-    pub fn navigate_history(&self, direction: i32) {
+    pub fn navigate_history(&mut self, direction: i32) {
         let history = QueryHistory::load();
         if history.queries.is_empty() {
             return;
@@ -1112,7 +1123,7 @@ impl SqlEditorWidget {
         self.editor.show_insert_position();
     }
 
-    pub fn select_block_in_direction(&self, direction: i32) {
+    pub fn select_block_in_direction(&mut self, direction: i32) {
         let selection = self.buffer.selection_position();
         let cursor_pos = self.editor.insert_position().max(0);
 

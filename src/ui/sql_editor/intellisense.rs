@@ -12,7 +12,12 @@ use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
 
-use crate::db::{lock_connection, ObjectBrowser, SharedConnection, TableColumnDetail};
+use oracle::Connection;
+
+use crate::db::{
+    lock_connection, ObjectBrowser, ProcedureArgument, SequenceInfo, SharedConnection,
+    TableColumnDetail,
+};
 use crate::ui::intellisense::{
     detect_sql_context, get_word_at_cursor, IntellisenseData, IntellisensePopup, SqlContext,
 };
@@ -101,7 +106,7 @@ impl SqlEditorWidget {
         let suppress_nav_for_handle = suppress_nav.clone();
         let nav_anchor_for_handle = nav_anchor.clone();
         let completion_range_for_handle = completion_range.clone();
-        let widget_for_shortcuts = self.clone();
+        let mut widget_for_shortcuts = self.clone();
         let find_callback_for_handle = self.find_callback.clone();
         let replace_callback_for_handle = self.replace_callback.clone();
         let file_drop_callback_for_handle = self.file_drop_callback.clone();
@@ -134,7 +139,15 @@ impl SqlEditorWidget {
                             PositionType::Cursor,
                         );
                         if pos >= 0 {
-                            ed.set_insert_position(pos);
+                            if let Some((_, start, end)) =
+                                Self::identifier_at_position(&buffer_for_handle, pos)
+                            {
+                                buffer_for_handle.select(start, end);
+                                ed.set_insert_position(end);
+                            } else {
+                                buffer_for_handle.unselect();
+                                ed.set_insert_position(pos);
+                            }
                             ed.show_insert_position();
                             widget_for_shortcuts.quick_describe_at_cursor();
                             return true;
@@ -351,7 +364,7 @@ impl SqlEditorWidget {
                     }
 
                     if key == Key::F9 {
-                        widget_for_shortcuts.execute_selected();
+                        widget_for_shortcuts.execute_statement_at_cursor();
                         return true;
                     }
 
@@ -883,6 +896,282 @@ impl SqlEditorWidget {
         (word, abs_start, abs_end)
     }
 
+    fn identifier_at_position(buffer: &TextBuffer, pos: i32) -> Option<(String, i32, i32)> {
+        let buffer_len = buffer.length().max(0);
+        if buffer_len == 0 {
+            return None;
+        }
+        let pos = pos.clamp(0, buffer_len);
+        let line_start = buffer.line_start(pos).max(0);
+        let line_end = buffer.line_end(pos).max(line_start);
+        let text = buffer.text_range(line_start, line_end).unwrap_or_default();
+        let bytes = text.as_bytes();
+        if bytes.is_empty() {
+            return None;
+        }
+
+        let rel_pos = (pos - line_start).clamp(0, bytes.len() as i32) as usize;
+        let anchor = if rel_pos < bytes.len() && Self::is_identifier_byte(bytes[rel_pos]) {
+            Some(rel_pos)
+        } else if rel_pos > 0 && Self::is_identifier_byte(bytes[rel_pos - 1]) {
+            Some(rel_pos - 1)
+        } else {
+            None
+        }?;
+
+        let mut start = anchor;
+        while start > 0 && Self::is_identifier_byte(bytes[start - 1]) {
+            start -= 1;
+        }
+
+        let mut end = anchor + 1;
+        while end < bytes.len() && Self::is_identifier_byte(bytes[end]) {
+            end += 1;
+        }
+
+        let word = text.get(start..end)?.to_string();
+        Some((word, line_start + start as i32, line_start + end as i32))
+    }
+
+    fn quick_describe_type_priority(object_type: &str) -> i32 {
+        match object_type.to_uppercase().as_str() {
+            "TABLE" => 0,
+            "VIEW" => 1,
+            "FUNCTION" => 2,
+            "PROCEDURE" => 3,
+            "SEQUENCE" => 4,
+            "PACKAGE" => 5,
+            "PACKAGE BODY" => 6,
+            _ => 50,
+        }
+    }
+
+    fn format_argument_type_for_quick_describe(arg: &ProcedureArgument) -> String {
+        if let Some(pls_type) = arg.pls_type.as_deref() {
+            let trimmed = pls_type.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+
+        if let Some(data_type) = arg.data_type.as_deref() {
+            let upper = data_type.trim().to_uppercase();
+            if upper == "NUMBER" {
+                if let (Some(p), Some(s)) = (arg.data_precision, arg.data_scale) {
+                    return format!("NUMBER({},{})", p, s);
+                }
+                if let Some(p) = arg.data_precision {
+                    return format!("NUMBER({})", p);
+                }
+                return "NUMBER".to_string();
+            }
+
+            if matches!(
+                upper.as_str(),
+                "VARCHAR2" | "NVARCHAR2" | "VARCHAR" | "CHAR" | "NCHAR" | "RAW"
+            ) {
+                if let Some(len) = arg.data_length {
+                    return format!("{}({})", upper, len.max(1));
+                }
+                return upper;
+            }
+
+            return upper;
+        }
+
+        if let Some(type_name) = arg.type_name.as_deref() {
+            if let Some(owner) = arg.type_owner.as_deref() {
+                return format!("{}.{}", owner, type_name);
+            }
+            return type_name.to_string();
+        }
+
+        "UNKNOWN".to_string()
+    }
+
+    fn format_routine_details(
+        qualified_name: &str,
+        routine_type: &str,
+        arguments: &[ProcedureArgument],
+    ) -> String {
+        let mut details = format!(
+            "=== {} {} ===\n\n",
+            routine_type.to_uppercase(),
+            qualified_name.to_uppercase()
+        );
+
+        if arguments.is_empty() {
+            details.push_str("No argument metadata found.\n");
+            return details;
+        }
+
+        let selected_overload = arguments.first().and_then(|arg| arg.overload);
+        let selected: Vec<&ProcedureArgument> = arguments
+            .iter()
+            .filter(|arg| arg.overload == selected_overload)
+            .collect();
+
+        if let Some(overload) = selected_overload {
+            details.push_str(&format!("Overload: {}\n\n", overload));
+        }
+
+        details.push_str(&format!(
+            "{:<24} {:<12} {}\n",
+            "Argument", "Direction", "Type"
+        ));
+        details.push_str(&format!("{}\n", "-".repeat(72)));
+
+        let mut return_type: Option<String> = None;
+        for arg in selected {
+            let is_return = arg.position == 0 && arg.name.is_none();
+            let type_display = Self::format_argument_type_for_quick_describe(arg);
+            if is_return {
+                return_type = Some(type_display);
+                continue;
+            }
+            let arg_name = arg
+                .name
+                .clone()
+                .unwrap_or_else(|| format!("ARG{}", arg.position.max(1)));
+            let direction = arg.in_out.clone().unwrap_or_else(|| "IN".to_string());
+            details.push_str(&format!(
+                "{:<24} {:<12} {}\n",
+                arg_name, direction, type_display
+            ));
+        }
+
+        if let Some(return_type) = return_type {
+            details.push_str(&format!("\nReturn Type: {}\n", return_type));
+        }
+
+        details
+    }
+
+    fn format_sequence_details(info: &SequenceInfo) -> String {
+        let mut details = format!("=== Sequence Info: {} ===\n\n", info.name.to_uppercase());
+        details.push_str(&format!("{:<18} {}\n", "Min Value", info.min_value));
+        details.push_str(&format!("{:<18} {}\n", "Max Value", info.max_value));
+        details.push_str(&format!("{:<18} {}\n", "Increment By", info.increment_by));
+        details.push_str(&format!("{:<18} {}\n", "Cycle", info.cycle_flag));
+        details.push_str(&format!("{:<18} {}\n", "Order", info.order_flag));
+        details.push_str(&format!("{:<18} {}\n", "Cache Size", info.cache_size));
+        details.push_str(&format!("{:<18} {}\n", "Last Number", info.last_number));
+        details.push_str("\nNote: LAST_NUMBER is the next value to be generated.\n");
+        details
+    }
+
+    fn describe_object(
+        conn: &Connection,
+        object_name: &str,
+        qualifier: Option<&str>,
+    ) -> Result<QuickDescribeData, String> {
+        let object_name_upper = object_name.to_uppercase();
+
+        if let Some(package_name) = qualifier {
+            let package_name_upper = package_name.to_uppercase();
+            if let Ok(routines) = ObjectBrowser::get_package_routines(conn, &package_name_upper) {
+                if let Some(routine) = routines
+                    .iter()
+                    .find(|routine| routine.name.eq_ignore_ascii_case(&object_name_upper))
+                {
+                    let args = ObjectBrowser::get_package_procedure_arguments(
+                        conn,
+                        &package_name_upper,
+                        &object_name_upper,
+                    )
+                    .map_err(|err| err.to_string())?;
+                    let qualified_name = format!("{}.{}", package_name_upper, object_name_upper);
+                    let content =
+                        Self::format_routine_details(&qualified_name, &routine.routine_type, &args);
+                    return Ok(QuickDescribeData::Text {
+                        title: format!(
+                            "Describe: {} ({})",
+                            qualified_name,
+                            routine.routine_type.to_uppercase()
+                        ),
+                        content,
+                    });
+                }
+            }
+        }
+
+        if let Ok(columns) = ObjectBrowser::get_table_structure(conn, &object_name_upper) {
+            if !columns.is_empty() {
+                return Ok(QuickDescribeData::TableColumns(columns));
+            }
+        }
+
+        let mut object_types = ObjectBrowser::get_object_types(conn, &object_name_upper)
+            .map_err(|err| err.to_string())?;
+        if object_types.is_empty() {
+            return Err(format!(
+                "Object not found or not accessible: {}",
+                object_name_upper
+            ));
+        }
+
+        object_types.sort_by_key(|object_type| Self::quick_describe_type_priority(object_type));
+
+        for object_type in object_types {
+            let object_type_upper = object_type.to_uppercase();
+            match object_type_upper.as_str() {
+                "TABLE" | "VIEW" => {
+                    if let Ok(columns) = ObjectBrowser::get_table_structure(conn, &object_name_upper)
+                    {
+                        if !columns.is_empty() {
+                            return Ok(QuickDescribeData::TableColumns(columns));
+                        }
+                    }
+                }
+                "FUNCTION" | "PROCEDURE" => {
+                    let args = ObjectBrowser::get_procedure_arguments(conn, &object_name_upper)
+                        .unwrap_or_default();
+                    let content =
+                        Self::format_routine_details(&object_name_upper, &object_type_upper, &args);
+                    return Ok(QuickDescribeData::Text {
+                        title: format!("Describe: {} ({})", object_name_upper, object_type_upper),
+                        content,
+                    });
+                }
+                "SEQUENCE" => {
+                    if let Ok(info) = ObjectBrowser::get_sequence_info(conn, &object_name_upper) {
+                        return Ok(QuickDescribeData::Text {
+                            title: format!("Describe: {} (SEQUENCE)", object_name_upper),
+                            content: Self::format_sequence_details(&info),
+                        });
+                    }
+                }
+                "PACKAGE" => {
+                    if let Ok(ddl) = ObjectBrowser::get_package_spec_ddl(conn, &object_name_upper)
+                    {
+                        return Ok(QuickDescribeData::Text {
+                            title: format!("Describe: {} (PACKAGE)", object_name_upper),
+                            content: ddl,
+                        });
+                    }
+                }
+                _ => {
+                    if let Ok(ddl) =
+                        ObjectBrowser::get_object_ddl(conn, &object_type_upper, &object_name_upper)
+                    {
+                        return Ok(QuickDescribeData::Text {
+                            title: format!(
+                                "Describe: {} ({})",
+                                object_name_upper, object_type_upper
+                            ),
+                            content: ddl,
+                        });
+                    }
+                }
+            }
+        }
+
+        Err(format!(
+            "Object not found or not accessible: {}",
+            object_name_upper
+        ))
+    }
+
     fn context_before_cursor(buffer: &TextBuffer, cursor_pos: i32) -> String {
         let buffer_len = buffer.length().max(0);
         let cursor_pos = cursor_pos.clamp(0, buffer_len);
@@ -1171,7 +1460,7 @@ impl SqlEditorWidget {
         )
     }
 
-    /// Show quick describe dialog for a table (F4 functionality)
+    /// Show quick describe dialog for a table/view structure.
     pub fn show_quick_describe_dialog(object_name: &str, columns: &[TableColumnDetail]) {
         use fltk::{prelude::*, text::TextDisplay, window::Window};
 
@@ -1217,6 +1506,54 @@ impl SqlEditorWidget {
         let close_btn_x = (600 - BUTTON_WIDTH) / 2;
         let mut close_btn = fltk::button::Button::default()
             .with_pos(close_btn_x, 360)
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Close");
+        close_btn.set_color(theme::button_secondary());
+        close_btn.set_label_color(theme::text_primary());
+
+        let (sender, receiver) = mpsc::channel::<()>();
+        close_btn.set_callback(move |_| {
+            let _ = sender.send(());
+        });
+
+        dialog.end();
+        dialog.show();
+        fltk::group::Group::set_current(current_group.as_ref());
+
+        while dialog.shown() {
+            fltk::app::wait();
+            if receiver.try_recv().is_ok() {
+                dialog.hide();
+            }
+        }
+    }
+
+    pub fn show_quick_describe_text_dialog(title: &str, content: &str) {
+        use fltk::{prelude::*, text::TextDisplay, window::Window};
+
+        let current_group = fltk::group::Group::try_current();
+
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
+
+        let mut dialog = Window::default().with_size(760, 500).with_label(title);
+        crate::ui::center_on_main(&mut dialog);
+        dialog.set_color(theme::panel_raised());
+        dialog.make_modal(true);
+        dialog.begin();
+
+        let mut display = TextDisplay::default().with_pos(10, 10).with_size(740, 440);
+        display.set_color(theme::editor_bg());
+        display.set_text_color(theme::text_primary());
+        display.set_text_font(crate::ui::configured_editor_profile().normal);
+        display.set_text_size(crate::ui::configured_ui_font_size());
+
+        let mut buffer = fltk::text::TextBuffer::default();
+        buffer.set_text(content);
+        display.set_buffer(buffer);
+
+        let close_btn_x = (760 - BUTTON_WIDTH) / 2;
+        let mut close_btn = fltk::button::Button::default()
+            .with_pos(close_btn_x, 460)
             .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
             .with_label("Close");
         close_btn.set_color(theme::button_secondary());
@@ -1285,10 +1622,15 @@ impl SqlEditorWidget {
 
     pub fn quick_describe_at_cursor(&self) {
         let cursor_pos = self.editor.insert_position().max(0) as i32;
-        let (word, _, _) = Self::word_at_cursor(&self.buffer, cursor_pos);
-        if word.is_empty() {
+        let Some((word, start, _)) = Self::identifier_at_position(&self.buffer, cursor_pos) else {
             return;
-        }
+        };
+        let qualifier = Self::qualifier_before_word(&self.buffer, start as usize);
+        let object_name = if let Some(ref qualifier) = qualifier {
+            format!("{}.{}", qualifier.to_uppercase(), word.to_uppercase())
+        } else {
+            word.to_uppercase()
+        };
 
         let connection = self.connection.clone();
         let sender = self.ui_action_sender.clone();
@@ -1304,14 +1646,13 @@ impl SqlEditorWidget {
                 }
             };
             let result = if let Some(db_conn) = conn {
-                ObjectBrowser::get_table_structure(db_conn.as_ref(), &word)
-                    .map_err(|err| err.to_string())
+                Self::describe_object(db_conn.as_ref(), &word, qualifier.as_deref())
             } else {
                 Err("Not connected to database".to_string())
             };
 
             let _ = sender.send(UiActionResult::QuickDescribe {
-                object_name: word,
+                object_name,
                 result,
             });
             app::awake();

@@ -2901,6 +2901,48 @@ impl ObjectBrowser {
         Ok(objects)
     }
 
+    pub fn get_object_types(
+        conn: &Connection,
+        object_name: &str,
+    ) -> Result<Vec<String>, OracleError> {
+        let sql = "SELECT DISTINCT object_type FROM user_objects WHERE object_name = :1";
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let rows = match stmt.query(&[&object_name.to_uppercase()]) {
+            Ok(rows) => rows,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+
+        let mut object_types: Vec<String> = Vec::new();
+        for row_result in rows {
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let object_type: String = match row.get(0) {
+                Ok(object_type) => object_type,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            object_types.push(object_type);
+        }
+
+        Ok(object_types)
+    }
+
     /// Get detailed column info for a table
     pub fn get_table_structure(
         conn: &Connection,
@@ -3330,6 +3372,38 @@ impl ObjectBrowser {
             }
         };
         let row = match stmt.query_row(&[&package_name.to_uppercase()]) {
+            Ok(row) => row,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let ddl: String = match row.get(0) {
+            Ok(ddl) => ddl,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        Ok(Self::normalize_generated_ddl(ddl))
+    }
+
+    /// Generate DDL for any supported object type.
+    pub fn get_object_ddl(
+        conn: &Connection,
+        object_type: &str,
+        object_name: &str,
+    ) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL(:1, :2) FROM DUAL";
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let row = match stmt.query_row(&[&object_type.to_uppercase(), &object_name.to_uppercase()])
+        {
             Ok(row) => row,
             Err(err) => {
                 eprintln!("Database operation failed: {err}");

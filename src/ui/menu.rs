@@ -248,8 +248,14 @@ impl MenuBarBuilder {
             forward_menu_callback,
         );
         menu.add(
-            "&Query/Execute &Selected\t",
+            "&Query/Execute Statement (&F9)\t",
             Shortcut::from_key(fltk::enums::Key::F9),
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&Query/Execute &Selected\t",
+            Shortcut::None,
             MenuFlag::Normal,
             forward_menu_callback,
         );
@@ -383,7 +389,7 @@ impl MenuBarBuilder {
                     Query:\n\
                     Ctrl+Enter - Execute Statement\n\
                     F5 - Execute Script\n\
-                    F9 - Execute Selected\n\
+                    F9 - Execute Statement\n\
                     F6 - Explain Plan\n\
                     F7 - Commit\n\
                     F8 - Rollback\n\

@@ -255,6 +255,15 @@ impl MainWindow {
         clear_tabs_btn.set_tooltip("Remove all result tabs");
         result_toolbar.fixed(&clear_tabs_btn, BUTTON_WIDTH);
 
+        let mut query_history_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("History");
+        query_history_btn.set_color(theme::button_subtle());
+        query_history_btn.set_label_color(theme::text_secondary());
+        query_history_btn.set_frame(FrameType::RFlatBox);
+        query_history_btn.set_tooltip("Open query history");
+        result_toolbar.fixed(&query_history_btn, BUTTON_WIDTH);
+
         let spacer = Frame::default();
         result_toolbar.resizable(&spacer);
 
@@ -330,7 +339,36 @@ impl MainWindow {
             Self::apply_font_settings(&mut state_borrow);
         }
 
+        let weak_state_for_history_btn = Rc::downgrade(&state);
+        query_history_btn.set_callback(move |_| {
+            if let Some(state_for_history) = weak_state_for_history_btn.upgrade() {
+                MainWindow::open_query_history_dialog(&state_for_history);
+            }
+        });
+
         Self { state }
+    }
+
+    fn open_query_history_dialog(state: &Rc<RefCell<AppState>>) {
+        let (mut buffer, mut editor, popups) = {
+            let s = state.borrow_mut();
+            (s.sql_buffer.clone(), s.sql_editor.get_editor(), s.popups.clone())
+        };
+        if let Some(sql) = QueryHistoryDialog::show_with_registry(popups) {
+            let buffer_length = buffer.length();
+            let text_to_insert = if buffer_length > 0 {
+                format!("\n{}", sql)
+            } else {
+                sql
+            };
+            buffer.insert(buffer_length, &text_to_insert);
+
+            let new_length = buffer.length();
+            editor.set_insert_position(new_length);
+            editor.show_insert_position();
+
+            state.borrow().sql_editor.refresh_highlighting();
+        }
     }
 
     fn adjust_query_layout(state: &mut AppState) {
@@ -1179,6 +1217,10 @@ impl MainWindow {
                             .borrow_mut()
                             .sql_editor
                             .execute_statement_at_cursor(),
+                        "Query/Execute Statement (F9)" => state_for_menu
+                            .borrow_mut()
+                            .sql_editor
+                            .execute_statement_at_cursor(),
                         "Query/Execute Selected" => state_for_menu.borrow_mut().sql_editor.execute_selected(),
                         "Query/Quick Describe" => {
                             state_for_menu.borrow_mut().sql_editor.quick_describe_at_cursor();
@@ -1267,34 +1309,7 @@ impl MainWindow {
                             state_for_menu.borrow().sql_editor.show_intellisense();
                         }
                         "Tools/Query History..." => {
-                            let (mut buffer, mut editor, popups) = {
-                                let s = state_for_menu.borrow_mut();
-                                (s.sql_buffer.clone(), s.sql_editor.get_editor(), s.popups.clone())
-                            };
-                            if let Some(sql) = QueryHistoryDialog::show_with_registry(popups) {
-                                // Use append logic same as SqlAction::Append
-                                let buffer_length = buffer.length();
-
-                                // Add newline prefix if buffer is not empty
-                                let text_to_insert = if buffer_length > 0 {
-                                    format!("\n{}", sql)
-                                } else {
-                                    sql
-                                };
-
-                                // Insert at the end of the buffer
-                                buffer.insert(buffer_length, &text_to_insert);
-
-                                // Move cursor to the end
-                                let new_length = buffer.length();
-                                editor.set_insert_position(new_length);
-
-                                // Scroll to the bottom to show the inserted text
-                                editor.show_insert_position();
-
-                                // Refresh highlighting
-                                state_for_menu.borrow().sql_editor.refresh_highlighting();
-                            }
+                            MainWindow::open_query_history_dialog(&state_for_menu);
                         }
                         "Tools/Auto-Commit" => {
                             let enabled = m
