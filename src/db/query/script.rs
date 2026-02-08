@@ -1060,6 +1060,7 @@ impl QueryExecutor {
     pub fn split_script_items(sql: &str) -> Vec<ScriptItem> {
         let mut items: Vec<ScriptItem> = Vec::new();
         let mut builder = StatementBuilder::new();
+        let mut sqlblanklines_enabled = false;
 
         // Helper to add statement with comment stripping and extra semicolon removal
         let add_statement = |stmt: String, items: &mut Vec<ScriptItem>| {
@@ -1073,6 +1074,19 @@ impl QueryExecutor {
         for line in sql.lines() {
             let trimmed = line.trim();
             let trimmed_upper = trimmed.to_uppercase();
+
+            if !sqlblanklines_enabled
+                && trimmed.is_empty()
+                && builder.is_idle()
+                && builder.block_depth() == 0
+                && !builder.current_is_empty()
+            {
+                builder.force_terminate();
+                for stmt in builder.take_statements() {
+                    add_statement(stmt, &mut items);
+                }
+                continue;
+            }
 
             // TRIGGER 헤더에서는 INSERT/UPDATE/DELETE/SELECT 등이 이벤트 타입으로
             // block_depth == 0 상태에서 나올 수 있으므로, TRIGGER의 block_depth == 0 구간에서는
@@ -1141,6 +1155,9 @@ impl QueryExecutor {
                     for stmt in builder.take_statements() {
                         add_statement(stmt, &mut items);
                     }
+                    if let ToolCommand::SetSqlBlankLines { enabled } = &command {
+                        sqlblanklines_enabled = *enabled;
+                    }
                     items.push(ScriptItem::ToolCommand(command));
                     continue;
                 }
@@ -1148,6 +1165,9 @@ impl QueryExecutor {
 
             if builder.is_idle() && builder.current_is_empty() && builder.block_depth() == 0 {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
+                    if let ToolCommand::SetSqlBlankLines { enabled } = &command {
+                        sqlblanklines_enabled = *enabled;
+                    }
                     items.push(ScriptItem::ToolCommand(command));
                     continue;
                 }
@@ -1172,6 +1192,7 @@ impl QueryExecutor {
     pub fn split_format_items(sql: &str) -> Vec<FormatItem> {
         let mut items: Vec<FormatItem> = Vec::new();
         let mut builder = StatementBuilder::new();
+        let mut sqlblanklines_enabled = false;
 
         let add_statement = |stmt: String, items: &mut Vec<FormatItem>| {
             let cleaned = stmt.trim();
@@ -1184,6 +1205,19 @@ impl QueryExecutor {
         while let Some(line) = lines.next() {
             let trimmed = line.trim();
             let trimmed_upper = trimmed.to_uppercase();
+
+            if !sqlblanklines_enabled
+                && trimmed.is_empty()
+                && builder.is_idle()
+                && builder.block_depth() == 0
+                && !builder.current_is_empty()
+            {
+                builder.force_terminate();
+                for stmt in builder.take_statements() {
+                    add_statement(stmt, &mut items);
+                }
+                continue;
+            }
 
             if builder.is_idle() && builder.current_is_empty() {
                 if trimmed.starts_with("--") {
@@ -1270,6 +1304,9 @@ impl QueryExecutor {
                     for stmt in builder.take_statements() {
                         add_statement(stmt, &mut items);
                     }
+                    if let ToolCommand::SetSqlBlankLines { enabled } = &command {
+                        sqlblanklines_enabled = *enabled;
+                    }
                     items.push(FormatItem::ToolCommand(command));
                     continue;
                 }
@@ -1277,6 +1314,9 @@ impl QueryExecutor {
 
             if builder.is_idle() && builder.current_is_empty() && builder.block_depth() == 0 {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
+                    if let ToolCommand::SetSqlBlankLines { enabled } = &command {
+                        sqlblanklines_enabled = *enabled;
+                    }
                     items.push(FormatItem::ToolCommand(command));
                     continue;
                 }
@@ -1436,6 +1476,18 @@ impl QueryExecutor {
 
         if upper.starts_with("SET TRIMSPOOL") {
             return Some(Self::parse_trimspool_command(trimmed));
+        }
+
+        if upper.starts_with("SET TRIMOUT") {
+            return Some(Self::parse_trimout_command(trimmed));
+        }
+
+        if upper.starts_with("SET SQLBLANKLINES") {
+            return Some(Self::parse_sqlblanklines_command(trimmed));
+        }
+
+        if upper.starts_with("SET TAB") {
+            return Some(Self::parse_tab_command(trimmed));
         }
 
         if upper.starts_with("SET COLSEP") {
@@ -2449,6 +2501,72 @@ impl QueryExecutor {
             _ => ToolCommand::Unsupported {
                 raw: raw.to_string(),
                 message: "SET TRIMSPOOL supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_trimout_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET TRIMOUT requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetTrimOut { enabled: true },
+            "OFF" => ToolCommand::SetTrimOut { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET TRIMOUT supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_sqlblanklines_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET SQLBLANKLINES requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetSqlBlankLines { enabled: true },
+            "OFF" => ToolCommand::SetSqlBlankLines { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET SQLBLANKLINES supports only ON or OFF.".to_string(),
+                is_error: true,
+            },
+        }
+    }
+
+    fn parse_tab_command(raw: &str) -> ToolCommand {
+        let tokens: Vec<&str> = raw.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET TAB requires ON or OFF.".to_string(),
+                is_error: true,
+            };
+        }
+
+        let mode = tokens[2].to_uppercase();
+        match mode.as_str() {
+            "ON" => ToolCommand::SetTab { enabled: true },
+            "OFF" => ToolCommand::SetTab { enabled: false },
+            _ => ToolCommand::Unsupported {
+                raw: raw.to_string(),
+                message: "SET TAB supports only ON or OFF.".to_string(),
                 is_error: true,
             },
         }

@@ -147,6 +147,15 @@ pub enum ToolCommand {
     SetTrimSpool {
         enabled: bool,
     },
+    SetTrimOut {
+        enabled: bool,
+    },
+    SetSqlBlankLines {
+        enabled: bool,
+    },
+    SetTab {
+        enabled: bool,
+    },
     SetColSep {
         separator: String,
     },

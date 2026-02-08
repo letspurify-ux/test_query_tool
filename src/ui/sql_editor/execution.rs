@@ -535,6 +535,27 @@ impl SqlEditorWidget {
                     "SET TRIMSPOOL OFF".to_string()
                 }
             }
+            ToolCommand::SetTrimOut { enabled } => {
+                if *enabled {
+                    "SET TRIMOUT ON".to_string()
+                } else {
+                    "SET TRIMOUT OFF".to_string()
+                }
+            }
+            ToolCommand::SetSqlBlankLines { enabled } => {
+                if *enabled {
+                    "SET SQLBLANKLINES ON".to_string()
+                } else {
+                    "SET SQLBLANKLINES OFF".to_string()
+                }
+            }
+            ToolCommand::SetTab { enabled } => {
+                if *enabled {
+                    "SET TAB ON".to_string()
+                } else {
+                    "SET TAB OFF".to_string()
+                }
+            }
             ToolCommand::SetColSep { separator } => format!("SET COLSEP {}", separator),
             ToolCommand::SetNull { null_text } => format!("SET NULL {}", null_text),
             ToolCommand::Spool { path, append } => match path {
@@ -2791,6 +2812,12 @@ impl SqlEditorWidget {
                         let _ = conn.set_call_timeout(previous_timeout);
                         return;
                     }
+                    if let Err(err) = SqlEditorWidget::sync_serveroutput_with_session(
+                        conn.as_ref(),
+                        &session,
+                    ) {
+                        eprintln!("Failed to apply SERVEROUTPUT setting on session start: {err}");
+                    }
                 }
 
                 let mut result_index = 0usize;
@@ -3325,6 +3352,9 @@ impl SqlEditorWidget {
                                         pagesize,
                                         linesize,
                                         trimspool_enabled,
+                                        trimout_enabled,
+                                        sqlblanklines_enabled,
+                                        tab_enabled,
                                         colsep,
                                         null_text,
                                         break_column,
@@ -3345,6 +3375,9 @@ impl SqlEditorWidget {
                                             guard.pagesize,
                                             guard.linesize,
                                             guard.trimspool_enabled,
+                                            guard.trimout_enabled,
+                                            guard.sqlblanklines_enabled,
+                                            guard.tab_enabled,
                                             guard.colsep.clone(),
                                             guard.null_text.clone(),
                                             guard.break_column.clone(),
@@ -3370,6 +3403,9 @@ impl SqlEditorWidget {
                                                 guard.pagesize,
                                                 guard.linesize,
                                                 guard.trimspool_enabled,
+                                                guard.trimout_enabled,
+                                                guard.sqlblanklines_enabled,
+                                                guard.tab_enabled,
                                                 guard.colsep.clone(),
                                                 guard.null_text.clone(),
                                                 guard.break_column.clone(),
@@ -3435,6 +3471,15 @@ impl SqlEditorWidget {
                                             "TRIMSPOOL {}",
                                             if trimspool_enabled { "ON" } else { "OFF" }
                                         ),
+                                        format!(
+                                            "TRIMOUT {}",
+                                            if trimout_enabled { "ON" } else { "OFF" }
+                                        ),
+                                        format!(
+                                            "SQLBLANKLINES {}",
+                                            if sqlblanklines_enabled { "ON" } else { "OFF" }
+                                        ),
+                                        format!("TAB {}", if tab_enabled { "ON" } else { "OFF" }),
                                         format!("COLSEP {}", colsep),
                                         format!("NULL {}", null_text),
                                         match break_column {
@@ -4283,6 +4328,69 @@ impl SqlEditorWidget {
                                         ),
                                     );
                                 }
+                                ToolCommand::SetTrimOut { enabled } => {
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.trimout_enabled = enabled;
+                                    }
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "SET TRIMOUT",
+                                        &format!("TRIMOUT {}", if enabled { "ON" } else { "OFF" }),
+                                    );
+                                }
+                                ToolCommand::SetSqlBlankLines { enabled } => {
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.sqlblanklines_enabled = enabled;
+                                    }
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "SET SQLBLANKLINES",
+                                        &format!(
+                                            "SQLBLANKLINES {}",
+                                            if enabled { "ON" } else { "OFF" }
+                                        ),
+                                    );
+                                }
+                                ToolCommand::SetTab { enabled } => {
+                                    {
+                                        let mut guard = match session.lock() {
+                                            Ok(guard) => guard,
+                                            Err(poisoned) => {
+                                                eprintln!(
+                                                    "Warning: session state lock was poisoned; recovering."
+                                                );
+                                                poisoned.into_inner()
+                                            }
+                                        };
+                                        guard.tab_enabled = enabled;
+                                    }
+                                    SqlEditorWidget::emit_script_message(
+                                        &sender,
+                                        &session,
+                                        "SET TAB",
+                                        &format!("TAB {}", if enabled { "ON" } else { "OFF" }),
+                                    );
+                                }
                                 ToolCommand::SetColSep { separator } => {
                                     {
                                         let mut guard = match session.lock() {
@@ -4539,6 +4647,16 @@ impl SqlEditorWidget {
                                                 .flatten();
                                             if let Some(conn) = conn_opt.as_ref() {
                                                 let _ = conn.set_call_timeout(query_timeout);
+                                                if let Err(err) =
+                                                    SqlEditorWidget::sync_serveroutput_with_session(
+                                                        conn.as_ref(),
+                                                        &session,
+                                                    )
+                                                {
+                                                    eprintln!(
+                                                        "Failed to apply SERVEROUTPUT after CONNECT: {err}"
+                                                    );
+                                                }
                                             }
                                             let _ = sender.send(QueryProgress::ConnectionChanged {
                                                 info: Some(conn_info.clone()),
@@ -6394,6 +6512,52 @@ impl SqlEditorWidget {
         }
     }
 
+    fn current_script_output_settings(session: &Arc<Mutex<SessionState>>) -> (bool, bool) {
+        match session.lock() {
+            Ok(guard) => (guard.trimout_enabled, guard.tab_enabled),
+            Err(poisoned) => {
+                eprintln!("Warning: session state lock was poisoned; recovering.");
+                let guard = poisoned.into_inner();
+                (guard.trimout_enabled, guard.tab_enabled)
+            }
+        }
+    }
+
+    fn expand_tabs(text: &str) -> String {
+        const TAB_STOP: usize = 8;
+        let mut out = String::with_capacity(text.len());
+        let mut col = 0usize;
+
+        for ch in text.chars() {
+            if ch == '\t' {
+                let spaces = TAB_STOP - (col % TAB_STOP);
+                for _ in 0..spaces {
+                    out.push(' ');
+                }
+                col += spaces;
+            } else {
+                out.push(ch);
+                col += 1;
+            }
+        }
+
+        out
+    }
+
+    fn format_script_output_line(line: &str, trimout_enabled: bool, tab_enabled: bool) -> String {
+        let mut rendered = if tab_enabled {
+            SqlEditorWidget::expand_tabs(line)
+        } else {
+            line.to_string()
+        };
+
+        if trimout_enabled {
+            rendered = rendered.trim_end().to_string();
+        }
+
+        rendered
+    }
+
     fn display_cell_value(value: &str, null_text: &str) -> String {
         if value == "NULL" {
             null_text.to_string()
@@ -6587,7 +6751,8 @@ impl SqlEditorWidget {
     }
 
     fn should_flush_progress_rows(last_flush: Instant, buffered_len: usize) -> bool {
-        buffered_len >= PROGRESS_ROWS_MAX_BATCH || last_flush.elapsed() >= PROGRESS_ROWS_FLUSH_INTERVAL
+        buffered_len >= PROGRESS_ROWS_MAX_BATCH
+            || last_flush.elapsed() >= PROGRESS_ROWS_FLUSH_INTERVAL
     }
 
     fn emit_select_result(
@@ -6659,7 +6824,17 @@ impl SqlEditorWidget {
             return;
         }
         SqlEditorWidget::append_spool_output(session, &lines);
-        let _ = sender.send(QueryProgress::ScriptOutput { lines });
+        let (trimout_enabled, tab_enabled) =
+            SqlEditorWidget::current_script_output_settings(session);
+        let display_lines: Vec<String> = lines
+            .into_iter()
+            .map(|line| {
+                SqlEditorWidget::format_script_output_line(&line, trimout_enabled, tab_enabled)
+            })
+            .collect();
+        let _ = sender.send(QueryProgress::ScriptOutput {
+            lines: display_lines,
+        });
         app::awake();
     }
 
@@ -7237,6 +7412,27 @@ impl SqlEditorWidget {
         }
     }
 
+    fn sync_serveroutput_with_session(
+        conn: &Connection,
+        session: &Arc<Mutex<SessionState>>,
+    ) -> Result<(), OracleError> {
+        let (enabled, size) = match session.lock() {
+            Ok(guard) => (guard.server_output.enabled, guard.server_output.size),
+            Err(poisoned) => {
+                eprintln!("Warning: session state lock was poisoned; recovering.");
+                let guard = poisoned.into_inner();
+                (guard.server_output.enabled, guard.server_output.size)
+            }
+        };
+
+        if enabled {
+            let buffer_size = if size == 0 { None } else { Some(size) };
+            QueryExecutor::enable_dbms_output(conn, buffer_size)
+        } else {
+            QueryExecutor::disable_dbms_output(conn)
+        }
+    }
+
     fn emit_dbms_output(
         sender: &mpsc::Sender<QueryProgress>,
         _conn_name: &str,
@@ -7444,6 +7640,20 @@ END;";
             "START WITH should stay on the same line, got: {}",
             formatted
         );
+    }
+
+    #[test]
+    fn tab_off_keeps_tab_character_in_script_output() {
+        let line = "A\tB";
+        let rendered = SqlEditorWidget::format_script_output_line(line, false, false);
+        assert_eq!(rendered, "A\tB");
+    }
+
+    #[test]
+    fn tab_on_expands_tab_character_in_script_output() {
+        let line = "A\tB";
+        let rendered = SqlEditorWidget::format_script_output_line(line, false, true);
+        assert_eq!(rendered, "A       B");
     }
 
     #[test]

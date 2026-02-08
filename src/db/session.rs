@@ -75,6 +75,9 @@ pub struct SessionState {
     pub pagesize: u32,
     pub linesize: u32,
     pub trimspool_enabled: bool,
+    pub trimout_enabled: bool,
+    pub sqlblanklines_enabled: bool,
+    pub tab_enabled: bool,
     pub colsep: String,
     pub null_text: String,
     pub break_column: Option<String>,
@@ -86,7 +89,7 @@ pub struct SessionState {
 impl Default for ServerOutputConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             size: 1_000_000,
         }
     }
@@ -112,6 +115,9 @@ impl Default for SessionState {
             pagesize: 14,
             linesize: 80,
             trimspool_enabled: false,
+            trimout_enabled: false,
+            sqlblanklines_enabled: false,
+            tab_enabled: true,
             colsep: " | ".to_string(),
             null_text: "NULL".to_string(),
             break_column: None,

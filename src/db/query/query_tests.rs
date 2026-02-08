@@ -2172,6 +2172,94 @@ fn test_set_trimspool_command_parsed() {
 }
 
 #[test]
+fn test_set_trimout_command_parsed() {
+    let sql = "SET TRIMOUT OFF";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_trimout = items.iter().any(|item| {
+        matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::SetTrimOut { enabled: false })
+        )
+    });
+    assert!(
+        has_trimout,
+        "SET TRIMOUT should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_set_sqlblanklines_command_parsed() {
+    let sql = "SET SQLBLANKLINES ON";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_sqlblanklines = items.iter().any(|item| {
+        matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::SetSqlBlankLines { enabled: true })
+        )
+    });
+    assert!(
+        has_sqlblanklines,
+        "SET SQLBLANKLINES should be recognized, got: {:?}",
+        items
+    );
+}
+
+#[test]
+fn test_sqlblanklines_off_splits_top_level_statement_on_blank_line() {
+    let sql = "SELECT 1\n\nFROM dual;";
+    let items = QueryExecutor::split_script_items(sql);
+
+    assert_eq!(
+        items.len(),
+        2,
+        "Blank line should split statement when SQLBLANKLINES is OFF"
+    );
+    assert!(
+        matches!(&items[0], ScriptItem::Statement(stmt) if stmt.eq_ignore_ascii_case("SELECT 1"))
+    );
+    assert!(
+        matches!(&items[1], ScriptItem::Statement(stmt) if stmt.eq_ignore_ascii_case("FROM dual"))
+    );
+}
+
+#[test]
+fn test_sqlblanklines_on_keeps_blank_line_inside_top_level_statement() {
+    let sql = "SET SQLBLANKLINES ON\nSELECT 1\n\nFROM dual;";
+    let items = QueryExecutor::split_script_items(sql);
+
+    assert_eq!(
+        items.len(),
+        2,
+        "Expected SET command and one SELECT statement"
+    );
+    assert!(matches!(
+        items[0],
+        ScriptItem::ToolCommand(ToolCommand::SetSqlBlankLines { enabled: true })
+    ));
+    assert!(matches!(
+        &items[1],
+        ScriptItem::Statement(stmt) if stmt.contains("SELECT 1\n\nFROM dual")
+    ));
+}
+
+#[test]
+fn test_set_tab_command_parsed() {
+    let sql = "SET TAB OFF";
+    let items = QueryExecutor::split_script_items(sql);
+
+    let has_tab = items.iter().any(|item| {
+        matches!(
+            item,
+            ScriptItem::ToolCommand(ToolCommand::SetTab { enabled: false })
+        )
+    });
+    assert!(has_tab, "SET TAB should be recognized, got: {:?}", items);
+}
+
+#[test]
 fn test_set_define_single_quoted_char_parsed() {
     let sql = "SET DEFINE '^'";
     let items = QueryExecutor::split_script_items(sql);
