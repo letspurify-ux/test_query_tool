@@ -3,7 +3,7 @@ use fltk::{
     draw::set_cursor,
     enums::{Cursor, Event, Key},
     prelude::*,
-    text::{TextBuffer, TextEditor},
+    text::{PositionType, TextBuffer, TextEditor},
 };
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -123,9 +123,53 @@ impl SqlEditorWidget {
                     *dnd_file_drop_pending_for_handle.borrow_mut() = true;
                     true
                 }
+                Event::Push => {
+                    let state = fltk::app::event_state();
+                    let ctrl_or_cmd = state.contains(fltk::enums::Shortcut::Ctrl)
+                        || state.contains(fltk::enums::Shortcut::Command);
+                    if ctrl_or_cmd && fltk::app::event_button() == 1 {
+                        let pos = ed.xy_to_position(
+                            fltk::app::event_x(),
+                            fltk::app::event_y(),
+                            PositionType::Cursor,
+                        );
+                        if pos >= 0 {
+                            ed.set_insert_position(pos);
+                            ed.show_insert_position();
+                            widget_for_shortcuts.quick_describe_at_cursor();
+                            return true;
+                        }
+                    }
+                    false
+                }
                 Event::KeyDown => {
                     let key = fltk::app::event_key();
                     let popup_visible = intellisense_popup_for_handle.borrow().is_visible();
+                    let state = fltk::app::event_state();
+                    let ctrl_or_cmd = state.contains(fltk::enums::Shortcut::Ctrl)
+                        || state.contains(fltk::enums::Shortcut::Command);
+                    let shift = state.contains(fltk::enums::Shortcut::Shift);
+                    let alt = state.contains(fltk::enums::Shortcut::Alt);
+
+                    if ctrl_or_cmd && shift && matches!(key, Key::Up | Key::Down) {
+                        if popup_visible {
+                            intellisense_popup_for_handle.borrow_mut().hide();
+                            *completion_range_for_handle.borrow_mut() = None;
+                        }
+                        let direction = if key == Key::Up { -1 } else { 1 };
+                        widget_for_shortcuts.select_block_in_direction(direction);
+                        return true;
+                    }
+
+                    if alt && matches!(key, Key::Up | Key::Down) {
+                        if popup_visible {
+                            intellisense_popup_for_handle.borrow_mut().hide();
+                            *completion_range_for_handle.borrow_mut() = None;
+                        }
+                        let direction = if key == Key::Up { 1 } else { -1 };
+                        widget_for_shortcuts.navigate_history(direction);
+                        return true;
+                    }
 
                     if popup_visible {
                         match key {
@@ -220,7 +264,6 @@ impl SqlEditorWidget {
                     // before they affect the editor.
 
                     // Handle basic editing shortcuts
-                    let state = fltk::app::event_state();
                     let ctrl_or_cmd = state.contains(fltk::enums::Shortcut::Ctrl)
                         || state.contains(fltk::enums::Shortcut::Command);
                     let shift = state.contains(fltk::enums::Shortcut::Shift);

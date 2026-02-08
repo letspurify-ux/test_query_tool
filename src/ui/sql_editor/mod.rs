@@ -28,7 +28,7 @@ use crate::ui::syntax_highlight::{
     STYLE_STRING,
 };
 use crate::ui::theme;
-use crate::utils::AppConfig;
+use crate::utils::{AppConfig, QueryHistory};
 
 mod execution;
 mod intellisense;
@@ -136,6 +136,8 @@ pub struct SqlEditorWidget {
     file_drop_callback: Rc<RefCell<Option<Box<dyn FnMut(PathBuf)>>>>,
     completion_range: Rc<RefCell<Option<(usize, usize)>>>,
     pending_intellisense: Rc<RefCell<Option<PendingIntellisense>>>,
+    history_cursor: Rc<RefCell<Option<usize>>>,
+    history_original: Rc<RefCell<Option<String>>>,
 }
 
 impl SqlEditorWidget {
@@ -259,6 +261,8 @@ impl SqlEditorWidget {
             Rc::new(RefCell::new(None));
         let completion_range = Rc::new(RefCell::new(None::<(usize, usize)>));
         let pending_intellisense = Rc::new(RefCell::new(None::<PendingIntellisense>));
+        let history_cursor = Rc::new(RefCell::new(None::<usize>));
+        let history_original = Rc::new(RefCell::new(None::<String>));
 
         let mut widget = Self {
             group,
@@ -282,6 +286,8 @@ impl SqlEditorWidget {
             file_drop_callback,
             completion_range,
             pending_intellisense,
+            history_cursor,
+            history_original,
         };
 
         widget.setup_button_callbacks(
@@ -1049,6 +1055,134 @@ impl SqlEditorWidget {
 
     pub fn is_query_running(&self) -> bool {
         *self.query_running.borrow()
+    }
+
+    pub fn navigate_history(&self, direction: i32) {
+        let history = QueryHistory::load();
+        if history.queries.is_empty() {
+            return;
+        }
+
+        let mut cursor = self.history_cursor.borrow_mut();
+        let mut original = self.history_original.borrow_mut();
+
+        if cursor.is_none() {
+            *original = Some(self.buffer.text());
+        }
+
+        let next_index = match *cursor {
+            None => {
+                if direction > 0 {
+                    Some(0)
+                } else {
+                    return;
+                }
+            }
+            Some(index) => {
+                if direction > 0 {
+                    Some(index.saturating_add(1))
+                } else if index == 0 {
+                    if let Some(saved) = original.take() {
+                        self.buffer.set_text(&saved);
+                        self.refresh_highlighting();
+                        self.editor.set_insert_position(saved.len() as i32);
+                        self.editor.show_insert_position();
+                    }
+                    *cursor = None;
+                    return;
+                } else {
+                    Some(index.saturating_sub(1))
+                }
+            }
+        };
+
+        let Some(next_index) = next_index else {
+            return;
+        };
+
+        if next_index >= history.queries.len() {
+            return;
+        }
+
+        *cursor = Some(next_index);
+        let sql = &history.queries[next_index].sql;
+        self.buffer.set_text(sql);
+        self.refresh_highlighting();
+        self.editor.set_insert_position(sql.len() as i32);
+        self.editor.show_insert_position();
+    }
+
+    pub fn select_block_in_direction(&self, direction: i32) {
+        let selection = self.buffer.selection_position();
+        let cursor_pos = self.editor.insert_position().max(0);
+
+        if selection.is_none() || selection == Some((cursor_pos, cursor_pos)) {
+            let (start, end) = Self::block_bounds(&self.buffer, cursor_pos);
+            self.buffer.select(start, end);
+            self.editor.set_insert_position(end);
+            self.editor.show_insert_position();
+            return;
+        }
+
+        let (sel_start, sel_end) = selection.unwrap_or((cursor_pos, cursor_pos));
+        if direction < 0 {
+            if sel_start <= 0 {
+                return;
+            }
+            let prev_pos = sel_start.saturating_sub(1);
+            let (block_start, _) = Self::block_bounds(&self.buffer, prev_pos);
+            self.buffer.select(block_start, sel_end);
+            self.editor.set_insert_position(block_start);
+        } else {
+            let buffer_len = self.buffer.length();
+            if sel_end >= buffer_len {
+                return;
+            }
+            let next_pos = (sel_end + 1).min(buffer_len.saturating_sub(1));
+            let (_, block_end) = Self::block_bounds(&self.buffer, next_pos);
+            self.buffer.select(sel_start, block_end);
+            self.editor.set_insert_position(block_end);
+        }
+        self.editor.show_insert_position();
+    }
+
+    fn block_bounds(buffer: &TextBuffer, pos: i32) -> (i32, i32) {
+        let mut start = buffer.line_start(pos).max(0);
+        let mut end = buffer.line_end(pos).max(start);
+        let buffer_len = buffer.length();
+
+        let is_blank = |start: i32, end: i32| {
+            let text = buffer.text_range(start, end).unwrap_or_default();
+            text.trim().is_empty()
+        };
+
+        let blank = is_blank(start, end);
+
+        let mut scan = start;
+        while scan > 0 {
+            let prev_pos = scan.saturating_sub(1);
+            let prev_start = buffer.line_start(prev_pos).max(0);
+            let prev_end = buffer.line_end(prev_pos).max(prev_start);
+            if is_blank(prev_start, prev_end) != blank {
+                break;
+            }
+            start = prev_start;
+            scan = prev_start;
+        }
+
+        let mut scan = end;
+        while scan < buffer_len {
+            let next_pos = (scan + 1).min(buffer_len.saturating_sub(1));
+            let next_start = buffer.line_start(next_pos).max(0);
+            let next_end = buffer.line_end(next_pos).max(next_start);
+            if is_blank(next_start, next_end) != blank {
+                break;
+            }
+            end = next_end;
+            scan = next_end;
+        }
+
+        (start, end)
     }
 }
 
