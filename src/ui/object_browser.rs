@@ -185,6 +185,9 @@ impl ObjectBrowserWidget {
         self.filter_input.set_text_size(ui_size);
         self.tree.set_item_label_font(profile.normal);
         self.tree.set_item_label_size(ui_size);
+        // Force layout recalculation so new font metrics take effect immediately.
+        let (x, y, w, h) = (self.tree.x(), self.tree.y(), self.tree.w(), self.tree.h());
+        self.tree.resize(x, y, w, h);
         self.filter_input.redraw();
         self.tree.redraw();
     }

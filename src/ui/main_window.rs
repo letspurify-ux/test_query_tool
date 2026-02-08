@@ -419,6 +419,11 @@ impl MainWindow {
             .apply_font_settings(unified_profile, ui_size);
         Self::apply_runtime_ui_font(state, unified_profile.normal, ui_size);
         app::redraw();
+        // Force FLTK to process the pending redraw immediately, so font
+        // changes are visible right after the settings dialog closes
+        // instead of requiring multiple save cycles.
+        app::flush();
+        app::awake();
     }
 
     fn apply_runtime_ui_font(
