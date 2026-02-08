@@ -190,6 +190,16 @@ pub struct QueryHistoryEntry {
     pub execution_time_ms: u64,
     pub row_count: usize,
     pub connection_name: String,
+    #[serde(default = "default_query_success")]
+    pub success: bool,
+    #[serde(default)]
+    pub error_message: Option<String>,
+    #[serde(default)]
+    pub error_line: Option<usize>,
+}
+
+fn default_query_success() -> bool {
+    true
 }
 
 impl QueryHistory {

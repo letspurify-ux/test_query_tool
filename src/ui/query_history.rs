@@ -4,7 +4,7 @@ use fltk::{
     enums::FrameType,
     group::Flex,
     prelude::*,
-    text::{TextBuffer, TextDisplay},
+    text::{StyleTableEntry, TextBuffer, TextDisplay, TextEditor},
     window::Window,
 };
 use std::cell::RefCell;
@@ -48,6 +48,64 @@ fn history_writer_sender() -> &'static mpsc::Sender<QueryHistoryEntry> {
         });
         sender
     })
+}
+
+fn parse_error_line(message: &str) -> Option<usize> {
+    let lowercase = message.to_ascii_lowercase();
+    for needle in ["line ", "line:"] {
+        if let Some(idx) = lowercase.find(needle) {
+            let start = idx + needle.len();
+            let mut digits = String::new();
+            for ch in lowercase[start..].chars() {
+                if ch.is_ascii_digit() {
+                    digits.push(ch);
+                } else if !digits.is_empty() {
+                    break;
+                }
+            }
+            if !digits.is_empty() {
+                if let Ok(value) = digits.parse::<usize>() {
+                    return Some(value);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn build_preview_styles(sql: &str, error_line: Option<usize>) -> String {
+    if sql.is_empty() {
+        return String::new();
+    }
+    let mut styles = String::with_capacity(sql.len());
+    let mut line_number = 1usize;
+    for line in sql.split_inclusive('\n') {
+        let style_char = if error_line == Some(line_number) {
+            'B'
+        } else {
+            'A'
+        };
+        styles.extend(std::iter::repeat(style_char).take(line.len()));
+        line_number = line_number.saturating_add(1);
+    }
+    styles
+}
+
+fn preview_style_table() -> Vec<StyleTableEntry> {
+    let profile = configured_editor_profile();
+    let size = configured_ui_font_size() as i32;
+    vec![
+        StyleTableEntry {
+            color: theme::text_primary(),
+            font: profile.normal,
+            size,
+        },
+        StyleTableEntry {
+            color: theme::button_danger(),
+            font: profile.normal,
+            size,
+        },
+    ]
 }
 
 /// Query history dialog for viewing and re-executing past queries
@@ -98,8 +156,9 @@ impl QueryHistoryDialog {
 
         // Populate browser with history entries
         for entry in history.queries.iter() {
+            let color_prefix = if entry.success { "@C255 " } else { "@C1 " };
             let display = format!(
-                "{} | {} | {}ms | {} rows",
+                "{color_prefix}{} | {} | {}ms | {} rows",
                 entry.timestamp,
                 truncate_sql(&entry.sql, 50),
                 entry.execution_time_ms,
@@ -121,12 +180,35 @@ impl QueryHistoryDialog {
         preview_flex.fixed(&preview_label, LABEL_ROW_HEIGHT);
 
         let preview_buffer = TextBuffer::default();
-        let mut preview_display = TextDisplay::default();
+        let preview_style_buffer = TextBuffer::default();
+        let mut preview_display = TextEditor::default();
         preview_display.set_buffer(preview_buffer.clone());
         preview_display.set_color(theme::editor_bg());
         preview_display.set_text_color(theme::text_primary());
         preview_display.set_text_font(configured_editor_profile().normal);
         preview_display.set_text_size(configured_ui_font_size());
+        preview_display.set_linenumber_width(48);
+        preview_display.set_linenumber_fgcolor(theme::text_muted());
+        preview_display.set_linenumber_bgcolor(theme::panel_bg());
+        preview_display.set_linenumber_font(configured_editor_profile().normal);
+        preview_display.set_linenumber_size((configured_ui_font_size().saturating_sub(2)) as i32);
+        preview_display.set_highlight_data(preview_style_buffer.clone(), preview_style_table());
+        preview_display.set_readonly(true);
+
+        let mut error_label = fltk::frame::Frame::default().with_label("Error details:");
+        error_label.set_label_color(theme::button_danger());
+        preview_flex.fixed(&error_label, LABEL_ROW_HEIGHT);
+
+        let error_buffer = TextBuffer::default();
+        let mut error_display = TextDisplay::default();
+        error_display.set_buffer(error_buffer.clone());
+        error_display.set_color(theme::panel_alt());
+        error_display.set_text_color(theme::button_danger());
+        error_display.set_text_font(configured_editor_profile().normal);
+        error_display.set_text_size(configured_ui_font_size());
+        error_display.hide();
+        error_label.hide();
+        preview_flex.fixed(&error_display, 90);
 
         preview_flex.end();
 
@@ -208,6 +290,11 @@ impl QueryHistoryDialog {
         dialog.show();
 
         let mut preview_buffer = preview_buffer.clone();
+        let mut preview_style_buffer = preview_style_buffer.clone();
+        let mut error_buffer = error_buffer.clone();
+        let mut error_display = error_display.clone();
+        let mut error_label = error_label.clone();
+        let mut preview_flex_for_error = preview_flex.clone();
         let mut browser = browser.clone();
         while dialog.shown() {
             fltk::app::wait();
@@ -217,6 +304,22 @@ impl QueryHistoryDialog {
                         let queries = queries.borrow();
                         if let Some(entry) = queries.get(index) {
                             preview_buffer.set_text(&entry.sql);
+                            let styles = build_preview_styles(&entry.sql, entry.error_line);
+                            preview_style_buffer.set_text(&styles);
+                            if entry.success {
+                                error_buffer.set_text("");
+                                error_display.hide();
+                                error_label.hide();
+                            } else if let Some(message) = &entry.error_message {
+                                error_buffer.set_text(message);
+                                error_display.show();
+                                error_label.show();
+                            } else {
+                                error_buffer.set_text("Unknown error");
+                                error_display.show();
+                                error_label.show();
+                            }
+                            preview_flex_for_error.layout();
                         }
                     }
                     DialogMessage::UseSelected => {
@@ -246,6 +349,11 @@ impl QueryHistoryDialog {
                             queries.borrow_mut().clear();
                             browser.clear();
                             preview_buffer.set_text("");
+                            preview_style_buffer.set_text("");
+                            error_buffer.set_text("");
+                            error_display.hide();
+                            error_label.hide();
+                            preview_flex_for_error.layout();
                         }
                     }
                     DialogMessage::Close => {
@@ -270,13 +378,26 @@ impl QueryHistoryDialog {
         execution_time_ms: u64,
         row_count: usize,
         connection_name: &str,
+        success: bool,
+        message: &str,
     ) {
+        let error_message = if success {
+            None
+        } else {
+            Some(message.to_string())
+        };
+        let error_line = error_message
+            .as_deref()
+            .and_then(parse_error_line);
         let entry = QueryHistoryEntry {
             sql: sql.to_string(),
             timestamp: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             execution_time_ms,
             row_count,
             connection_name: connection_name.to_string(),
+            success,
+            error_message,
+            error_line,
         };
 
         if let Err(err) = history_writer_sender().send(entry) {
