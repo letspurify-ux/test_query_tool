@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::BufWriter;
 use std::path::PathBuf;
 
 #[cfg(unix)]
@@ -236,24 +237,22 @@ impl QueryHistory {
                 match fs::create_dir_all(parent) {
                     Ok(()) => {}
                     Err(err) => {
-                        eprintln!("Config persistence error: {err}");
+                        eprintln!("History persistence error: {err}");
                         return Err(Box::new(err));
                     }
                 }
             }
-            let content = match serde_json::to_string_pretty(self) {
-                Ok(content) => content,
+            let file = match fs::File::create(&path) {
+                Ok(f) => f,
                 Err(err) => {
-                    eprintln!("Config persistence error: {err}");
+                    eprintln!("History persistence error: {err}");
                     return Err(Box::new(err));
                 }
             };
-            match fs::write(path, content) {
-                Ok(()) => {}
-                Err(err) => {
-                    eprintln!("Config persistence error: {err}");
-                    return Err(Box::new(err));
-                }
+            let writer = BufWriter::new(file);
+            if let Err(err) = serde_json::to_writer(writer, self) {
+                eprintln!("History persistence error: {err}");
+                return Err(Box::new(err));
             }
         }
         Ok(())
