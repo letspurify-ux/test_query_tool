@@ -2039,6 +2039,65 @@ MATCH_RECOGNIZE (
 }
 
 #[test]
+fn test_alter_session_multiline_set_not_parsed_as_tool_command() {
+    let sql = r#"ALTER SESSION
+SET CURRENT_SCHEMA = APP_USER;
+SELECT 1 FROM DUAL;"#;
+
+    let items = QueryExecutor::split_script_items(sql);
+    let statements: Vec<&str> = items
+        .iter()
+        .filter_map(|item| match item {
+            ScriptItem::Statement(s) => Some(s.as_str()),
+            _ => None,
+        })
+        .collect();
+    let tool_commands: Vec<&ScriptItem> = items
+        .iter()
+        .filter(|item| matches!(item, ScriptItem::ToolCommand(_)))
+        .collect();
+
+    assert_eq!(
+        statements.len(),
+        2,
+        "Should split into ALTER SESSION + SELECT, got: {:?}",
+        statements
+    );
+    assert!(
+        statements[0].contains("ALTER SESSION")
+            && statements[0].contains("SET CURRENT_SCHEMA = APP_USER"),
+        "First statement should preserve ALTER SESSION SET clause, got: {}",
+        statements[0]
+    );
+    assert!(
+        tool_commands.is_empty(),
+        "ALTER SESSION SET clause should not become tool command, got: {:?}",
+        tool_commands
+    );
+}
+
+#[test]
+fn test_alter_session_q_quote_with_semicolon_not_split() {
+    let sql = r#"ALTER SESSION SET TRACEFILE_IDENTIFIER = q'[trace;session]';
+SELECT 1 FROM DUAL;"#;
+
+    let items = QueryExecutor::split_script_items(sql);
+    let statements = get_statements(&items);
+
+    assert_eq!(
+        statements.len(),
+        2,
+        "q-quote with semicolon inside ALTER SESSION should remain one statement, got: {:?}",
+        statements
+    );
+    assert!(
+        statements[0].contains(r#"q'[trace;session]'"#),
+        "ALTER SESSION statement should preserve q-quoted value, got: {}",
+        statements[0]
+    );
+}
+
+#[test]
 fn test_connect_tool_command_still_works() {
     // 실제 CONNECT Tool Command는 여전히 동작해야 함
     let sql = "CONNECT user/pass@localhost:1521/ORCL";
@@ -3290,6 +3349,46 @@ fn test_parse_ddl_object_type_alter_table() {
     assert_eq!(
         QueryExecutor::parse_ddl_object_type("ALTER TABLE MY_TABLE ADD (COL1 NUMBER)"),
         "Table"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_alter_session() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("ALTER SESSION SET CURRENT_SCHEMA = APP_USER"),
+        "Session"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_alter_system() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("ALTER SYSTEM SET OPEN_CURSORS = 1000"),
+        "System"
+    );
+}
+
+#[test]
+fn test_parse_ddl_object_type_create_materialized_view_log() {
+    assert_eq!(
+        QueryExecutor::parse_ddl_object_type("CREATE MATERIALIZED VIEW LOG ON SALES"),
+        "Materialized View Log"
+    );
+}
+
+#[test]
+fn test_ddl_message_alter_session_current_schema() {
+    assert_eq!(
+        QueryExecutor::ddl_message("ALTER SESSION SET CURRENT_SCHEMA = APP_USER"),
+        "Current schema changed"
+    );
+}
+
+#[test]
+fn test_ddl_message_alter_session_nls_parameter() {
+    assert_eq!(
+        QueryExecutor::ddl_message("ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD'"),
+        "Session NLS setting updated"
     );
 }
 

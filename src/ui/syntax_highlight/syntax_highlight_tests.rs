@@ -183,6 +183,23 @@ fn test_sqlplus_set_spool_keywords_highlighting() {
 }
 
 #[test]
+fn test_alter_session_keywords_highlighting() {
+    let highlighter = SqlHighlighter::new();
+    let text = "ALTER SESSION SET CURRENT_SCHEMA = app_user";
+    let styles = highlighter.generate_styles(text);
+
+    for keyword in ["ALTER", "SESSION", "SET", "CURRENT_SCHEMA"] {
+        let start = text.find(keyword).unwrap();
+        let end = start + keyword.len();
+        assert!(
+            styles[start..end].chars().all(|c| c == STYLE_KEYWORD),
+            "{} should be highlighted as keyword",
+            keyword
+        );
+    }
+}
+
+#[test]
 fn test_windowed_highlighting_limits_scope() {
     let highlighter = SqlHighlighter::new();
     let text = "SELECT col FROM table;\n".repeat(2000);

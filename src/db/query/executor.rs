@@ -1646,11 +1646,28 @@ impl QueryExecutor {
         }
         let execution_time = start.elapsed();
 
-        // Determine the DDL type for better messaging
-        let sql_upper = sql.to_uppercase();
-        let message = if sql_upper.starts_with("CREATE") {
+        let message = Self::ddl_message(sql);
+
+        Ok(QueryResult {
+            sql: sql.to_string(),
+            columns: vec![],
+            rows: vec![],
+            row_count: 0,
+            execution_time,
+            message,
+            is_select: false,
+            success: true,
+        })
+    }
+
+    pub fn ddl_message(sql: &str) -> String {
+        let stripped = Self::strip_leading_comments(sql);
+        let sql_upper = stripped.to_uppercase();
+        if sql_upper.starts_with("CREATE") {
             let obj_type = Self::parse_ddl_object_type(&sql_upper);
             format!("{} created", obj_type)
+        } else if sql_upper.starts_with("ALTER SESSION") {
+            Self::alter_session_message(&sql_upper)
         } else if sql_upper.starts_with("ALTER") {
             let obj_type = Self::parse_ddl_object_type(&sql_upper);
             format!("{} altered", obj_type)
@@ -1667,33 +1684,117 @@ impl QueryExecutor {
             "Comment added".to_string()
         } else {
             "Statement executed successfully".to_string()
-        };
+        }
+    }
 
-        Ok(QueryResult {
-            sql: sql.to_string(),
-            columns: vec![],
-            rows: vec![],
-            row_count: 0,
-            execution_time,
-            message,
-            is_select: false,
-            success: true,
-        })
+    fn alter_session_message(sql_upper: &str) -> String {
+        let tokens: Vec<&str> = sql_upper.split_whitespace().collect();
+        if tokens.len() < 3 {
+            return "Session altered".to_string();
+        }
+
+        match tokens[2] {
+            "SET" => Self::alter_session_set_message(&tokens),
+            "ENABLE" => {
+                if tokens.get(3).copied() == Some("RESUMABLE") {
+                    "Session resumable mode enabled".to_string()
+                } else if tokens.get(3).copied() == Some("PARALLEL") {
+                    "Session parallel mode enabled".to_string()
+                } else {
+                    "Session option enabled".to_string()
+                }
+            }
+            "DISABLE" => {
+                if tokens.get(3).copied() == Some("RESUMABLE") {
+                    "Session resumable mode disabled".to_string()
+                } else if tokens.get(3).copied() == Some("PARALLEL") {
+                    "Session parallel mode disabled".to_string()
+                } else {
+                    "Session option disabled".to_string()
+                }
+            }
+            "ADVISE" => match tokens.get(3).copied() {
+                Some("COMMIT") => "Session advise mode: COMMIT".to_string(),
+                Some("ROLLBACK") => "Session advise mode: ROLLBACK".to_string(),
+                Some("NOTHING") => "Session advise mode: NOTHING".to_string(),
+                _ => "Session advise mode updated".to_string(),
+            },
+            "CLOSE" => {
+                if tokens.get(3).copied() == Some("DATABASE")
+                    && tokens.get(4).copied() == Some("LINK")
+                {
+                    "Database link closed".to_string()
+                } else {
+                    "Session close option applied".to_string()
+                }
+            }
+            _ => "Session altered".to_string(),
+        }
+    }
+
+    fn alter_session_set_message(tokens: &[&str]) -> String {
+        let raw_target = match tokens.get(3).copied() {
+            Some(token) if !token.is_empty() => token,
+            _ => return "Session parameter(s) updated".to_string(),
+        };
+        let target = raw_target
+            .split('=')
+            .next()
+            .unwrap_or(raw_target)
+            .trim_matches(|c: char| matches!(c, '"' | '\'' | '(' | ')' | ',' | ';'))
+            .to_uppercase();
+
+        if target.is_empty() {
+            return "Session parameter(s) updated".to_string();
+        }
+
+        match target.as_str() {
+            "CURRENT_SCHEMA" => "Current schema changed".to_string(),
+            "CONTAINER" => "Container changed".to_string(),
+            "EDITION" => "Edition changed".to_string(),
+            "TIME_ZONE" => "Session time zone changed".to_string(),
+            "TRACEFILE_IDENTIFIER" => "Tracefile identifier set".to_string(),
+            "SQL_TRACE" => "SQL trace setting updated".to_string(),
+            "EVENTS" => "Session events setting updated".to_string(),
+            _ if target.starts_with("NLS_") => "Session NLS setting updated".to_string(),
+            _ if target.starts_with("PLSQL_") || target.starts_with("PLSCOPE_") => {
+                "Session PL/SQL setting updated".to_string()
+            }
+            _ if target.starts_with("OPTIMIZER_") || target.starts_with("_OPTIMIZER_") => {
+                "Session optimizer setting updated".to_string()
+            }
+            _ if target.starts_with('_') => "Session hidden parameter updated".to_string(),
+            _ => "Session parameter(s) updated".to_string(),
+        }
     }
 
     /// Parse the object type from a DDL statement header.
     /// Only examines the leading tokens (CREATE/ALTER/DROP + modifiers + type keyword)
     /// to avoid false matches from keywords appearing in PL/SQL bodies.
     pub fn parse_ddl_object_type(sql_upper: &str) -> &'static str {
-        let tokens: Vec<&str> = sql_upper.split_whitespace().collect();
+        let cleaned = Self::strip_leading_comments(sql_upper);
+        let normalized = cleaned.to_uppercase();
+        let tokens: Vec<&str> = normalized.split_whitespace().collect();
         if tokens.len() < 2 {
             return "Object";
         }
 
+        let verb = tokens[0];
         let mut idx = 1usize; // skip CREATE/ALTER/DROP/etc.
 
+        // Oracle 23ai introduces IF [NOT] EXISTS on a subset of DDL.
+        if tokens.get(idx).copied() == Some("IF") {
+            if tokens.get(idx + 1).copied() == Some("NOT")
+                && tokens.get(idx + 2).copied() == Some("EXISTS")
+            {
+                idx += 3;
+            } else if tokens.get(idx + 1).copied() == Some("EXISTS") {
+                idx += 2;
+            }
+        }
+
         // For CREATE statements, skip optional modifiers
-        if tokens[0] == "CREATE" {
+        if verb == "CREATE" {
             // Skip "OR REPLACE"
             if tokens.get(idx).map_or(false, |t| *t == "OR")
                 && tokens.get(idx + 1).map_or(false, |t| *t == "REPLACE")
@@ -1717,10 +1818,30 @@ impl QueryExecutor {
             }
         }
 
+        if tokens.get(idx).copied() == Some("MATERIALIZED")
+            && tokens.get(idx + 1).copied() == Some("VIEW")
+            && tokens.get(idx + 2).copied() == Some("LOG")
+        {
+            return "Materialized View Log";
+        }
+
+        if tokens.get(idx).copied() == Some("PLUGGABLE")
+            && tokens.get(idx + 1).copied() == Some("DATABASE")
+        {
+            return "Pluggable Database";
+        }
+
         match tokens.get(idx).copied() {
-            Some("TABLE") | Some("GLOBAL") => "Table",
+            Some("TABLE") => "Table",
+            Some("GLOBAL") | Some("PRIVATE")
+                if (tokens.get(idx + 1).map_or(false, |t| *t == "TEMPORARY")
+                    && tokens.get(idx + 2).map_or(false, |t| *t == "TABLE"))
+                    || tokens.get(idx + 1).map_or(false, |t| *t == "TABLE") =>
+            {
+                "Table"
+            }
             Some("VIEW") | Some("MATERIALIZED") => "View",
-            Some("INDEX") | Some("UNIQUE") | Some("BITMAP") => "Index",
+            Some("INDEX") | Some("UNIQUE") | Some("BITMAP") | Some("DOMAIN") => "Index",
             Some("PROCEDURE") => "Procedure",
             Some("FUNCTION") => "Function",
             Some("PACKAGE") => {
@@ -1742,6 +1863,13 @@ impl QueryExecutor {
                     "Object"
                 }
             }
+            Some("PRIVATE") => {
+                if tokens.get(idx + 1).map_or(false, |t| *t == "SYNONYM") {
+                    "Synonym"
+                } else {
+                    "Object"
+                }
+            }
             Some("TYPE") => {
                 if tokens.get(idx + 1).map_or(false, |t| *t == "BODY") {
                     "Type Body"
@@ -1749,11 +1877,40 @@ impl QueryExecutor {
                     "Type"
                 }
             }
-            Some("DATABASE") => "Database Link",
+            Some("DATABASE") => {
+                if tokens.get(idx + 1).map_or(false, |t| *t == "LINK") {
+                    "Database Link"
+                } else {
+                    "Database"
+                }
+            }
             Some("DIRECTORY") => "Directory",
             Some("TABLESPACE") => "Tablespace",
             Some("USER") => "User",
             Some("ROLE") => "Role",
+            Some("PROFILE") => "Profile",
+            Some("LIBRARY") => "Library",
+            Some("CLUSTER") => "Cluster",
+            Some("CONTEXT") => "Context",
+            Some("DIMENSION") => "Dimension",
+            Some("OPERATOR") => "Operator",
+            Some("INDEXTYPE") => "Indextype",
+            Some("EDITION") => "Edition",
+            Some("SESSION") => "Session",
+            Some("SYSTEM") => "System",
+            Some("ROLLBACK") => {
+                if tokens.get(idx + 1).map_or(false, |t| *t == "SEGMENT") {
+                    "Rollback Segment"
+                } else {
+                    "Object"
+                }
+            }
+            Some("JAVA") => match tokens.get(idx + 1).copied() {
+                Some("SOURCE") => "Java Source",
+                Some("CLASS") => "Java Class",
+                Some("RESOURCE") => "Java Resource",
+                _ => "Java",
+            },
             _ => "Object",
         }
     }

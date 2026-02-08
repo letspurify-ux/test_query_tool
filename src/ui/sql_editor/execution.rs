@@ -7319,26 +7319,7 @@ impl SqlEditorWidget {
     }
 
     fn ddl_message(sql_upper: &str) -> String {
-        if sql_upper.starts_with("CREATE") {
-            let obj_type = QueryExecutor::parse_ddl_object_type(sql_upper);
-            format!("{} created", obj_type)
-        } else if sql_upper.starts_with("ALTER") {
-            let obj_type = QueryExecutor::parse_ddl_object_type(sql_upper);
-            format!("{} altered", obj_type)
-        } else if sql_upper.starts_with("DROP") {
-            let obj_type = QueryExecutor::parse_ddl_object_type(sql_upper);
-            format!("{} dropped", obj_type)
-        } else if sql_upper.starts_with("TRUNCATE") {
-            "Table truncated".to_string()
-        } else if sql_upper.starts_with("GRANT") {
-            "Grant succeeded".to_string()
-        } else if sql_upper.starts_with("REVOKE") {
-            "Revoke succeeded".to_string()
-        } else if sql_upper.starts_with("COMMENT") {
-            "Comment added".to_string()
-        } else {
-            "Statement executed successfully".to_string()
-        }
+        QueryExecutor::ddl_message(sql_upper)
     }
 
     fn is_timeout_error(err: &OracleError) -> bool {

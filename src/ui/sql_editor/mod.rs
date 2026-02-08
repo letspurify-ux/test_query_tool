@@ -847,7 +847,14 @@ impl SqlEditorWidget {
 
     pub fn clear(&self) {
         let mut buffer = self.buffer.clone();
-        buffer.set_text("");
+        let len = buffer.length();
+        if len > 0 {
+            // Use edit-style deletion so Ctrl+Z/Cmd+Z can restore cleared text.
+            buffer.remove(0, len);
+        }
+        let mut editor = self.editor.clone();
+        editor.set_insert_position(0);
+        editor.show_insert_position();
     }
 
     pub fn commit(&self) {

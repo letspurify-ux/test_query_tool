@@ -414,6 +414,17 @@ impl StatementBuilder {
         self.state.is_trigger
     }
 
+    fn starts_with_alter_session(&self) -> bool {
+        let cleaned = QueryExecutor::strip_leading_comments(&self.current);
+        let mut tokens = cleaned.split_whitespace();
+        matches!(
+            (tokens.next(), tokens.next()),
+            (Some(first), Some(second))
+                if first.eq_ignore_ascii_case("ALTER")
+                    && second.eq_ignore_ascii_case("SESSION")
+        )
+    }
+
     fn process_text(&mut self, text: &str) {
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
@@ -1118,7 +1129,13 @@ impl QueryExecutor {
                 continue;
             }
 
-            if builder.is_idle() && !builder.current_is_empty() && builder.block_depth() == 0 {
+            let is_alter_session_set_clause = builder.starts_with_alter_session()
+                && (trimmed_upper == "SET" || trimmed_upper.starts_with("SET "));
+            if builder.is_idle()
+                && !builder.current_is_empty()
+                && builder.block_depth() == 0
+                && !is_alter_session_set_clause
+            {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
                     builder.force_terminate();
                     for stmt in builder.take_statements() {
@@ -1241,7 +1258,13 @@ impl QueryExecutor {
                 continue;
             }
 
-            if builder.is_idle() && !builder.current_is_empty() && builder.block_depth() == 0 {
+            let is_alter_session_set_clause = builder.starts_with_alter_session()
+                && (trimmed_upper == "SET" || trimmed_upper.starts_with("SET "));
+            if builder.is_idle()
+                && !builder.current_is_empty()
+                && builder.block_depth() == 0
+                && !is_alter_session_set_clause
+            {
                 if let Some(command) = Self::parse_tool_command(trimmed) {
                     builder.force_terminate();
                     for stmt in builder.take_statements() {
