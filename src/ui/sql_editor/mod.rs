@@ -360,6 +360,8 @@ impl SqlEditorWidget {
                                     result.execution_time.as_millis() as u64,
                                     result.row_count,
                                     connection_name,
+                                    result.success,
+                                    &result.message,
                                 );
                                 if let Some(ref mut cb) = *execute_callback.borrow_mut() {
                                     cb(result);
