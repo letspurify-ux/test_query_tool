@@ -403,11 +403,6 @@ impl SqlEditorWidget {
                 return;
             }
 
-            if *query_running.borrow() {
-                set_cursor(Cursor::Wait);
-                app::flush();
-            }
-
             // Reschedule for next poll
             let delay = if hit_budget {
                 0.0

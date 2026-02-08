@@ -30,6 +30,34 @@ fn byte_index_after_n_chars(s: &str, n: usize) -> usize {
         .unwrap_or_else(|| s.len())
 }
 
+fn truncated_content_end(text: &str, max_chars: usize) -> Option<usize> {
+    if max_chars == 0 {
+        return if text.is_empty() { None } else { Some(0) };
+    }
+
+    if max_chars == 1 {
+        let mut chars = text.chars();
+        return match chars.next() {
+            None => None,
+            Some(_) => {
+                if chars.next().is_some() {
+                    Some(0)
+                } else {
+                    None
+                }
+            }
+        };
+    }
+
+    let keep_chars = max_chars.saturating_sub(1);
+    let keep_end = byte_index_after_n_chars(text, keep_chars);
+    if keep_end >= text.len() {
+        None
+    } else {
+        Some(keep_end)
+    }
+}
+
 /// Minimum interval between UI updates during streaming
 const UI_UPDATE_INTERVAL: Duration = Duration::from_millis(500);
 /// Maximum rows to buffer before forcing a UI update
@@ -66,20 +94,19 @@ struct DragState {
 }
 
 impl ResultTableWidget {
-    fn truncate_for_display(text: &str, max_chars: usize) -> Option<String> {
-        if max_chars == 0 {
-            return None;
+    fn display_char_count(text: &str, max_cell_display_chars: usize) -> usize {
+        if max_cell_display_chars == 0 {
+            return 0;
         }
-        let char_count = text.chars().count();
-        if char_count <= max_chars {
-            return None;
+        let mut count = 0usize;
+        for _ in text.chars().take(max_cell_display_chars + 1) {
+            count += 1;
         }
-        if max_chars == 1 {
-            return Some("…".to_string());
+        if count > max_cell_display_chars {
+            max_cell_display_chars
+        } else {
+            count
         }
-        let keep_chars = max_chars.saturating_sub(1);
-        let end = byte_index_after_n_chars(text, keep_chars);
-        Some(format!("{}…", &text[..end]))
     }
 
     fn show_cell_text_dialog(value: &str, font_profile: FontProfile, font_size: u32) {
@@ -185,12 +212,19 @@ impl ResultTableWidget {
         )
     }
 
+    fn estimate_text_width_from_char_count(char_count: usize, font_size: u32) -> i32 {
+        let char_count = char_count as i32;
+        let avg_char_px = ((font_size as i32 * 62) + 99) / 100;
+        let raw = char_count.saturating_mul(avg_char_px) + TABLE_CELL_PADDING * 2 + 2;
+        raw.clamp(
+            Self::min_col_width_for_font(font_size),
+            Self::max_col_width_for_font(font_size),
+        )
+    }
+
     fn estimate_display_width(text: &str, font_size: u32, max_cell_display_chars: usize) -> i32 {
-        if let Some(truncated) = Self::truncate_for_display(text, max_cell_display_chars) {
-            Self::estimate_text_width(&truncated, font_size)
-        } else {
-            Self::estimate_text_width(text, font_size)
-        }
+        let display_chars = Self::display_char_count(text, max_cell_display_chars);
+        Self::estimate_text_width_from_char_count(display_chars, font_size)
     }
 
     fn update_widths_with_row(
@@ -370,16 +404,27 @@ impl ResultTableWidget {
                         if let Some(row_data) = data.get(row as usize) {
                             if let Some(cell_val) = row_data.get(col as usize) {
                                 let max_chars = max_cell_display_chars_for_draw.get();
-                                if let Some(truncated) =
-                                    Self::truncate_for_display(cell_val, max_chars)
+                                if let Some(truncated_end) =
+                                    truncated_content_end(cell_val, max_chars)
                                 {
+                                    if truncated_end > 0 {
+                                        let visible = &cell_val[..truncated_end];
+                                        draw::draw_text2(
+                                            visible,
+                                            x + TABLE_CELL_PADDING,
+                                            y,
+                                            w - TABLE_CELL_PADDING * 2,
+                                            h,
+                                            Align::Left,
+                                        );
+                                    }
                                     draw::draw_text2(
-                                        &truncated,
+                                        "…",
                                         x + TABLE_CELL_PADDING,
                                         y,
                                         w - TABLE_CELL_PADDING * 2,
                                         h,
-                                        Align::Left,
+                                        Align::Right,
                                     );
                                 } else {
                                     draw::draw_text2(
@@ -988,7 +1033,6 @@ impl ResultTableWidget {
 
         *self.headers.borrow_mut() = headers.to_vec();
         self.table.redraw();
-        app::flush();
     }
 
     /// Append rows to the buffer. UI is updated periodically for performance.
@@ -1071,14 +1115,12 @@ impl ResultTableWidget {
 
         *self.last_flush.borrow_mut() = Instant::now();
         self.table.redraw();
-        app::flush();
     }
 
     /// Call this when streaming is complete to flush any remaining buffered rows
     pub fn finish_streaming(&mut self) {
         self.flush_pending();
         self.table.redraw();
-        app::flush();
     }
 
     #[allow(dead_code)]

@@ -39,6 +39,15 @@ struct ScriptOutputTab {
 }
 
 impl ResultTabsWidget {
+    fn maybe_shrink_tab_storage(data: &mut Vec<ResultTab>) {
+        // Avoid frequent shrinking; only compact when capacity is materially over-provisioned.
+        let len = data.len();
+        let capacity = data.capacity();
+        if len == 0 || (capacity > 0 && len.saturating_mul(2) < capacity) {
+            data.shrink_to_fit();
+        }
+    }
+
     fn buffer_ends_with_newline(buffer: &TextBuffer) -> bool {
         let len = buffer.length();
         if len <= 0 {
@@ -222,6 +231,10 @@ impl ResultTabsWidget {
         let tabs_to_delete: Vec<_> = self.data.borrow_mut().drain(..).collect();
         for tab in tabs_to_delete {
             self.delete_tab(tab);
+        }
+        {
+            let mut data = self.data.borrow_mut();
+            Self::maybe_shrink_tab_storage(&mut data);
         }
         self.clear_script_output();
         *self.active_index.borrow_mut() = None;
@@ -431,6 +444,11 @@ impl ResultTabsWidget {
 
         self.delete_tab(tab);
 
+        {
+            let mut data = self.data.borrow_mut();
+            Self::maybe_shrink_tab_storage(&mut data);
+        }
+
         // Update active index to nearest remaining tab
         let remaining = self.data.borrow().len();
         if remaining == 0 {
@@ -460,7 +478,12 @@ impl ResultTabsWidget {
 
     fn clear_script_output(&self) {
         let mut script_output = self.script_output.borrow_mut();
-        script_output.buffer.set_text("");
+        // Recreate the buffer to drop retained capacity after very large script outputs.
+        let mut new_buffer = TextBuffer::default();
+        new_buffer.set_text("");
+        script_output.display.set_buffer(new_buffer.clone());
+        script_output.buffer = new_buffer;
+        script_output.display.scroll(0, 0);
     }
 }
 

@@ -18,6 +18,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::db::{
     create_shared_connection, lock_connection, ObjectBrowser, QueryResult, SharedConnection,
@@ -53,7 +54,10 @@ pub struct AppState {
     pub query_split_adjusted: Rc<Cell<bool>>,
     pub connection_info: Rc<RefCell<Option<crate::db::ConnectionInfo>>>,
     pub config: Rc<RefCell<AppConfig>>,
+    pub last_fetch_status_update: Instant,
 }
+
+const FETCH_STATUS_UPDATE_INTERVAL: Duration = Duration::from_millis(250);
 
 /// 접속 정보를 상태 표시줄 메시지 끝에 붙는 헬퍼
 fn format_status(msg: &str, conn_info: &Option<crate::db::ConnectionInfo>) -> String {
@@ -331,6 +335,7 @@ impl MainWindow {
             query_split_adjusted: query_split_adjusted.clone(),
             connection_info: Rc::new(RefCell::new(None)),
             config: Rc::new(RefCell::new(config)),
+            last_fetch_status_update: Instant::now(),
         }));
 
         {
@@ -648,6 +653,7 @@ impl MainWindow {
                         let tab_index = s.result_tab_offset + index;
                         s.result_tabs.start_streaming(tab_index, &columns);
                         s.fetch_row_counts.insert(index, 0);
+                        s.last_fetch_status_update = Instant::now();
                         let conn_info = s.connection_info.borrow().clone();
                         s.status_bar
                             .set_label(&format_status("Fetching rows: 0", &conn_info));
@@ -661,11 +667,14 @@ impl MainWindow {
                             *count += rows_len;
                             *count
                         };
-                        let conn_info = s.connection_info.borrow().clone();
-                        s.status_bar.set_label(&format_status(
-                            &format!("Fetching rows: {}", new_count),
-                            &conn_info,
-                        ));
+                        if s.last_fetch_status_update.elapsed() >= FETCH_STATUS_UPDATE_INTERVAL {
+                            let conn_info = s.connection_info.borrow().clone();
+                            s.status_bar.set_label(&format_status(
+                                &format!("Fetching rows: {}", new_count),
+                                &conn_info,
+                            ));
+                            s.last_fetch_status_update = Instant::now();
+                        }
                     }
                     QueryProgress::ScriptOutput { lines } => {
                         s.result_tabs.append_script_output_lines(&lines);

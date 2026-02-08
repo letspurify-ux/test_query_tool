@@ -1370,7 +1370,7 @@ impl QueryExecutor {
                     return Err(err);
                 }
             };
-            let mut row_data: Vec<String> = Vec::new();
+            let mut row_data: Vec<String> = Vec::with_capacity(column_info.len());
 
             for i in 0..column_info.len() {
                 let value: Option<String> = row.get(i).unwrap_or(None);
@@ -1440,7 +1440,7 @@ impl QueryExecutor {
                     return Err(err);
                 }
             };
-            let mut row_data: Vec<String> = Vec::new();
+            let mut row_data: Vec<String> = Vec::with_capacity(column_info.len());
 
             for i in 0..column_info.len() {
                 let value: Option<String> = row.get(i).unwrap_or(None);
@@ -1516,7 +1516,7 @@ impl QueryExecutor {
                     return Err(err);
                 }
             };
-            let mut row_data: Vec<String> = Vec::new();
+            let mut row_data: Vec<String> = Vec::with_capacity(column_info.len());
 
             for i in 0..column_info.len() {
                 let value: Option<String> = row.get(i).unwrap_or(None);
@@ -1580,7 +1580,7 @@ impl QueryExecutor {
                     return Err(err);
                 }
             };
-            let mut row_data: Vec<String> = Vec::new();
+            let mut row_data: Vec<String> = Vec::with_capacity(column_info.len());
 
             for i in 0..column_info.len() {
                 let value: Option<String> = row.get(i).unwrap_or(None);

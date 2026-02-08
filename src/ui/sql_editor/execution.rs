@@ -5339,8 +5339,10 @@ impl SqlEditorWidget {
                                                 }
                                             }
                                             cursor_rows.push(row.clone());
-                                            let display_row = SqlEditorWidget::display_row_values(
-                                                &row, &null_text,
+                                            let mut display_row = row;
+                                            SqlEditorWidget::apply_null_text_to_row(
+                                                &mut display_row,
+                                                &null_text,
                                             );
                                             buffered_rows.push(display_row);
                                             if SqlEditorWidget::should_flush_progress_rows(
@@ -5516,8 +5518,10 @@ impl SqlEditorWidget {
                                                     return false;
                                                 }
                                             }
-                                            let display_row = SqlEditorWidget::display_row_values(
-                                                &row, &null_text,
+                                            let mut display_row = row;
+                                            SqlEditorWidget::apply_null_text_to_row(
+                                                &mut display_row,
+                                                &null_text,
                                             );
                                             buffered_rows.push(display_row);
                                             if SqlEditorWidget::should_flush_progress_rows(
@@ -5843,8 +5847,10 @@ impl SqlEditorWidget {
                                                                                 &state,
                                                                             )
                                                                         {
-                                                                            let display_summary = SqlEditorWidget::display_row_values(
-                                                                                &summary_row,
+                                                                            let mut display_summary =
+                                                                                summary_row;
+                                                                            SqlEditorWidget::apply_null_text_to_row(
+                                                                                &mut display_summary,
                                                                                 &null_text,
                                                                             );
                                                                             buffered_rows
@@ -5887,10 +5893,11 @@ impl SqlEditorWidget {
                                                     }
                                                 }
                                             }
-                                            let display_row = SqlEditorWidget::display_row_values(
-                                                &row, &null_text,
+                                            SqlEditorWidget::apply_null_text_to_row(
+                                                &mut row,
+                                                &null_text,
                                             );
-                                            buffered_rows.push(display_row);
+                                            buffered_rows.push(row);
                                             if SqlEditorWidget::should_flush_progress_rows(
                                                 last_flush,
                                                 buffered_rows.len(),
@@ -6523,6 +6530,16 @@ impl SqlEditorWidget {
         }
     }
 
+    fn has_spool_target(session: &Arc<Mutex<SessionState>>) -> bool {
+        match session.lock() {
+            Ok(guard) => guard.spool_path.is_some(),
+            Err(poisoned) => {
+                eprintln!("Warning: session state lock was poisoned; recovering.");
+                poisoned.into_inner().spool_path.is_some()
+            }
+        }
+    }
+
     fn expand_tabs(text: &str) -> String {
         const TAB_STOP: usize = 8;
         let mut out = String::with_capacity(text.len());
@@ -6570,6 +6587,18 @@ impl SqlEditorWidget {
         row.iter()
             .map(|value| SqlEditorWidget::display_cell_value(value, null_text))
             .collect()
+    }
+
+    fn apply_null_text_to_row(row: &mut [String], null_text: &str) {
+        if null_text == "NULL" {
+            return;
+        }
+        for value in row.iter_mut() {
+            if value == "NULL" {
+                value.clear();
+                value.push_str(null_text);
+            }
+        }
     }
 
     fn parse_numeric_value(value: &str) -> Option<f64> {
@@ -6965,6 +6994,9 @@ impl SqlEditorWidget {
 
     fn append_spool_rows(session: &Arc<Mutex<SessionState>>, rows: &[Vec<String>]) {
         if rows.is_empty() {
+            return;
+        }
+        if !SqlEditorWidget::has_spool_target(session) {
             return;
         }
         let (colsep, null_text, _trimspool_enabled) =
