@@ -1,7 +1,7 @@
 use fltk::{
     app,
     browser::HoldBrowser,
-    button::{Button, CheckButton},
+    button::Button,
     enums::FrameType,
     frame::Frame,
     group::Flex,
@@ -28,6 +28,7 @@ impl ConnectionDialog {
             DeleteSelected,
             Test(ConnectionInfo),
             TestResult(Result<(), String>),
+            Save(ConnectionInfo),
             Connect(ConnectionInfo, bool),
             Cancel,
         }
@@ -171,14 +172,15 @@ impl ConnectionDialog {
         port_svc_flex.end();
         right_col.fixed(&port_svc_flex, INPUT_ROW_HEIGHT);
 
-        // Save connection checkbox
+        // Save connection button
         let mut save_flex = Flex::default();
         save_flex.set_type(fltk::group::FlexType::Row);
         let _spacer = Frame::default();
         save_flex.fixed(&_spacer, FORM_LABEL_WIDTH);
-        let mut save_check = CheckButton::default().with_label("Save this connection");
-        save_check.set_label_color(theme::text_secondary());
-        save_check.set_value(true);
+        let mut save_btn = Button::default().with_label("Save this connection");
+        save_btn.set_color(theme::button_secondary());
+        save_btn.set_label_color(theme::text_primary());
+        save_btn.set_frame(FrameType::RFlatBox);
         save_flex.end();
         right_col.fixed(&save_flex, CHECKBOX_ROW_HEIGHT);
 
@@ -275,6 +277,30 @@ impl ConnectionDialog {
             app::awake();
         });
 
+        // Save button callback
+        let sender_for_save = sender.clone();
+        let name_input_save = name_input.clone();
+        let user_input_save = user_input.clone();
+        let pass_input_save = pass_input.clone();
+        let host_input_save = host_input.clone();
+        let port_input_save = port_input.clone();
+        let service_input_save = service_input.clone();
+
+        save_btn.set_callback(move |_| {
+            let port: u16 = port_input_save.value().parse().unwrap_or(1521);
+            let info = ConnectionInfo::new(
+                &name_input_save.value(),
+                &user_input_save.value(),
+                &pass_input_save.value(),
+                &host_input_save.value(),
+                port,
+                &service_input_save.value(),
+            );
+
+            let _ = sender_for_save.send(DialogMessage::Save(info));
+            app::awake();
+        });
+
         // Test button callback
         let sender_for_test = sender.clone();
         let name_input_test = name_input.clone();
@@ -307,7 +333,6 @@ impl ConnectionDialog {
         let host_input_conn = host_input.clone();
         let port_input_conn = port_input.clone();
         let service_input_conn = service_input.clone();
-        let save_check_conn = save_check.clone();
 
         connect_btn.set_callback(move |_| {
             let port: u16 = port_input_conn.value().parse().unwrap_or(1521);
@@ -320,7 +345,7 @@ impl ConnectionDialog {
                 &service_input_conn.value(),
             );
 
-            let _ = sender_for_connect.send(DialogMessage::Connect(info, save_check_conn.value()));
+            let _ = sender_for_connect.send(DialogMessage::Connect(info, false));
             app::awake();
         });
 
@@ -383,6 +408,18 @@ impl ConnectionDialog {
                             fltk::dialog::alert_default(&format!("Connection failed: {}", e));
                         }
                     },
+                    DialogMessage::Save(info) => {
+                        let mut cfg = config.borrow_mut();
+                        cfg.add_recent_connection(info.clone());
+                        if let Err(e) = cfg.save() {
+                            fltk::dialog::alert_default(&format!("Failed to save connection: {}", e));
+                        } else {
+                            saved_browser.clear();
+                            for conn in cfg.get_all_connections() {
+                                saved_browser.add(&conn.name);
+                            }
+                        }
+                    }
                     DialogMessage::Connect(info, save_connection) => {
                         if save_connection {
                             let mut cfg = config.borrow_mut();
