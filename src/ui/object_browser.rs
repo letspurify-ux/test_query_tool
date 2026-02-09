@@ -1561,15 +1561,10 @@ impl ObjectBrowserWidget {
 
             if let Ok(packages) = ObjectBrowser::get_packages(db_conn.as_ref()) {
                 cache.packages = packages;
-                let package_names = cache.packages.clone();
                 send_update(&sender, &cache);
-                for package in &package_names {
-                    if let Ok(routines) =
-                        ObjectBrowser::get_package_routines(db_conn.as_ref(), package)
-                    {
-                        cache.package_routines.insert(package.clone(), routines);
-                        send_update(&sender, &cache);
-                    }
+                if let Ok(routines) = ObjectBrowser::get_all_package_routines(db_conn.as_ref()) {
+                    cache.package_routines = routines;
+                    send_update(&sender, &cache);
                 }
             }
         });
