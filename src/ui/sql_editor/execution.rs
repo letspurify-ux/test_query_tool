@@ -7349,6 +7349,7 @@ impl SqlEditorWidget {
     }
 
     pub fn prompt_input_dialog(prompt: &str) -> Option<String> {
+        let current_group = fltk::group::Group::try_current();
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut dialog = fltk::window::Window::default()
@@ -7399,6 +7400,7 @@ impl SqlEditorWidget {
         main_flex.fixed(&button_flex, BUTTON_ROW_HEIGHT);
         main_flex.end();
         dialog.end();
+        fltk::group::Group::set_current(current_group.as_ref());
 
         let result: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
         let cancelled = Rc::new(RefCell::new(false));
