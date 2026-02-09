@@ -1676,8 +1676,6 @@ impl SqlEditorWidget {
                 // Query is already running, notify user
                 let _ = sender.send(UiActionResult::QueryAlreadyRunning);
                 app::awake();
-                set_cursor(Cursor::Default);
-                app::flush();
                 return;
             };
 
