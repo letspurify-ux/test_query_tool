@@ -2737,7 +2737,12 @@ impl SqlEditorWidget {
 
         // Pre-check connection status without holding lock for long
         {
-            let conn_guard = lock_connection(&self.connection);
+            let Some(conn_guard) = crate::db::try_lock_connection(&self.connection) else {
+                fltk::dialog::alert_default(
+                    "Connection is busy. Try again after the current operation finishes.",
+                );
+                return;
+            };
 
             // Only check connection status if this is not a CONNECT/DISCONNECT command
             if !is_connect_command && !conn_guard.is_connected() {
@@ -2786,7 +2791,10 @@ impl SqlEditorWidget {
 
                 // Store connection for cancel operation (separate from mutex)
                 if let Some(ref conn) = conn_opt {
-                    *current_query_connection.lock().unwrap() = Some(Arc::clone(conn));
+                    SqlEditorWidget::set_current_query_connection(
+                        &current_query_connection,
+                        Some(Arc::clone(conn)),
+                    );
                 }
 
                 // Keep conn_guard alive (don't drop it) so the lock is held during execution
@@ -6430,7 +6438,7 @@ impl SqlEditorWidget {
                 }
 
                 // Clear current query connection
-                *current_query_connection.lock().unwrap() = None;
+                SqlEditorWidget::set_current_query_connection(&current_query_connection, None);
 
                 let _ = sender.send(QueryProgress::BatchFinished);
                 app::awake();
@@ -6438,7 +6446,7 @@ impl SqlEditorWidget {
 
             if let Err(e) = result {
                 eprintln!("Query thread panicked: {:?}", e);
-                *current_query_connection.lock().unwrap() = None;
+                SqlEditorWidget::set_current_query_connection(&current_query_connection, None);
                 let _ = sender.send(QueryProgress::BatchFinished);
                 app::awake();
             }
