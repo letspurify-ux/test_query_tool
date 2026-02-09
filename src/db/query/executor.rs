@@ -2536,13 +2536,34 @@ impl ObjectBrowser {
     ) -> Result<Vec<PackageRoutine>, OracleError> {
         let sql = r#"
             SELECT
-                procedure_name,
-                NVL(procedure_type, 'PROCEDURE') AS routine_type
-            FROM user_procedures
-            WHERE object_type = 'PACKAGE'
-              AND object_name = :1
-              AND procedure_name IS NOT NULL
-            ORDER BY procedure_name
+                p.procedure_name,
+                CASE
+                    WHEN arg.has_return = 1 THEN 'FUNCTION'
+                    ELSE 'PROCEDURE'
+                END AS routine_type
+            FROM user_procedures p
+            LEFT JOIN (
+                SELECT
+                    a.package_name,
+                    a.object_name,
+                    a.overload,
+                    MAX(CASE WHEN a.position = 0 THEN 1 ELSE 0 END) AS has_return
+                FROM user_arguments a
+                GROUP BY
+                    a.package_name,
+                    a.object_name,
+                    a.overload
+            ) arg
+                ON arg.package_name = p.object_name
+               AND arg.object_name = p.procedure_name
+               AND (
+                        arg.overload = p.overload
+                     OR (arg.overload IS NULL AND p.overload IS NULL)
+               )
+            WHERE p.object_type = 'PACKAGE'
+              AND p.object_name = :1
+              AND p.procedure_name IS NOT NULL
+            ORDER BY p.procedure_name
         "#;
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
