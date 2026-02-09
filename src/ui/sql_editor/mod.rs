@@ -12,13 +12,13 @@ use fltk::{
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
 use crate::db::{
-    lock_connection, ConnectionInfo, QueryExecutor, QueryResult, SharedConnection,
-    TableColumnDetail,
+    ConnectionInfo, QueryExecutor, QueryResult, SharedConnection, TableColumnDetail,
 };
+use oracle::Connection;
 use crate::ui::constants::*;
 use crate::ui::font_settings::{configured_editor_profile, configured_ui_font_size, FontProfile};
 use crate::ui::intellisense::{IntellisenseData, IntellisensePopup};
@@ -117,6 +117,7 @@ enum UiActionResult {
     Commit(Result<(), String>),
     Rollback(Result<(), String>),
     Cancel(Result<(), String>),
+    QueryAlreadyRunning,
 }
 
 #[derive(Clone)]
@@ -132,6 +133,7 @@ pub struct SqlEditorWidget {
     column_sender: mpsc::Sender<ColumnLoadUpdate>,
     ui_action_sender: mpsc::Sender<UiActionResult>,
     query_running: Rc<RefCell<bool>>,
+    current_query_connection: Arc<Mutex<Option<Arc<Connection>>>>,
     intellisense_data: Rc<RefCell<IntellisenseData>>,
     intellisense_popup: Rc<RefCell<IntellisensePopup>>,
     highlighter: Rc<RefCell<SqlHighlighter>>,
@@ -309,6 +311,7 @@ impl SqlEditorWidget {
         let (column_sender, column_receiver) = mpsc::channel::<ColumnLoadUpdate>();
         let (ui_action_sender, ui_action_receiver) = mpsc::channel::<UiActionResult>();
         let query_running = Rc::new(RefCell::new(false));
+        let current_query_connection = Arc::new(Mutex::new(None));
 
         let intellisense_data = Rc::new(RefCell::new(IntellisenseData::new()));
         let intellisense_popup = Rc::new(RefCell::new(IntellisensePopup::new()));
@@ -336,6 +339,7 @@ impl SqlEditorWidget {
             column_sender,
             ui_action_sender,
             query_running: query_running.clone(),
+            current_query_connection: current_query_connection.clone(),
             intellisense_data,
             intellisense_popup,
             highlighter,
@@ -709,6 +713,11 @@ impl SqlEditorWidget {
                                     widget.emit_status("Cancel failed");
                                 }
                             }
+                            UiActionResult::QueryAlreadyRunning => {
+                                fltk::dialog::message_default(
+                                    "A query is already running. Please wait for it to complete."
+                                );
+                            }
                         }
                         if should_reset_cursor {
                             set_cursor(Cursor::Default);
@@ -865,15 +874,19 @@ impl SqlEditorWidget {
         set_cursor(Cursor::Wait);
         app::flush();
         thread::spawn(move || {
-            let conn = {
-                let conn_guard = lock_connection(&connection);
-                if !conn_guard.is_connected() {
-                    None
-                } else {
-                    conn_guard.get_connection()
-                }
+            // Try to acquire connection lock without blocking
+            let Some(conn_guard) = crate::db::try_lock_connection(&connection) else {
+                // Query is already running, notify user
+                let _ = sender.send(UiActionResult::QueryAlreadyRunning);
+                app::awake();
+                set_cursor(Cursor::Default);
+                app::flush();
+                return;
             };
-            let result = if let Some(db_conn) = conn {
+
+            let result = if !conn_guard.is_connected() {
+                Err("Not connected to database".to_string())
+            } else if let Some(db_conn) = conn_guard.get_connection() {
                 QueryExecutor::get_explain_plan(db_conn.as_ref(), &sql)
                     .map_err(|err| err.to_string())
             } else {
@@ -959,15 +972,19 @@ impl SqlEditorWidget {
         set_cursor(Cursor::Wait);
         app::flush();
         thread::spawn(move || {
-            let conn = {
-                let conn_guard = lock_connection(&connection);
-                if !conn_guard.is_connected() {
-                    None
-                } else {
-                    conn_guard.get_connection()
-                }
+            // Try to acquire connection lock without blocking
+            let Some(conn_guard) = crate::db::try_lock_connection(&connection) else {
+                // Query is already running, notify user
+                let _ = sender.send(UiActionResult::QueryAlreadyRunning);
+                app::awake();
+                set_cursor(Cursor::Default);
+                app::flush();
+                return;
             };
-            let result = if let Some(db_conn) = conn {
+
+            let result = if !conn_guard.is_connected() {
+                Err("Not connected to database".to_string())
+            } else if let Some(db_conn) = conn_guard.get_connection() {
                 db_conn.commit().map_err(|err| err.to_string())
             } else {
                 Err("Not connected to database".to_string())
@@ -984,15 +1001,19 @@ impl SqlEditorWidget {
         set_cursor(Cursor::Wait);
         app::flush();
         thread::spawn(move || {
-            let conn = {
-                let conn_guard = lock_connection(&connection);
-                if !conn_guard.is_connected() {
-                    None
-                } else {
-                    conn_guard.get_connection()
-                }
+            // Try to acquire connection lock without blocking
+            let Some(conn_guard) = crate::db::try_lock_connection(&connection) else {
+                // Query is already running, notify user
+                let _ = sender.send(UiActionResult::QueryAlreadyRunning);
+                app::awake();
+                set_cursor(Cursor::Default);
+                app::flush();
+                return;
             };
-            let result = if let Some(db_conn) = conn {
+
+            let result = if !conn_guard.is_connected() {
+                Err("Not connected to database".to_string())
+            } else if let Some(db_conn) = conn_guard.get_connection() {
                 db_conn.rollback().map_err(|err| err.to_string())
             } else {
                 Err("Not connected to database".to_string())
@@ -1009,21 +1030,16 @@ impl SqlEditorWidget {
             return;
         }
 
-        let connection = self.connection.clone();
+        let current_query_connection = self.current_query_connection.clone();
         let sender = self.ui_action_sender.clone();
         thread::spawn(move || {
-            let conn = {
-                let conn_guard = lock_connection(&connection);
-                if !conn_guard.is_connected() {
-                    None
-                } else {
-                    conn_guard.get_connection()
-                }
-            };
+            // Use separate connection path for cancel (no blocking on main mutex)
+            let conn = current_query_connection.lock().unwrap().clone();
+
             let result = if let Some(db_conn) = conn {
                 db_conn.break_execution().map_err(|err| err.to_string())
             } else {
-                Err("Not connected to database".to_string())
+                Err("No active query connection".to_string())
             };
 
             let _ = sender.send(UiActionResult::Cancel(result));
