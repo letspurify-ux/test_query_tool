@@ -176,3 +176,18 @@ pub fn lock_connection(connection: &SharedConnection) -> MutexGuard<'_, Database
         }
     }
 }
+
+/// Try to acquire the connection lock without blocking.
+/// Returns None if the lock is already held (query is running).
+pub fn try_lock_connection(
+    connection: &SharedConnection,
+) -> Option<MutexGuard<'_, DatabaseConnection>> {
+    match connection.try_lock() {
+        Ok(guard) => Some(guard),
+        Err(std::sync::TryLockError::WouldBlock) => None,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            eprintln!("Warning: database connection lock was poisoned; recovering.");
+            Some(poisoned.into_inner())
+        }
+    }
+}

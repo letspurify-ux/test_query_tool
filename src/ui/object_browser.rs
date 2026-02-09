@@ -12,8 +12,9 @@ use std::rc::Rc;
 use std::thread;
 
 use crate::db::{
-    lock_connection, CompilationError, ConstraintInfo, IndexInfo, ObjectBrowser, PackageRoutine,
-    ProcedureArgument, SequenceInfo, SharedConnection, TableColumnDetail,
+    lock_connection, try_lock_connection, CompilationError, ConstraintInfo, IndexInfo,
+    ObjectBrowser, PackageRoutine, ProcedureArgument, SequenceInfo, SharedConnection,
+    TableColumnDetail,
 };
 use crate::ui::constants::*;
 use crate::ui::font_settings::FontProfile;
@@ -607,8 +608,16 @@ impl ObjectBrowserWidget {
                                         let connection = connection.clone();
                                         let sender = action_sender.clone();
                                         thread::spawn(move || {
-                                            // Acquire connection lock and hold it during query
-                                            let conn_guard = lock_connection(&connection);
+                                            // Try to acquire connection lock without blocking
+                                            let Some(conn_guard) = try_lock_connection(&connection)
+                                            else {
+                                                // Query is already running, don't wait
+                                                fltk::dialog::message_default(
+                                                    "A query is already running",
+                                                );
+                                                return;
+                                            };
+
                                             let result = if !conn_guard.is_connected() {
                                                 Err("Not connected to database".to_string())
                                             } else if let Some(db_conn) = conn_guard.get_connection() {
@@ -1203,8 +1212,13 @@ impl ObjectBrowserWidget {
                             "PROCEDURE".to_string()
                         };
                         thread::spawn(move || {
-                            // Acquire connection lock and hold it during query
-                            let conn_guard = lock_connection(&connection);
+                            // Try to acquire connection lock without blocking
+                            let Some(conn_guard) = try_lock_connection(&connection) else {
+                                // Query is already running, don't wait
+                                fltk::dialog::message_default("A query is already running");
+                                return;
+                            };
+
                             let result = if !conn_guard.is_connected() {
                                 Err("Not connected to database".to_string())
                             } else if let Some(db_conn) = conn_guard.get_connection() {
@@ -1249,8 +1263,13 @@ impl ObjectBrowserWidget {
                         let routine_name = routine_name.clone();
                         let routine_type = routine_type.clone();
                         thread::spawn(move || {
-                            // Acquire connection lock and hold it during query
-                            let conn_guard = lock_connection(&connection);
+                            // Try to acquire connection lock without blocking
+                            let Some(conn_guard) = try_lock_connection(&connection) else {
+                                // Query is already running, don't wait
+                                fltk::dialog::message_default("A query is already running");
+                                return;
+                            };
+
                             let result = if !conn_guard.is_connected() {
                                 Err("Not connected to database".to_string())
                             } else if let Some(db_conn) = conn_guard.get_connection() {
@@ -1297,8 +1316,13 @@ impl ObjectBrowserWidget {
                         let object_name = object_name.clone();
                         let object_type = db_object_type.to_string();
                         thread::spawn(move || {
-                            // Acquire connection lock and hold it during queries
-                            let conn_guard = lock_connection(&connection);
+                            // Try to acquire connection lock without blocking
+                            let Some(conn_guard) = try_lock_connection(&connection) else {
+                                // Query is already running, don't wait
+                                fltk::dialog::message_default("A query is already running");
+                                return;
+                            };
+
                             if !conn_guard.is_connected() {
                                 let _ = sender.send(ObjectActionResult::CompilationErrors {
                                     object_name,
@@ -1373,8 +1397,13 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let table_name = object_name.clone();
                         thread::spawn(move || {
-                            // Acquire connection lock and hold it during query
-                            let conn_guard = lock_connection(&connection);
+                            // Try to acquire connection lock without blocking
+                            let Some(conn_guard) = try_lock_connection(&connection) else {
+                                // Query is already running, don't wait
+                                fltk::dialog::message_default("A query is already running");
+                                return;
+                            };
+
                             let result = if !conn_guard.is_connected() {
                                 Err("Not connected to database".to_string())
                             } else if let Some(db_conn) = conn_guard.get_connection() {
@@ -1394,8 +1423,13 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let table_name = object_name.clone();
                         thread::spawn(move || {
-                            // Acquire connection lock and hold it during query
-                            let conn_guard = lock_connection(&connection);
+                            // Try to acquire connection lock without blocking
+                            let Some(conn_guard) = try_lock_connection(&connection) else {
+                                // Query is already running, don't wait
+                                fltk::dialog::message_default("A query is already running");
+                                return;
+                            };
+
                             let result = if !conn_guard.is_connected() {
                                 Err("Not connected to database".to_string())
                             } else if let Some(db_conn) = conn_guard.get_connection() {
@@ -1415,8 +1449,13 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let table_name = object_name.clone();
                         thread::spawn(move || {
-                            // Acquire connection lock and hold it during query
-                            let conn_guard = lock_connection(&connection);
+                            // Try to acquire connection lock without blocking
+                            let Some(conn_guard) = try_lock_connection(&connection) else {
+                                // Query is already running, don't wait
+                                fltk::dialog::message_default("A query is already running");
+                                return;
+                            };
+
                             let result = if !conn_guard.is_connected() {
                                 Err("Not connected to database".to_string())
                             } else if let Some(db_conn) = conn_guard.get_connection() {
@@ -1436,8 +1475,13 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let sequence_name = object_name.clone();
                         thread::spawn(move || {
-                            // Acquire connection lock and hold it during query
-                            let conn_guard = lock_connection(&connection);
+                            // Try to acquire connection lock without blocking
+                            let Some(conn_guard) = try_lock_connection(&connection) else {
+                                // Query is already running, don't wait
+                                fltk::dialog::message_default("A query is already running");
+                                return;
+                            };
+
                             let result = if !conn_guard.is_connected() {
                                 Err("Not connected to database".to_string())
                             } else if let Some(db_conn) = conn_guard.get_connection() {
@@ -1473,8 +1517,13 @@ impl ObjectBrowserWidget {
                             let object_type = obj_type.to_string();
                             let object_name = object_name.clone();
                             thread::spawn(move || {
-                                // Acquire connection lock and hold it during query
-                                let conn_guard = lock_connection(&connection);
+                                // Try to acquire connection lock without blocking
+                                let Some(conn_guard) = try_lock_connection(&connection) else {
+                                    // Query is already running, don't wait
+                                    fltk::dialog::message_default("A query is already running");
+                                    return;
+                                };
+
                                 let result = if !conn_guard.is_connected() {
                                     Err("Not connected to database".to_string())
                                 } else if let Some(db_conn) = conn_guard.get_connection() {
