@@ -41,8 +41,8 @@ struct SelectTransformState {
     compute_seen_numeric: Vec<bool>,
 }
 
-const PROGRESS_ROWS_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
-const PROGRESS_ROWS_MAX_BATCH: usize = 1000;
+const PROGRESS_ROWS_FLUSH_INTERVAL: Duration = Duration::from_millis(0);
+const PROGRESS_ROWS_MAX_BATCH: usize = 1;
 
 impl SqlEditorWidget {
     pub fn execute_sql_text(&self, sql: &str) {
