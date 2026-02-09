@@ -77,6 +77,10 @@ enum ObjectActionResult {
         routine_type: String,
         result: Result<String, String>,
     },
+    PackageRoutines {
+        package_name: String,
+        result: Result<Vec<PackageRoutine>, String>,
+    },
     CompilationErrors {
         object_name: String,
         object_type: String,
@@ -264,7 +268,7 @@ impl ObjectBrowserWidget {
         action_receiver: std::sync::mpsc::Receiver<ObjectActionResult>,
     ) {
         let sql_callback = self.sql_callback.clone();
-        let tree = self.tree.clone();
+        let mut tree = self.tree.clone();
         let object_cache = self.object_cache.clone();
         let filter_input = self.filter_input.clone();
 
@@ -274,7 +278,7 @@ impl ObjectBrowserWidget {
         fn schedule_poll(
             receiver: Rc<RefCell<std::sync::mpsc::Receiver<ObjectActionResult>>>,
             sql_callback: SqlExecuteCallback,
-            tree: Tree,
+            mut tree: Tree,
             object_cache: Rc<RefCell<ObjectCache>>,
             filter_input: Input,
         ) {
@@ -451,6 +455,24 @@ impl ObjectBrowserWidget {
                                 *sql_callback.borrow_mut() = Some(cb);
                             }
                         }
+                        ObjectActionResult::PackageRoutines {
+                            package_name,
+                            result,
+                        } => match result {
+                            Ok(routines) => {
+                                let mut cache = object_cache.borrow_mut();
+                                cache.package_routines.insert(package_name, routines);
+                                let filter_text = filter_input.value().to_lowercase();
+                                ObjectBrowserWidget::populate_tree(&mut tree, &cache, &filter_text);
+                                tree.redraw();
+                            }
+                            Err(err) => {
+                                fltk::dialog::alert_default(&format!(
+                                    "Failed to load package routines: {}",
+                                    err
+                                ));
+                            }
+                        },
                         ObjectActionResult::CompilationErrors {
                             object_name,
                             object_type,
@@ -513,9 +535,9 @@ impl ObjectBrowserWidget {
                 schedule_poll(
                     Rc::clone(&receiver),
                     sql_callback.clone(),
-                    tree.clone(),
-                    Rc::clone(&object_cache),
-                    filter_input.clone(),
+                    tree,
+                    object_cache,
+                    filter_input,
                 );
             });
         }
@@ -533,6 +555,7 @@ impl ObjectBrowserWidget {
         let connection = self.connection.clone();
         let sql_callback = self.sql_callback.clone();
         let action_sender = self.action_sender.clone();
+        let object_cache = self.object_cache.clone();
 
         self.tree.handle(move |t, ev| {
             if !t.active() {
@@ -568,6 +591,51 @@ impl ObjectBrowserWidget {
                     }
 
                     if mouse_button == fltk::app::MouseButton::Left {
+                        if let Some(item) = t.first_selected_item() {
+                            if let Some(ObjectItem::Simple {
+                                object_type,
+                                object_name,
+                            }) = Self::get_item_info(&item)
+                            {
+                                if object_type == "PACKAGES" {
+                                    let package_name = object_name.clone();
+                                    let should_fetch = {
+                                        let cache = object_cache.borrow();
+                                        !cache.package_routines.contains_key(&package_name)
+                                    };
+                                    if should_fetch {
+                                        let connection = connection.clone();
+                                        let sender = action_sender.clone();
+                                        thread::spawn(move || {
+                                            let conn = {
+                                                let conn_guard = lock_connection(&connection);
+                                                if !conn_guard.is_connected() {
+                                                    None
+                                                } else {
+                                                    conn_guard.get_connection()
+                                                }
+                                            };
+                                            let result = if let Some(db_conn) = conn {
+                                                ObjectBrowser::get_package_routines(
+                                                    db_conn.as_ref(),
+                                                    &package_name,
+                                                )
+                                                .map_err(|err| err.to_string())
+                                            } else {
+                                                Err("Not connected to database".to_string())
+                                            };
+
+                                            let _ = sender.send(ObjectActionResult::PackageRoutines {
+                                                package_name,
+                                                result,
+                                            });
+                                            app::awake();
+                                        });
+                                    }
+                                }
+                            }
+                        }
+
                         if fltk::app::event_clicks() {
                             if let Some(item) = t.first_selected_item() {
                                 if let Some(insert_text) = Self::get_insert_text(&item) {
@@ -1581,10 +1649,6 @@ impl ObjectBrowserWidget {
 
             if let Ok(packages) = ObjectBrowser::get_packages(db_conn.as_ref()) {
                 cache.packages = packages;
-                // Load all package routines at once for better performance
-                if let Ok(routines) = ObjectBrowser::get_all_package_routines(db_conn.as_ref()) {
-                    cache.package_routines = routines;
-                }
                 send_update(&sender, &cache);
             }
         });
