@@ -390,7 +390,7 @@ impl SqlEditorWidget {
             let mut hit_budget = false;
             let mut pending_rows: Vec<(usize, Vec<Vec<String>>)> = Vec::new();
 
-            let mut flush_rows = |pending_rows: &mut Vec<(usize, Vec<Vec<String>>)>| {
+            let flush_rows = |pending_rows: &mut Vec<(usize, Vec<Vec<String>>)>| {
                 if pending_rows.is_empty() {
                     return;
                 }
