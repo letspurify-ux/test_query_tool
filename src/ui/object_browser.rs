@@ -1529,40 +1529,48 @@ impl ObjectBrowserWidget {
             drop(conn_guard);
 
             let mut cache = ObjectCache::default();
+            let send_update = |sender: &std::sync::mpsc::Sender<ObjectCache>, cache: &ObjectCache| {
+                let _ = sender.send(cache.clone());
+                app::awake();
+            };
 
             if let Ok(tables) = ObjectBrowser::get_tables(db_conn.as_ref()) {
                 cache.tables = tables;
+                send_update(&sender, &cache);
             }
 
             if let Ok(views) = ObjectBrowser::get_views(db_conn.as_ref()) {
                 cache.views = views;
+                send_update(&sender, &cache);
             }
 
             if let Ok(procedures) = ObjectBrowser::get_procedures(db_conn.as_ref()) {
                 cache.procedures = procedures;
+                send_update(&sender, &cache);
             }
 
             if let Ok(functions) = ObjectBrowser::get_functions(db_conn.as_ref()) {
                 cache.functions = functions;
+                send_update(&sender, &cache);
             }
 
             if let Ok(sequences) = ObjectBrowser::get_sequences(db_conn.as_ref()) {
                 cache.sequences = sequences;
+                send_update(&sender, &cache);
             }
 
             if let Ok(packages) = ObjectBrowser::get_packages(db_conn.as_ref()) {
+                cache.packages = packages;
+                send_update(&sender, &cache);
                 for package in &packages {
                     if let Ok(routines) =
                         ObjectBrowser::get_package_routines(db_conn.as_ref(), package)
                     {
                         cache.package_routines.insert(package.clone(), routines);
+                        send_update(&sender, &cache);
                     }
                 }
-                cache.packages = packages;
             }
-
-            let _ = sender.send(cache);
-            app::awake();
         });
     }
 
