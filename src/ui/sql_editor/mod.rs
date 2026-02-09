@@ -388,6 +388,19 @@ impl SqlEditorWidget {
             let mut disconnected = false;
             let mut processed = 0usize;
             let mut hit_budget = false;
+            let mut pending_rows: Vec<(usize, Vec<Vec<String>>)> = Vec::new();
+
+            let mut flush_rows = |pending_rows: &mut Vec<(usize, Vec<Vec<String>>)>| {
+                if pending_rows.is_empty() {
+                    return;
+                }
+                for (index, rows) in pending_rows.drain(..) {
+                    SqlEditorWidget::invoke_progress_callback(
+                        &progress_callback,
+                        QueryProgress::Rows { index, rows },
+                    );
+                }
+            };
             // Process any pending messages
             loop {
                 if processed >= MAX_PROGRESS_MESSAGES_PER_POLL {
@@ -405,7 +418,20 @@ impl SqlEditorWidget {
                         processed += 1;
 
                         match &message {
+                            QueryProgress::Rows { .. } => {
+                                if let QueryProgress::Rows { index, rows } = message {
+                                    if let Some((_, buffered)) =
+                                        pending_rows.iter_mut().find(|(i, _)| *i == index)
+                                    {
+                                        buffered.extend(rows);
+                                    } else {
+                                        pending_rows.push((index, rows));
+                                    }
+                                }
+                                continue;
+                            }
                             QueryProgress::PromptInput { prompt, response } => {
+                                flush_rows(&mut pending_rows);
                                 let value = SqlEditorWidget::prompt_input_dialog(&prompt);
                                 let _ = response.send(value);
                             }
@@ -415,6 +441,7 @@ impl SqlEditorWidget {
                                 timed_out,
                                 ..
                             } => {
+                                flush_rows(&mut pending_rows);
                                 if *timed_out {
                                     fltk::dialog::alert_default(&format!(
                                         "Query timed out!\n\n{}",
@@ -435,6 +462,7 @@ impl SqlEditorWidget {
                                 );
                             }
                             QueryProgress::BatchFinished => {
+                                flush_rows(&mut pending_rows);
                                 *query_running.borrow_mut() = false;
                                 set_cursor(Cursor::Default);
                                 app::flush();
@@ -451,6 +479,8 @@ impl SqlEditorWidget {
                     }
                 }
             }
+
+            flush_rows(&mut pending_rows);
 
             if disconnected {
                 return;
