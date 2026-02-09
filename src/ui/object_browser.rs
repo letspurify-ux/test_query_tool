@@ -607,15 +607,11 @@ impl ObjectBrowserWidget {
                                         let connection = connection.clone();
                                         let sender = action_sender.clone();
                                         thread::spawn(move || {
-                                            let conn = {
-                                                let conn_guard = lock_connection(&connection);
-                                                if !conn_guard.is_connected() {
-                                                    None
-                                                } else {
-                                                    conn_guard.get_connection()
-                                                }
-                                            };
-                                            let result = if let Some(db_conn) = conn {
+                                            // Acquire connection lock and hold it during query
+                                            let conn_guard = lock_connection(&connection);
+                                            let result = if !conn_guard.is_connected() {
+                                                Err("Not connected to database".to_string())
+                                            } else if let Some(db_conn) = conn_guard.get_connection() {
                                                 ObjectBrowser::get_package_routines(
                                                     db_conn.as_ref(),
                                                     &package_name,
@@ -630,6 +626,7 @@ impl ObjectBrowserWidget {
                                                 result,
                                             });
                                             app::awake();
+                                            // conn_guard drops here, releasing the lock
                                         });
                                     }
                                 }
@@ -1206,15 +1203,11 @@ impl ObjectBrowserWidget {
                             "PROCEDURE".to_string()
                         };
                         thread::spawn(move || {
-                            let conn = {
-                                let conn_guard = lock_connection(&connection);
-                                if !conn_guard.is_connected() {
-                                    None
-                                } else {
-                                    conn_guard.get_connection()
-                                }
-                            };
-                            let result = if let Some(db_conn) = conn {
+                            // Acquire connection lock and hold it during query
+                            let conn_guard = lock_connection(&connection);
+                            let result = if !conn_guard.is_connected() {
+                                Err("Not connected to database".to_string())
+                            } else if let Some(db_conn) = conn_guard.get_connection() {
                                 ObjectBrowser::get_procedure_arguments(
                                     db_conn.as_ref(),
                                     &object_name,
@@ -1236,6 +1229,7 @@ impl ObjectBrowserWidget {
                                 result,
                             });
                             app::awake();
+                            // conn_guard drops here, releasing the lock
                         });
                     }
                     (
@@ -1255,15 +1249,11 @@ impl ObjectBrowserWidget {
                         let routine_name = routine_name.clone();
                         let routine_type = routine_type.clone();
                         thread::spawn(move || {
-                            let conn = {
-                                let conn_guard = lock_connection(&connection);
-                                if !conn_guard.is_connected() {
-                                    None
-                                } else {
-                                    conn_guard.get_connection()
-                                }
-                            };
-                            let result = if let Some(db_conn) = conn {
+                            // Acquire connection lock and hold it during query
+                            let conn_guard = lock_connection(&connection);
+                            let result = if !conn_guard.is_connected() {
+                                Err("Not connected to database".to_string())
+                            } else if let Some(db_conn) = conn_guard.get_connection() {
                                 ObjectBrowser::get_package_procedure_arguments(
                                     db_conn.as_ref(),
                                     &package_name,
@@ -1286,6 +1276,7 @@ impl ObjectBrowserWidget {
                                 result,
                             });
                             app::awake();
+                            // conn_guard drops here, releasing the lock
                         });
                     }
                     (
@@ -1306,15 +1297,16 @@ impl ObjectBrowserWidget {
                         let object_name = object_name.clone();
                         let object_type = db_object_type.to_string();
                         thread::spawn(move || {
-                            let conn = {
-                                let conn_guard = lock_connection(&connection);
-                                if !conn_guard.is_connected() {
-                                    None
-                                } else {
-                                    conn_guard.get_connection()
-                                }
-                            };
-                            if let Some(db_conn) = conn {
+                            // Acquire connection lock and hold it during queries
+                            let conn_guard = lock_connection(&connection);
+                            if !conn_guard.is_connected() {
+                                let _ = sender.send(ObjectActionResult::CompilationErrors {
+                                    object_name,
+                                    object_type,
+                                    status: String::new(),
+                                    result: Err("Not connected to database".to_string()),
+                                });
+                            } else if let Some(db_conn) = conn_guard.get_connection() {
                                 let status = ObjectBrowser::get_object_status(
                                     db_conn.as_ref(),
                                     &object_name,
@@ -1373,6 +1365,7 @@ impl ObjectBrowserWidget {
                                 });
                             }
                             app::awake();
+                            // conn_guard drops here, releasing the lock
                         });
                     }
                     ("View Structure", ObjectItem::Simple { object_name, .. }) => {
@@ -1380,15 +1373,11 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let table_name = object_name.clone();
                         thread::spawn(move || {
-                            let conn = {
-                                let conn_guard = lock_connection(&connection);
-                                if !conn_guard.is_connected() {
-                                    None
-                                } else {
-                                    conn_guard.get_connection()
-                                }
-                            };
-                            let result = if let Some(db_conn) = conn {
+                            // Acquire connection lock and hold it during query
+                            let conn_guard = lock_connection(&connection);
+                            let result = if !conn_guard.is_connected() {
+                                Err("Not connected to database".to_string())
+                            } else if let Some(db_conn) = conn_guard.get_connection() {
                                 ObjectBrowser::get_table_structure(db_conn.as_ref(), &table_name)
                                     .map_err(|err| err.to_string())
                             } else {
@@ -1397,6 +1386,7 @@ impl ObjectBrowserWidget {
                             let _ = sender
                                 .send(ObjectActionResult::TableStructure { table_name, result });
                             app::awake();
+                            // conn_guard drops here, releasing the lock
                         });
                     }
                     ("View Indexes", ObjectItem::Simple { object_name, .. }) => {
@@ -1404,15 +1394,11 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let table_name = object_name.clone();
                         thread::spawn(move || {
-                            let conn = {
-                                let conn_guard = lock_connection(&connection);
-                                if !conn_guard.is_connected() {
-                                    None
-                                } else {
-                                    conn_guard.get_connection()
-                                }
-                            };
-                            let result = if let Some(db_conn) = conn {
+                            // Acquire connection lock and hold it during query
+                            let conn_guard = lock_connection(&connection);
+                            let result = if !conn_guard.is_connected() {
+                                Err("Not connected to database".to_string())
+                            } else if let Some(db_conn) = conn_guard.get_connection() {
                                 ObjectBrowser::get_table_indexes(db_conn.as_ref(), &table_name)
                                     .map_err(|err| err.to_string())
                             } else {
@@ -1421,6 +1407,7 @@ impl ObjectBrowserWidget {
                             let _ = sender
                                 .send(ObjectActionResult::TableIndexes { table_name, result });
                             app::awake();
+                            // conn_guard drops here, releasing the lock
                         });
                     }
                     ("View Constraints", ObjectItem::Simple { object_name, .. }) => {
@@ -1428,15 +1415,11 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let table_name = object_name.clone();
                         thread::spawn(move || {
-                            let conn = {
-                                let conn_guard = lock_connection(&connection);
-                                if !conn_guard.is_connected() {
-                                    None
-                                } else {
-                                    conn_guard.get_connection()
-                                }
-                            };
-                            let result = if let Some(db_conn) = conn {
+                            // Acquire connection lock and hold it during query
+                            let conn_guard = lock_connection(&connection);
+                            let result = if !conn_guard.is_connected() {
+                                Err("Not connected to database".to_string())
+                            } else if let Some(db_conn) = conn_guard.get_connection() {
                                 ObjectBrowser::get_table_constraints(db_conn.as_ref(), &table_name)
                                     .map_err(|err| err.to_string())
                             } else {
@@ -1445,6 +1428,7 @@ impl ObjectBrowserWidget {
                             let _ = sender
                                 .send(ObjectActionResult::TableConstraints { table_name, result });
                             app::awake();
+                            // conn_guard drops here, releasing the lock
                         });
                     }
                     ("View Info", ObjectItem::Simple { object_name, .. }) => {
@@ -1452,15 +1436,11 @@ impl ObjectBrowserWidget {
                         let sender = action_sender.clone();
                         let sequence_name = object_name.clone();
                         thread::spawn(move || {
-                            let conn = {
-                                let conn_guard = lock_connection(&connection);
-                                if !conn_guard.is_connected() {
-                                    None
-                                } else {
-                                    conn_guard.get_connection()
-                                }
-                            };
-                            let result = if let Some(db_conn) = conn {
+                            // Acquire connection lock and hold it during query
+                            let conn_guard = lock_connection(&connection);
+                            let result = if !conn_guard.is_connected() {
+                                Err("Not connected to database".to_string())
+                            } else if let Some(db_conn) = conn_guard.get_connection() {
                                 ObjectBrowser::get_sequence_info(db_conn.as_ref(), &sequence_name)
                                     .map_err(|err| err.to_string())
                             } else {
@@ -1468,6 +1448,7 @@ impl ObjectBrowserWidget {
                             };
                             let _ = sender.send(ObjectActionResult::SequenceInfo(result));
                             app::awake();
+                            // conn_guard drops here, releasing the lock
                         });
                     }
                     (
@@ -1492,15 +1473,11 @@ impl ObjectBrowserWidget {
                             let object_type = obj_type.to_string();
                             let object_name = object_name.clone();
                             thread::spawn(move || {
-                                let conn = {
-                                    let conn_guard = lock_connection(&connection);
-                                    if !conn_guard.is_connected() {
-                                        None
-                                    } else {
-                                        conn_guard.get_connection()
-                                    }
-                                };
-                                let result = if let Some(db_conn) = conn {
+                                // Acquire connection lock and hold it during query
+                                let conn_guard = lock_connection(&connection);
+                                let result = if !conn_guard.is_connected() {
+                                    Err("Not connected to database".to_string())
+                                } else if let Some(db_conn) = conn_guard.get_connection() {
                                     match object_type.as_str() {
                                         "TABLE" => ObjectBrowser::get_table_ddl(
                                             db_conn.as_ref(),
@@ -1534,6 +1511,7 @@ impl ObjectBrowserWidget {
                                 };
                                 let _ = sender.send(ObjectActionResult::Ddl(result));
                                 app::awake();
+                                // conn_guard drops here, releasing the lock
                             });
                         }
                     }
@@ -1606,6 +1584,7 @@ impl ObjectBrowserWidget {
         let connection = self.connection.clone();
 
         thread::spawn(move || {
+            // Acquire connection lock and hold it during all queries
             let conn_guard = lock_connection(&connection);
             if !conn_guard.is_connected() {
                 return;
@@ -1614,7 +1593,7 @@ impl ObjectBrowserWidget {
             let Some(db_conn) = conn_guard.get_connection() else {
                 return;
             };
-            drop(conn_guard);
+            // Keep conn_guard alive (don't drop it) so the lock is held during execution
 
             let mut cache = ObjectCache::default();
             let send_update = |sender: &std::sync::mpsc::Sender<ObjectCache>, cache: &ObjectCache| {
@@ -1651,6 +1630,8 @@ impl ObjectBrowserWidget {
                 cache.packages = packages;
                 send_update(&sender, &cache);
             }
+
+            // conn_guard drops here, releasing the lock
         });
     }
 
