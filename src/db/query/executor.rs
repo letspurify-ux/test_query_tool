@@ -2534,32 +2534,22 @@ impl ObjectBrowser {
         conn: &Connection,
         package_name: &str,
     ) -> Result<Vec<PackageRoutine>, OracleError> {
+        // Optimized query using EXISTS instead of LEFT JOIN and GROUP BY
+        // This reduces the number of rows scanned in user_arguments
         let sql = r#"
-            SELECT
+            SELECT DISTINCT
                 p.procedure_name,
                 CASE
-                    WHEN arg.has_return = 1 THEN 'FUNCTION'
+                    WHEN EXISTS (
+                        SELECT 1 FROM user_arguments a
+                        WHERE a.package_name = p.object_name
+                        AND a.object_name = p.procedure_name
+                        AND a.position = 0
+                        AND (a.overload = p.overload OR (a.overload IS NULL AND p.overload IS NULL))
+                    ) THEN 'FUNCTION'
                     ELSE 'PROCEDURE'
                 END AS routine_type
             FROM user_procedures p
-            LEFT JOIN (
-                SELECT
-                    a.package_name,
-                    a.object_name,
-                    a.overload,
-                    MAX(CASE WHEN a.position = 0 THEN 1 ELSE 0 END) AS has_return
-                FROM user_arguments a
-                GROUP BY
-                    a.package_name,
-                    a.object_name,
-                    a.overload
-            ) arg
-                ON arg.package_name = p.object_name
-               AND arg.object_name = p.procedure_name
-               AND (
-                        arg.overload = p.overload
-                     OR (arg.overload IS NULL AND p.overload IS NULL)
-               )
             WHERE p.object_type = 'PACKAGE'
               AND p.object_name = :1
               AND p.procedure_name IS NOT NULL
@@ -2609,6 +2599,8 @@ impl ObjectBrowser {
         Ok(routines)
     }
 
+    // Keep for potential future use (bulk loading all packages at once)
+    #[allow(dead_code)]
     pub fn get_all_package_routines(
         conn: &Connection,
     ) -> Result<HashMap<String, Vec<PackageRoutine>>, OracleError> {

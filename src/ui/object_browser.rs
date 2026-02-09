@@ -268,7 +268,7 @@ impl ObjectBrowserWidget {
         action_receiver: std::sync::mpsc::Receiver<ObjectActionResult>,
     ) {
         let sql_callback = self.sql_callback.clone();
-        let mut tree = self.tree.clone();
+        let tree = self.tree.clone();
         let object_cache = self.object_cache.clone();
         let filter_input = self.filter_input.clone();
 
@@ -535,9 +535,9 @@ impl ObjectBrowserWidget {
                 schedule_poll(
                     Rc::clone(&receiver),
                     sql_callback.clone(),
-                    tree,
-                    object_cache,
-                    filter_input,
+                    tree.clone(),
+                    Rc::clone(&object_cache),
+                    filter_input.clone(),
                 );
             });
         }
