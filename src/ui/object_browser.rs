@@ -88,6 +88,7 @@ enum ObjectActionResult {
         status: String,
         result: Result<Vec<CompilationError>, String>,
     },
+    QueryAlreadyRunning,
 }
 
 #[derive(Clone)]
@@ -519,6 +520,11 @@ impl ObjectBrowserWidget {
                                 ));
                             }
                         },
+                        ObjectActionResult::QueryAlreadyRunning => {
+                            fltk::dialog::message_default(
+                                "A query is already running. Please wait for it to complete."
+                            );
+                        }
                     },
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -611,7 +617,9 @@ impl ObjectBrowserWidget {
                                             // Try to acquire connection lock without blocking
                                             let Some(conn_guard) = try_lock_connection(&connection)
                                             else {
-                                                // Query is already running, silently ignore
+                                                // Query is already running, notify user
+                                                let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
+                                                app::awake();
                                                 return;
                                             };
 
@@ -1211,7 +1219,9 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, silently ignore
+                                // Query is already running, notify user
+                                let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
+                                app::awake();
                                 return;
                             };
 
@@ -1261,7 +1271,9 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, silently ignore
+                                // Query is already running, notify user
+                                let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
+                                app::awake();
                                 return;
                             };
 
@@ -1313,7 +1325,9 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, silently ignore
+                                // Query is already running, notify user
+                                let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
+                                app::awake();
                                 return;
                             };
 
@@ -1393,7 +1407,9 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, silently ignore
+                                // Query is already running, notify user
+                                let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
+                                app::awake();
                                 return;
                             };
 
@@ -1418,7 +1434,9 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, silently ignore
+                                // Query is already running, notify user
+                                let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
+                                app::awake();
                                 return;
                             };
 
@@ -1443,7 +1461,9 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, silently ignore
+                                // Query is already running, notify user
+                                let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
+                                app::awake();
                                 return;
                             };
 
@@ -1468,7 +1488,9 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, silently ignore
+                                // Query is already running, notify user
+                                let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
+                                app::awake();
                                 return;
                             };
 
@@ -1509,7 +1531,9 @@ impl ObjectBrowserWidget {
                             thread::spawn(move || {
                                 // Try to acquire connection lock without blocking
                                 let Some(conn_guard) = try_lock_connection(&connection) else {
-                                    // Query is already running, silently ignore
+                                    // Query is already running, notify user
+                                    let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
+                                    app::awake();
                                     return;
                                 };
 

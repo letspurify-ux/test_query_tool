@@ -2757,6 +2757,7 @@ impl SqlEditorWidget {
         let sql_text = sql.to_string();
         let sender = self.progress_sender.clone();
         let query_running = self.query_running.clone();
+        let current_query_connection = self.current_query_connection.clone();
 
         *query_running.borrow_mut() = true;
 
@@ -2782,6 +2783,11 @@ impl SqlEditorWidget {
                 };
                 let auto_commit = conn_guard.auto_commit();
                 let session = conn_guard.session_state();
+
+                // Store connection for cancel operation (separate from mutex)
+                if let Some(ref conn) = conn_opt {
+                    *current_query_connection.lock().unwrap() = Some(Arc::clone(conn));
+                }
 
                 // Keep conn_guard alive (don't drop it) so the lock is held during execution
 
@@ -6422,12 +6428,17 @@ impl SqlEditorWidget {
                 if let Some(conn) = conn_opt.as_ref() {
                     let _ = conn.set_call_timeout(previous_timeout);
                 }
+
+                // Clear current query connection
+                *current_query_connection.lock().unwrap() = None;
+
                 let _ = sender.send(QueryProgress::BatchFinished);
                 app::awake();
             })); // end catch_unwind
 
             if let Err(e) = result {
                 eprintln!("Query thread panicked: {:?}", e);
+                *current_query_connection.lock().unwrap() = None;
                 let _ = sender.send(QueryProgress::BatchFinished);
                 app::awake();
             }
