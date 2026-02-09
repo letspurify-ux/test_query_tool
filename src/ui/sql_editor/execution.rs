@@ -2830,6 +2830,7 @@ impl SqlEditorWidget {
                                 connection_name: conn_name.clone(),
                                 timed_out: false,
                             });
+                            app::awake();
                         }
                         let _ = sender.send(QueryProgress::BatchFinished);
                         app::awake();

@@ -1357,6 +1357,7 @@ impl ObjectBrowserWidget {
                                     status: String::new(),
                                     result: Err("Not connected to database".to_string()),
                                 });
+                                app::awake();
                             } else if let Some(db_conn) = conn_guard.get_connection() {
                                 let status = ObjectBrowser::get_object_status(
                                     db_conn.as_ref(),
@@ -1407,6 +1408,7 @@ impl ObjectBrowserWidget {
                                     status: combined_status,
                                     result: Ok(errors),
                                 });
+                                app::awake();
                             } else {
                                 let _ = sender.send(ObjectActionResult::CompilationErrors {
                                     object_name,
@@ -1414,8 +1416,9 @@ impl ObjectBrowserWidget {
                                     status: String::new(),
                                     result: Err("Not connected to database".to_string()),
                                 });
+                                app::awake();
                             }
-                            app::awake();
+                            
                             // conn_guard drops here, releasing the lock
                         });
                     }
@@ -1636,6 +1639,7 @@ impl ObjectBrowserWidget {
         let (sender, receiver) = std::sync::mpsc::channel::<()>();
         close_btn.set_callback(move |_| {
             let _ = sender.send(());
+            app::awake();
         });
 
         dialog.end();

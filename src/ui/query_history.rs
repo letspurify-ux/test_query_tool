@@ -1,12 +1,4 @@
-use fltk::{
-    browser::HoldBrowser,
-    button::Button,
-    enums::FrameType,
-    group::Flex,
-    prelude::*,
-    text::{StyleTableEntry, TextBuffer, TextDisplay},
-    window::Window,
-};
+use fltk::{app, browser::HoldBrowser, button::Button, enums::FrameType, group::Flex, prelude::*, text::{StyleTableEntry, TextBuffer, TextDisplay}, window::Window};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{mpsc, OnceLock};
@@ -278,6 +270,7 @@ impl QueryHistoryDialog {
             if selected > 0 {
                 if let Some(idx) = (selected - 1).try_into().ok() {
                     let _ = sender_for_preview.send(DialogMessage::UpdatePreview(idx));
+                    app::awake();
                 }
             }
         });
@@ -286,18 +279,21 @@ impl QueryHistoryDialog {
         let sender_for_use = sender.clone();
         use_btn.set_callback(move |_| {
             let _ = sender_for_use.send(DialogMessage::UseSelected);
+            app::awake();
         });
 
         // Clear History button
         let sender_for_clear = sender.clone();
         clear_btn.set_callback(move |_| {
             let _ = sender_for_clear.send(DialogMessage::ClearHistory);
+            app::awake();
         });
 
         // Close button
         let sender_for_close = sender.clone();
         close_btn.set_callback(move |_| {
             let _ = sender_for_close.send(DialogMessage::Close);
+            app::awake();
         });
 
         dialog.show();
@@ -360,6 +356,7 @@ impl QueryHistoryDialog {
                             // Notify the background writer so its in-memory
                             // history is cleared along with the file.
                             let _ = history_writer_sender().send(HistoryCommand::Clear);
+                            app::awake();
                             queries.borrow_mut().clear();
                             browser.clear();
                             preview_buffer.set_text("");
@@ -415,6 +412,7 @@ impl QueryHistoryDialog {
         };
 
         if let Err(err) = history_writer_sender().send(HistoryCommand::Add(entry)) {
+            app::awake();
             // Fallback: if channel is disconnected, save directly
             if let HistoryCommand::Add(entry) = err.0 {
                 let mut history = QueryHistory::load();

@@ -438,6 +438,7 @@ impl SqlEditorWidget {
                                 flush_rows(&mut pending_rows);
                                 let value = SqlEditorWidget::prompt_input_dialog(&prompt);
                                 let _ = response.send(value);
+                                app::awake();
                             }
                             QueryProgress::StatementFinished {
                                 result,
@@ -643,6 +644,7 @@ impl SqlEditorWidget {
                                         widget.progress_sender.send(QueryProgress::ScriptOutput {
                                             lines: vec![format!("Explain plan failed: {}", err)],
                                         });
+                                    app::awake();
                                     widget.emit_status("Explain plan failed");
                                 }
                             },
@@ -689,6 +691,7 @@ impl SqlEditorWidget {
                                         widget.progress_sender.send(QueryProgress::ScriptOutput {
                                             lines: vec![format!("Commit failed: {}", err)],
                                         });
+                                    app::awake();
                                     widget.emit_status("Commit failed");
                                 }
                             },
@@ -701,6 +704,7 @@ impl SqlEditorWidget {
                                         widget.progress_sender.send(QueryProgress::ScriptOutput {
                                             lines: vec![format!("Rollback failed: {}", err)],
                                         });
+                                    app::awake();
                                     widget.emit_status("Rollback failed");
                                 }
                             },
@@ -710,6 +714,7 @@ impl SqlEditorWidget {
                                         widget.progress_sender.send(QueryProgress::ScriptOutput {
                                             lines: vec![format!("Cancel failed: {}", err)],
                                         });
+                                    app::awake();
                                     widget.emit_status("Cancel failed");
                                 }
                             }

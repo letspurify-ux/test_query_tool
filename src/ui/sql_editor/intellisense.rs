@@ -1548,6 +1548,7 @@ impl SqlEditorWidget {
         let (sender, receiver) = mpsc::channel::<()>();
         close_btn.set_callback(move |_| {
             let _ = sender.send(());
+            app::awake();
         });
 
         dialog.end();
@@ -1596,6 +1597,7 @@ impl SqlEditorWidget {
         let (sender, receiver) = mpsc::channel::<()>();
         close_btn.set_callback(move |_| {
             let _ = sender.send(());
+            app::awake();
         });
 
         dialog.end();

@@ -1,15 +1,7 @@
 use crate::ui::center_on_main;
 use crate::ui::constants::*;
 use crate::ui::theme;
-use fltk::{
-    button::{Button, CheckButton},
-    enums::{CallbackTrigger, FrameType},
-    group::Flex,
-    input::Input,
-    prelude::*,
-    text::{TextBuffer, TextEditor},
-    window::Window,
-};
+use fltk::{app, button::{Button, CheckButton}, enums::{CallbackTrigger, FrameType}, group::Flex, input::Input, prelude::*, text::{TextBuffer, TextEditor}, window::Window};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -263,6 +255,7 @@ impl FindReplaceDialog {
                 search_text,
                 case_sensitive: case_check_clone.value(),
             });
+            app::awake();
         });
 
         // Enter key in find input triggers Find Next
@@ -278,6 +271,7 @@ impl FindReplaceDialog {
                 search_text,
                 case_sensitive: case_check_enter.value(),
             });
+            app::awake();
         });
 
         // Replace callback
@@ -306,6 +300,7 @@ impl FindReplaceDialog {
                     replace_text,
                     case_sensitive: case_check_clone.value(),
                 });
+                app::awake();
             });
         }
 
@@ -335,6 +330,7 @@ impl FindReplaceDialog {
                     replace_text,
                     case_sensitive: case_check_clone.value(),
                 });
+                app::awake();
             });
         }
 
@@ -342,7 +338,9 @@ impl FindReplaceDialog {
         let sender_for_close = sender.clone();
         close_btn.set_callback(move |_| {
             let _ = sender_for_close.send(DialogMessage::Close);
+            app::awake();
         });
+        
 
         dialog.show();
 

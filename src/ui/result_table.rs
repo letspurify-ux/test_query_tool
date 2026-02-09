@@ -60,7 +60,7 @@ fn truncated_content_end(text: &str, max_chars: usize) -> Option<usize> {
 /// Minimum interval between UI updates during streaming
 const UI_UPDATE_INTERVAL: Duration = Duration::from_millis(0);
 /// Maximum rows to buffer before forcing a UI update
-const MAX_BUFFERED_ROWS: usize = 1;
+const MAX_BUFFERED_ROWS: usize = 5000;
 /// Stop computing column widths after this many rows (widths stabilize quickly)
 const WIDTH_SAMPLE_ROWS: usize = 5000;
 
