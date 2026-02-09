@@ -1192,6 +1192,17 @@ impl ObjectBrowserWidget {
 
                 match (choice_label.as_str(), &item_info) {
                     ("Select Data (Top 100)", ObjectItem::Simple { object_name, .. }) => {
+                        let Some(conn_guard) = try_lock_connection(connection) else {
+                            let _ = action_sender.send(ObjectActionResult::QueryAlreadyRunning);
+                            app::awake();
+                            return;
+                        };
+                        if !conn_guard.is_connected() {
+                            drop(conn_guard);
+                            fltk::dialog::alert_default("Not connected to database");
+                            return;
+                        }
+                        drop(conn_guard);
                         let sql = format!("SELECT * FROM {} WHERE ROWNUM <= 100", object_name);
                         let cb_opt = sql_callback.borrow_mut().take();
                         if let Some(mut cb) = cb_opt {
