@@ -134,6 +134,7 @@ impl QueryHistoryDialog {
 
         let history = QueryHistory::load();
 
+        let current_group = fltk::group::Group::try_current();
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut dialog = Window::default()
@@ -261,6 +262,7 @@ impl QueryHistoryDialog {
 
         main_flex.end();
         dialog.end();
+        fltk::group::Group::set_current(current_group.as_ref());
 
         popups.borrow_mut().push(dialog.clone());
         // State for selected query

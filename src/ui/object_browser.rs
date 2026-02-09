@@ -1182,10 +1182,18 @@ impl ObjectBrowserWidget {
             let mouse_x = fltk::app::event_x();
             let mouse_y = fltk::app::event_y();
 
+            // Prevent menu from being added to parent container
+            let current_group = fltk::group::Group::try_current();
+            fltk::group::Group::set_current(None::<&fltk::group::Group>);
+
             let mut menu = fltk::menu::MenuButton::new(mouse_x, mouse_y, 0, 0, None);
             menu.set_color(theme::panel_raised());
             menu.set_text_color(theme::text_primary());
             menu.add_choice(menu_choices);
+
+            if let Some(ref group) = current_group {
+                fltk::group::Group::set_current(Some(group));
+            }
 
             if let Some(choice_item) = menu.popup() {
                 let choice_label = choice_item.label().unwrap_or_default();
@@ -1600,6 +1608,7 @@ impl ObjectBrowserWidget {
     fn show_info_dialog(title: &str, content: &str) {
         use fltk::{prelude::*, text::TextDisplay, window::Window};
 
+        let current_group = fltk::group::Group::try_current();
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut dialog = Window::default().with_size(700, 500).with_label(title);
@@ -1631,6 +1640,7 @@ impl ObjectBrowserWidget {
 
         dialog.end();
         dialog.show();
+        fltk::group::Group::set_current(current_group.as_ref());
 
         while dialog.shown() {
             fltk::app::wait();

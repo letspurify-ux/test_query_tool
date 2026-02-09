@@ -38,6 +38,7 @@ impl ConnectionDialog {
         let result: Rc<RefCell<Option<ConnectionInfo>>> = Rc::new(RefCell::new(None));
         let config = Rc::new(RefCell::new(AppConfig::load()));
 
+        let current_group = fltk::group::Group::try_current();
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let dialog_w = 620;
@@ -226,6 +227,7 @@ impl ConnectionDialog {
 
         root.end();
         dialog.end();
+        fltk::group::Group::set_current(current_group.as_ref());
 
         popups.borrow_mut().push(dialog.clone());
 

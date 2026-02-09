@@ -119,6 +119,7 @@ impl FindReplaceDialog {
         };
         let height = if show_replace { 180 } else { 130 };
 
+        let current_group = fltk::group::Group::try_current();
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut dialog = Window::default().with_size(450, height).with_label(title);
@@ -224,6 +225,7 @@ impl FindReplaceDialog {
 
         main_flex.end();
         dialog.end();
+        fltk::group::Group::set_current(current_group.as_ref());
 
         popups.borrow_mut().push(dialog.clone());
         let session_snapshot = FIND_REPLACE_SESSION.with(|state| state.borrow().clone());
