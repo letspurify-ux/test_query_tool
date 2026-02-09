@@ -1,6 +1,6 @@
 use oracle::sql_type::{OracleType, RefCursor};
 use oracle::{Connection, Error as OracleError, Row, Statement};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crate::db::session::{BindDataType, BindValue, CompiledObject, SessionState};
@@ -2607,6 +2607,94 @@ impl ObjectBrowser {
         }
 
         Ok(routines)
+    }
+
+    pub fn get_all_package_routines(
+        conn: &Connection,
+    ) -> Result<HashMap<String, Vec<PackageRoutine>>, OracleError> {
+        let sql = r#"
+            SELECT
+                p.object_name,
+                p.procedure_name,
+                CASE
+                    WHEN arg.has_return = 1 THEN 'FUNCTION'
+                    ELSE 'PROCEDURE'
+                END AS routine_type
+            FROM user_procedures p
+            LEFT JOIN (
+                SELECT
+                    a.package_name,
+                    a.object_name,
+                    a.overload,
+                    MAX(CASE WHEN a.position = 0 THEN 1 ELSE 0 END) AS has_return
+                FROM user_arguments a
+                GROUP BY
+                    a.package_name,
+                    a.object_name,
+                    a.overload
+            ) arg
+                ON arg.package_name = p.object_name
+               AND arg.object_name = p.procedure_name
+               AND (
+                        arg.overload = p.overload
+                     OR (arg.overload IS NULL AND p.overload IS NULL)
+               )
+            WHERE p.object_type = 'PACKAGE'
+              AND p.procedure_name IS NOT NULL
+            ORDER BY p.object_name, p.procedure_name
+        "#;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let rows = match stmt.query(&[]) {
+            Ok(rows) => rows,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+
+        let mut routines_by_package: HashMap<String, Vec<PackageRoutine>> = HashMap::new();
+        for row_result in rows {
+            let row: Row = match row_result {
+                Ok(row) => row,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let package_name: String = match row.get(0) {
+                Ok(package_name) => package_name,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let name: String = match row.get(1) {
+                Ok(name) => name,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            let routine_type: String = match row.get(2) {
+                Ok(routine_type) => routine_type,
+                Err(err) => {
+                    eprintln!("Database operation failed: {err}");
+                    return Err(err);
+                }
+            };
+            routines_by_package
+                .entry(package_name)
+                .or_default()
+                .push(PackageRoutine { name, routine_type });
+        }
+
+        Ok(routines_by_package)
     }
 
     pub fn get_procedure_arguments(
