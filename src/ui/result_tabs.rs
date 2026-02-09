@@ -212,18 +212,10 @@ impl ResultTabsWidget {
             script_output.display.set_text_size(size as i32);
             script_output.display.redraw();
         }
-        let mut data = self.data.borrow_mut();
-        for tab in data.iter_mut() {
-            tab.table.apply_font_settings(profile, size);
-        }
     }
 
     pub fn set_max_cell_display_chars(&mut self, max_chars: usize) {
         self.max_cell_display_chars.set(max_chars);
-        let mut data = self.data.borrow_mut();
-        for tab in data.iter_mut() {
-            tab.table.set_max_cell_display_chars(max_chars);
-        }
     }
 
     pub fn clear(&mut self) {

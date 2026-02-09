@@ -191,9 +191,14 @@ impl ObjectBrowserWidget {
         self.filter_input.set_text_size(ui_size);
         self.tree.set_item_label_font(profile.normal);
         self.tree.set_item_label_size(ui_size);
+        let filter_text = self.filter_input.value().to_lowercase();
+        let cache_snapshot = self.object_cache.borrow().clone();
+        Self::rebuild_root_categories(&mut self.tree);
+        Self::populate_tree(&mut self.tree, &cache_snapshot, &filter_text);
         // Force layout recalculation so new font metrics take effect immediately.
         let (x, y, w, h) = (self.tree.x(), self.tree.y(), self.tree.w(), self.tree.h());
         self.tree.resize(x, y, w, h);
+        self.flex.layout();
         self.filter_input.redraw();
         self.tree.redraw();
     }
@@ -1746,6 +1751,27 @@ impl ObjectBrowserWidget {
                         break;
                     }
                 }
+            }
+        }
+    }
+
+    fn rebuild_root_categories(tree: &mut Tree) {
+        let categories = [
+            "Tables",
+            "Views",
+            "Procedures",
+            "Functions",
+            "Sequences",
+            "Packages",
+        ];
+
+        for category in categories {
+            if let Some(item) = tree.find_item(category) {
+                let _ = tree.remove(&item);
+            }
+            tree.add(category);
+            if let Some(mut item) = tree.find_item(category) {
+                item.close();
             }
         }
     }

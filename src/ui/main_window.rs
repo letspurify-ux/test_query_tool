@@ -425,6 +425,8 @@ impl MainWindow {
             .object_browser
             .apply_font_settings(unified_profile, ui_size);
         Self::apply_runtime_ui_font(state, unified_profile.normal, ui_size);
+        state.right_flex.layout();
+        state.window.redraw();
         app::redraw();
         // Force FLTK to process the pending redraw immediately, so font
         // changes are visible right after the settings dialog closes
