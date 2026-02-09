@@ -2536,26 +2536,13 @@ impl ObjectBrowser {
     ) -> Result<Vec<PackageRoutine>, OracleError> {
         let sql = r#"
             SELECT
-                p.procedure_name,
-                CASE
-                    WHEN EXISTS (
-                        SELECT 1
-                        FROM user_arguments a
-                        WHERE a.package_name = p.object_name
-                          AND a.object_name = p.procedure_name
-                          AND a.position = 0
-                          AND a.argument_name IS NULL
-                    ) THEN 'FUNCTION'
-                    ELSE 'PROCEDURE'
-                END AS routine_type
-            FROM (
-                SELECT DISTINCT object_name, procedure_name
-                FROM user_procedures
-                WHERE object_type = 'PACKAGE'
-                  AND object_name = :1
-                  AND procedure_name IS NOT NULL
-            ) p
-            ORDER BY p.procedure_name
+                procedure_name,
+                NVL(procedure_type, 'PROCEDURE') AS routine_type
+            FROM user_procedures
+            WHERE object_type = 'PACKAGE'
+              AND object_name = :1
+              AND procedure_name IS NOT NULL
+            ORDER BY procedure_name
         "#;
         let mut stmt = match conn.statement(sql).build() {
             Ok(stmt) => stmt,
