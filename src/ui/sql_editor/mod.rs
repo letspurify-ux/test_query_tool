@@ -1028,7 +1028,7 @@ impl SqlEditorWidget {
         let sender = self.ui_action_sender.clone();
         thread::spawn(move || {
             // Use separate connection path for cancel (no blocking on main mutex)
-            let conn = current_query_connection.lock().unwrap().clone();
+            let conn = SqlEditorWidget::clone_current_query_connection(&current_query_connection);
 
             let result = if let Some(db_conn) = conn {
                 db_conn.break_execution().map_err(|err| err.to_string())
@@ -1039,6 +1039,33 @@ impl SqlEditorWidget {
             let _ = sender.send(UiActionResult::Cancel(result));
             app::awake();
         });
+    }
+
+    fn clone_current_query_connection(
+        current_query_connection: &Arc<Mutex<Option<Arc<Connection>>>>,
+    ) -> Option<Arc<Connection>> {
+        match current_query_connection.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => {
+                eprintln!("Warning: current query connection lock was poisoned; recovering.");
+                poisoned.into_inner().clone()
+            }
+        }
+    }
+
+    fn set_current_query_connection(
+        current_query_connection: &Arc<Mutex<Option<Arc<Connection>>>>,
+        value: Option<Arc<Connection>>,
+    ) {
+        match current_query_connection.lock() {
+            Ok(mut guard) => {
+                *guard = value;
+            }
+            Err(poisoned) => {
+                eprintln!("Warning: current query connection lock was poisoned; recovering.");
+                *poisoned.into_inner() = value;
+            }
+        }
     }
 
     pub fn set_execute_callback<F>(&mut self, callback: F)

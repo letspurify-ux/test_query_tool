@@ -1340,10 +1340,8 @@ impl MainWindow {
                             MainWindow::open_query_history_dialog(&state_for_menu);
                         }
                         "Tools/Auto-Commit" => {
-                            let enabled = m
-                                .find_item("&Tools/&Auto-Commit\t")
-                                .map(|item| item.value())
-                                .unwrap_or(false);
+                            let mut item = m.find_item("&Tools/&Auto-Commit\t");
+                            let enabled = item.as_ref().map(|item| item.value()).unwrap_or(false);
                             let status = if enabled {
                                 "Auto-commit enabled"
                             } else {
@@ -1353,9 +1351,21 @@ impl MainWindow {
                                 let s = state_for_menu.borrow();
                                 s.connection.clone()
                             };
+                            if let Some(mut connection) = crate::db::try_lock_connection(&connection)
                             {
-                                let mut connection = lock_connection(&connection);
                                 connection.set_auto_commit(enabled);
+                            } else {
+                                fltk::dialog::alert_default(
+                                    "Connection is busy. Try again after the current operation finishes.",
+                                );
+                                if let Some(mut item) = item.take() {
+                                    if enabled {
+                                        item.clear();
+                                    } else {
+                                        item.set();
+                                    }
+                                }
+                                return;
                             }
                             let mut s = state_for_menu.borrow_mut();
                             let conn_info = s.connection_info.borrow().clone();
