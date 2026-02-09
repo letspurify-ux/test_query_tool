@@ -2735,39 +2735,27 @@ impl SqlEditorWidget {
             || sql_upper.starts_with("DISC")
             || sql_upper.starts_with('@');
 
-        let conn_guard = lock_connection(&self.connection);
+        // Pre-check connection status without holding lock for long
+        {
+            let conn_guard = lock_connection(&self.connection);
 
-        // Only check connection status if this is not a CONNECT/DISCONNECT command
-        if !is_connect_command && !conn_guard.is_connected() {
-            drop(conn_guard);
-            fltk::dialog::alert_default("Not connected to database");
-            return;
-        }
+            // Only check connection status if this is not a CONNECT/DISCONNECT command
+            if !is_connect_command && !conn_guard.is_connected() {
+                fltk::dialog::alert_default("Not connected to database");
+                return;
+            }
 
-        let conn_name = if conn_guard.is_connected() {
-            conn_guard.get_info().name.clone()
-        } else {
-            String::new()
-        };
-        let auto_commit = conn_guard.auto_commit();
+            // For normal commands (not CONNECT/DISCONNECT), we need a connection
+            if !is_connect_command && conn_guard.get_connection().is_none() {
+                fltk::dialog::alert_default("Not connected to database");
+                return;
+            }
+        } // Release lock early for the pre-check
+
         let shared_connection = self.connection.clone();
         let query_timeout = Self::parse_timeout(&self.timeout_input.value());
-
-        let db_conn_opt = conn_guard.get_connection();
-        let session = conn_guard.session_state();
-
-        // For normal commands (not CONNECT/DISCONNECT), we need a connection
-        if !is_connect_command && db_conn_opt.is_none() {
-            drop(conn_guard);
-            fltk::dialog::alert_default("Not connected to database");
-            return;
-        }
-
-        drop(conn_guard); // Release the lock before spawning thread
-
         let sql_text = sql.to_string();
         let sender = self.progress_sender.clone();
-        let conn_opt = db_conn_opt; // Option<Arc<Connection>>
         let query_running = self.query_running.clone();
 
         *query_running.borrow_mut() = true;
@@ -2783,8 +2771,19 @@ impl SqlEditorWidget {
                     base_dir: PathBuf,
                 }
 
-                let mut conn_opt = conn_opt;
-                let mut conn_name = conn_name;
+                // Acquire connection lock inside thread and hold it during execution
+                let conn_guard = lock_connection(&shared_connection);
+
+                let mut conn_opt = conn_guard.get_connection();
+                let mut conn_name = if conn_guard.is_connected() {
+                    conn_guard.get_info().name.clone()
+                } else {
+                    String::new()
+                };
+                let auto_commit = conn_guard.auto_commit();
+                let session = conn_guard.session_state();
+
+                // Keep conn_guard alive (don't drop it) so the lock is held during execution
 
                 let items = QueryExecutor::split_script_items(&sql_text);
                 if items.is_empty() {
