@@ -15,8 +15,7 @@ use std::thread;
 use oracle::Connection;
 
 use crate::db::{
-    lock_connection, ObjectBrowser, ProcedureArgument, SequenceInfo, SharedConnection,
-    TableColumnDetail,
+    ObjectBrowser, ProcedureArgument, SequenceInfo, SharedConnection, TableColumnDetail,
 };
 use crate::ui::intellisense::{
     detect_sql_context, get_word_at_cursor, IntellisenseData, IntellisensePopup, SqlContext,
@@ -885,11 +884,15 @@ impl SqlEditorWidget {
         let sender = column_sender.clone();
         let table_key_for_thread = table_key.clone();
         thread::spawn(move || {
-            let conn_guard = lock_connection(&connection);
-            let conn = conn_guard.get_connection();
-            drop(conn_guard);
+            // Try to acquire connection lock without blocking
+            // For column loading (background task), silently ignore if busy
+            let Some(conn_guard) = crate::db::try_lock_connection(&connection) else {
+                return;
+            };
 
-            let columns = if let Some(conn) = conn {
+            let columns = if !conn_guard.is_connected() {
+                Vec::new()
+            } else if let Some(conn) = conn_guard.get_connection() {
                 match crate::db::ObjectBrowser::get_table_columns(
                     conn.as_ref(),
                     &table_key_for_thread,
@@ -1668,15 +1671,19 @@ impl SqlEditorWidget {
         set_cursor(Cursor::Wait);
         app::flush();
         thread::spawn(move || {
-            let conn = {
-                let conn_guard = lock_connection(&connection);
-                if !conn_guard.is_connected() {
-                    None
-                } else {
-                    conn_guard.get_connection()
-                }
+            // Try to acquire connection lock without blocking
+            let Some(conn_guard) = crate::db::try_lock_connection(&connection) else {
+                // Query is already running, notify user
+                let _ = sender.send(UiActionResult::QueryAlreadyRunning);
+                app::awake();
+                set_cursor(Cursor::Default);
+                app::flush();
+                return;
             };
-            let result = if let Some(db_conn) = conn {
+
+            let result = if !conn_guard.is_connected() {
+                Err("Not connected to database".to_string())
+            } else if let Some(db_conn) = conn_guard.get_connection() {
                 Self::describe_object(db_conn.as_ref(), &word, qualifier.as_deref())
             } else {
                 Err("Not connected to database".to_string())

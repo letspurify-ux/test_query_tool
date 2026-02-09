@@ -16,8 +16,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
 use crate::db::{
-    lock_connection, ConnectionInfo, QueryExecutor, QueryResult, SharedConnection,
-    TableColumnDetail,
+    ConnectionInfo, QueryExecutor, QueryResult, SharedConnection, TableColumnDetail,
 };
 use oracle::Connection;
 use crate::ui::constants::*;
@@ -118,6 +117,7 @@ enum UiActionResult {
     Commit(Result<(), String>),
     Rollback(Result<(), String>),
     Cancel(Result<(), String>),
+    QueryAlreadyRunning,
 }
 
 #[derive(Clone)]
@@ -713,6 +713,11 @@ impl SqlEditorWidget {
                                     widget.emit_status("Cancel failed");
                                 }
                             }
+                            UiActionResult::QueryAlreadyRunning => {
+                                fltk::dialog::message_default(
+                                    "A query is already running. Please wait for it to complete."
+                                );
+                            }
                         }
                         if should_reset_cursor {
                             set_cursor(Cursor::Default);
@@ -869,15 +874,19 @@ impl SqlEditorWidget {
         set_cursor(Cursor::Wait);
         app::flush();
         thread::spawn(move || {
-            let conn = {
-                let conn_guard = lock_connection(&connection);
-                if !conn_guard.is_connected() {
-                    None
-                } else {
-                    conn_guard.get_connection()
-                }
+            // Try to acquire connection lock without blocking
+            let Some(conn_guard) = crate::db::try_lock_connection(&connection) else {
+                // Query is already running, notify user
+                let _ = sender.send(UiActionResult::QueryAlreadyRunning);
+                app::awake();
+                set_cursor(Cursor::Default);
+                app::flush();
+                return;
             };
-            let result = if let Some(db_conn) = conn {
+
+            let result = if !conn_guard.is_connected() {
+                Err("Not connected to database".to_string())
+            } else if let Some(db_conn) = conn_guard.get_connection() {
                 QueryExecutor::get_explain_plan(db_conn.as_ref(), &sql)
                     .map_err(|err| err.to_string())
             } else {
@@ -963,15 +972,19 @@ impl SqlEditorWidget {
         set_cursor(Cursor::Wait);
         app::flush();
         thread::spawn(move || {
-            let conn = {
-                let conn_guard = lock_connection(&connection);
-                if !conn_guard.is_connected() {
-                    None
-                } else {
-                    conn_guard.get_connection()
-                }
+            // Try to acquire connection lock without blocking
+            let Some(conn_guard) = crate::db::try_lock_connection(&connection) else {
+                // Query is already running, notify user
+                let _ = sender.send(UiActionResult::QueryAlreadyRunning);
+                app::awake();
+                set_cursor(Cursor::Default);
+                app::flush();
+                return;
             };
-            let result = if let Some(db_conn) = conn {
+
+            let result = if !conn_guard.is_connected() {
+                Err("Not connected to database".to_string())
+            } else if let Some(db_conn) = conn_guard.get_connection() {
                 db_conn.commit().map_err(|err| err.to_string())
             } else {
                 Err("Not connected to database".to_string())
@@ -988,15 +1001,19 @@ impl SqlEditorWidget {
         set_cursor(Cursor::Wait);
         app::flush();
         thread::spawn(move || {
-            let conn = {
-                let conn_guard = lock_connection(&connection);
-                if !conn_guard.is_connected() {
-                    None
-                } else {
-                    conn_guard.get_connection()
-                }
+            // Try to acquire connection lock without blocking
+            let Some(conn_guard) = crate::db::try_lock_connection(&connection) else {
+                // Query is already running, notify user
+                let _ = sender.send(UiActionResult::QueryAlreadyRunning);
+                app::awake();
+                set_cursor(Cursor::Default);
+                app::flush();
+                return;
             };
-            let result = if let Some(db_conn) = conn {
+
+            let result = if !conn_guard.is_connected() {
+                Err("Not connected to database".to_string())
+            } else if let Some(db_conn) = conn_guard.get_connection() {
                 db_conn.rollback().map_err(|err| err.to_string())
             } else {
                 Err("Not connected to database".to_string())
