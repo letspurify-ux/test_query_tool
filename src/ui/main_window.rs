@@ -98,6 +98,8 @@ impl MainWindow {
         let config = AppConfig::load();
         let connection = create_shared_connection();
 
+        let current_group = fltk::group::Group::try_current();
+        
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut window = Window::default()
@@ -350,6 +352,11 @@ impl MainWindow {
                 MainWindow::open_query_history_dialog(&state_for_history);
             }
         });
+
+        // Restore current group
+        if let Some(ref group) = current_group {
+            fltk::group::Group::set_current(Some(group));
+        }
 
         Self { state }
     }
@@ -1459,6 +1466,13 @@ impl MainWindow {
         let (fg_r, fg_g, fg_b) = theme::app_foreground().to_rgb();
         app::foreground(fg_r, fg_g, fg_b);
 
+
+        let current_group = fltk::group::Group::try_current();
+
+
+        fltk::group::Group::set_current(None::<&fltk::group::Group>);
+
+
         let mut main_window = MainWindow::new();
         main_window.setup_callbacks();
         main_window.show();
@@ -1469,6 +1483,11 @@ impl MainWindow {
                 eprintln!("Failed to run app: {err}");
             }
         }
+        // Restore current group
+        if let Some(ref group) = current_group {
+            fltk::group::Group::set_current(Some(group));
+        }
+
     }
 
     #[allow(dead_code)]
