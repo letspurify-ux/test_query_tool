@@ -611,10 +611,7 @@ impl ObjectBrowserWidget {
                                             // Try to acquire connection lock without blocking
                                             let Some(conn_guard) = try_lock_connection(&connection)
                                             else {
-                                                // Query is already running, don't wait
-                                                fltk::dialog::message_default(
-                                                    "A query is already running",
-                                                );
+                                                // Query is already running, silently ignore
                                                 return;
                                             };
 
@@ -1214,8 +1211,7 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, don't wait
-                                fltk::dialog::message_default("A query is already running");
+                                // Query is already running, silently ignore
                                 return;
                             };
 
@@ -1265,8 +1261,7 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, don't wait
-                                fltk::dialog::message_default("A query is already running");
+                                // Query is already running, silently ignore
                                 return;
                             };
 
@@ -1318,8 +1313,7 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, don't wait
-                                fltk::dialog::message_default("A query is already running");
+                                // Query is already running, silently ignore
                                 return;
                             };
 
@@ -1399,8 +1393,7 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, don't wait
-                                fltk::dialog::message_default("A query is already running");
+                                // Query is already running, silently ignore
                                 return;
                             };
 
@@ -1425,8 +1418,7 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, don't wait
-                                fltk::dialog::message_default("A query is already running");
+                                // Query is already running, silently ignore
                                 return;
                             };
 
@@ -1451,8 +1443,7 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, don't wait
-                                fltk::dialog::message_default("A query is already running");
+                                // Query is already running, silently ignore
                                 return;
                             };
 
@@ -1477,8 +1468,7 @@ impl ObjectBrowserWidget {
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
-                                // Query is already running, don't wait
-                                fltk::dialog::message_default("A query is already running");
+                                // Query is already running, silently ignore
                                 return;
                             };
 
@@ -1519,8 +1509,7 @@ impl ObjectBrowserWidget {
                             thread::spawn(move || {
                                 // Try to acquire connection lock without blocking
                                 let Some(conn_guard) = try_lock_connection(&connection) else {
-                                    // Query is already running, don't wait
-                                    fltk::dialog::message_default("A query is already running");
+                                    // Query is already running, silently ignore
                                     return;
                                 };
 
