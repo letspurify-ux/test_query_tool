@@ -456,8 +456,9 @@ impl SqlEditorWidget {
                 return;
             }
 
-            // Reschedule for next poll
-            let delay = if hit_budget {
+            // Reschedule for next poll: if we processed messages, poll again immediately
+            // to keep the UI responsive for streaming rows.
+            let delay = if hit_budget || processed > 0 {
                 0.0
             } else {
                 PROGRESS_POLL_INTERVAL_SECONDS
