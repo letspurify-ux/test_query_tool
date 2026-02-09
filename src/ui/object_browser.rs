@@ -598,57 +598,58 @@ impl ObjectBrowserWidget {
                     }
 
                     if mouse_button == fltk::app::MouseButton::Left {
-                        if let Some(item) = t.first_selected_item() {
-                            if let Some(ObjectItem::Simple {
-                                object_type,
-                                object_name,
-                            }) = Self::get_item_info(&item)
-                            {
-                                if object_type == "PACKAGES" {
-                                    let package_name = object_name.clone();
-                                    let should_fetch = {
-                                        let cache = object_cache.borrow();
-                                        !cache.package_routines.contains_key(&package_name)
-                                    };
-                                    if should_fetch {
-                                        let connection = connection.clone();
-                                        let sender = action_sender.clone();
-                                        thread::spawn(move || {
-                                            // Try to acquire connection lock without blocking
-                                            let Some(conn_guard) = try_lock_connection(&connection)
-                                            else {
-                                                // Query is already running, notify user
-                                                let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
-                                                app::awake();
-                                                return;
-                                            };
-
-                                            let result = if !conn_guard.is_connected() {
-                                                Err("Not connected to database".to_string())
-                                            } else if let Some(db_conn) = conn_guard.get_connection() {
-                                                ObjectBrowser::get_package_routines(
-                                                    db_conn.as_ref(),
-                                                    &package_name,
-                                                )
-                                                .map_err(|err| err.to_string())
-                                            } else {
-                                                Err("Not connected to database".to_string())
-                                            };
-
-                                            let _ = sender.send(ObjectActionResult::PackageRoutines {
-                                                package_name,
-                                                result,
-                                            });
-                                            app::awake();
-                                            // conn_guard drops here, releasing the lock
-                                        });
-                                    }
-                                }
-                            }
-                        }
-
                         if fltk::app::event_clicks() {
                             if let Some(item) = t.first_selected_item() {
+                                // Double-click on a package node: load sub-items
+                                if let Some(ObjectItem::Simple {
+                                    object_type,
+                                    object_name,
+                                }) = Self::get_item_info(&item)
+                                {
+                                    if object_type == "PACKAGES" {
+                                        let package_name = object_name.clone();
+                                        let should_fetch = {
+                                            let cache = object_cache.borrow();
+                                            !cache.package_routines.contains_key(&package_name)
+                                        };
+                                        if should_fetch {
+                                            let connection = connection.clone();
+                                            let sender = action_sender.clone();
+                                            thread::spawn(move || {
+                                                // Try to acquire connection lock without blocking
+                                                let Some(conn_guard) = try_lock_connection(&connection)
+                                                else {
+                                                    // Query is already running, notify user
+                                                    let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
+                                                    app::awake();
+                                                    return;
+                                                };
+
+                                                let result = if !conn_guard.is_connected() {
+                                                    Err("Not connected to database".to_string())
+                                                } else if let Some(db_conn) = conn_guard.get_connection() {
+                                                    ObjectBrowser::get_package_routines(
+                                                        db_conn.as_ref(),
+                                                        &package_name,
+                                                    )
+                                                    .map_err(|err| err.to_string())
+                                                } else {
+                                                    Err("Not connected to database".to_string())
+                                                };
+
+                                                let _ = sender.send(ObjectActionResult::PackageRoutines {
+                                                    package_name,
+                                                    result,
+                                                });
+                                                app::awake();
+                                                // conn_guard drops here, releasing the lock
+                                            });
+                                        }
+                                        return true;
+                                    }
+                                }
+
+                                // Double-click on other items: insert text into SQL editor
                                 if let Some(insert_text) = Self::get_insert_text(&item) {
                                     // Take the callback out, call it, then put it back
                                     // This ensures the RefCell is not borrowed during callback execution

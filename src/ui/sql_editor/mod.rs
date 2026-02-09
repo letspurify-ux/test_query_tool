@@ -12,6 +12,7 @@ use fltk::{
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
@@ -134,6 +135,7 @@ pub struct SqlEditorWidget {
     ui_action_sender: mpsc::Sender<UiActionResult>,
     query_running: Rc<RefCell<bool>>,
     current_query_connection: Arc<Mutex<Option<Arc<Connection>>>>,
+    cancel_flag: Arc<AtomicBool>,
     intellisense_data: Rc<RefCell<IntellisenseData>>,
     intellisense_popup: Rc<RefCell<IntellisensePopup>>,
     highlighter: Rc<RefCell<SqlHighlighter>>,
@@ -312,6 +314,7 @@ impl SqlEditorWidget {
         let (ui_action_sender, ui_action_receiver) = mpsc::channel::<UiActionResult>();
         let query_running = Rc::new(RefCell::new(false));
         let current_query_connection = Arc::new(Mutex::new(None));
+        let cancel_flag = Arc::new(AtomicBool::new(false));
 
         let intellisense_data = Rc::new(RefCell::new(IntellisenseData::new()));
         let intellisense_popup = Rc::new(RefCell::new(IntellisensePopup::new()));
@@ -340,6 +343,7 @@ impl SqlEditorWidget {
             ui_action_sender,
             query_running: query_running.clone(),
             current_query_connection: current_query_connection.clone(),
+            cancel_flag,
             intellisense_data,
             intellisense_popup,
             highlighter,
@@ -378,6 +382,7 @@ impl SqlEditorWidget {
         query_running: Rc<RefCell<bool>>,
     ) {
         let execute_callback = self.execute_callback.clone();
+        let cancel_flag = self.cancel_flag.clone();
 
         // Wrap receiver in Rc<RefCell> to share across timeout callbacks
         let receiver: Rc<RefCell<mpsc::Receiver<QueryProgress>>> =
@@ -388,14 +393,21 @@ impl SqlEditorWidget {
             progress_callback: Rc<RefCell<Option<Box<dyn FnMut(QueryProgress)>>>>,
             query_running: Rc<RefCell<bool>>,
             execute_callback: Rc<RefCell<Option<Box<dyn FnMut(&QueryResult)>>>>,
+            cancel_flag: Arc<AtomicBool>,
         ) {
             let mut disconnected = false;
             let mut processed = 0usize;
             let mut hit_budget = false;
             let mut pending_rows: Vec<(usize, Vec<Vec<String>>)> = Vec::new();
 
-            let flush_rows = |pending_rows: &mut Vec<(usize, Vec<Vec<String>>)>| {
+            let flush_rows = |pending_rows: &mut Vec<(usize, Vec<Vec<String>>)>,
+                              cancelled: bool| {
                 if pending_rows.is_empty() {
+                    return;
+                }
+                if cancelled {
+                    // Cancel 상태이면 버퍼링된 Row 메시지를 모두 버림
+                    pending_rows.clear();
                     return;
                 }
                 for (index, rows) in pending_rows.drain(..) {
@@ -420,9 +432,14 @@ impl SqlEditorWidget {
                 match message {
                     Ok(message) => {
                         processed += 1;
+                        let cancelled = cancel_flag.load(Ordering::Relaxed);
 
                         match &message {
                             QueryProgress::Rows { .. } => {
+                                if cancelled {
+                                    // Cancel 상태이면 Row 메시지를 즉시 버림
+                                    continue;
+                                }
                                 if let QueryProgress::Rows { index, rows } = message {
                                     if let Some((_, buffered)) =
                                         pending_rows.iter_mut().find(|(i, _)| *i == index)
@@ -435,7 +452,7 @@ impl SqlEditorWidget {
                                 continue;
                             }
                             QueryProgress::PromptInput { prompt, response } => {
-                                flush_rows(&mut pending_rows);
+                                flush_rows(&mut pending_rows, cancelled);
                                 let value = SqlEditorWidget::prompt_input_dialog(&prompt);
                                 let _ = response.send(value);
                                 app::awake();
@@ -446,7 +463,7 @@ impl SqlEditorWidget {
                                 timed_out,
                                 ..
                             } => {
-                                flush_rows(&mut pending_rows);
+                                flush_rows(&mut pending_rows, cancelled);
                                 if *timed_out {
                                     fltk::dialog::alert_default(&format!(
                                         "Query timed out!\n\n{}",
@@ -467,7 +484,7 @@ impl SqlEditorWidget {
                                 );
                             }
                             QueryProgress::BatchFinished => {
-                                flush_rows(&mut pending_rows);
+                                flush_rows(&mut pending_rows, cancelled);
                                 *query_running.borrow_mut() = false;
                                 set_cursor(Cursor::Default);
                                 app::flush();
@@ -485,7 +502,7 @@ impl SqlEditorWidget {
                 }
             }
 
-            flush_rows(&mut pending_rows);
+            flush_rows(&mut pending_rows, cancel_flag.load(Ordering::Relaxed));
 
             if disconnected {
                 return;
@@ -504,12 +521,13 @@ impl SqlEditorWidget {
                     Rc::clone(&progress_callback),
                     Rc::clone(&query_running),
                     Rc::clone(&execute_callback),
+                    Arc::clone(&cancel_flag),
                 );
             });
         }
 
         // Start polling
-        schedule_poll(receiver, progress_callback, query_running, execute_callback);
+        schedule_poll(receiver, progress_callback, query_running, execute_callback, cancel_flag);
     }
 
     fn setup_column_loader(&self, column_receiver: mpsc::Receiver<ColumnLoadUpdate>) {
@@ -1028,6 +1046,9 @@ impl SqlEditorWidget {
             fltk::dialog::alert_default("No query is running");
             return;
         }
+
+        // Set cancel flag immediately so the execution thread can check it
+        self.cancel_flag.store(true, Ordering::SeqCst);
 
         let current_query_connection = self.current_query_connection.clone();
         let sender = self.ui_action_sender.clone();

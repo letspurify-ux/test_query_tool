@@ -15,6 +15,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -2726,14 +2727,17 @@ impl SqlEditorWidget {
             return;
         }
 
-        // Check if this is a CONNECT or DISCONNECT command
-        // These commands should work even when not connected
-        let sql_upper = sql.trim().to_uppercase();
-        let is_connect_command = sql_upper.starts_with("CONNECT")
-            || sql_upper.starts_with("CONN ")
-            || sql_upper.starts_with("DISCONNECT")
-            || sql_upper.starts_with("DISC")
-            || sql_upper.starts_with('@');
+        // Check if any line contains a CONNECT, DISCONNECT, or @ command.
+        // These commands should work even when not connected, and in script mode
+        // they can appear on any line (not just the first).
+        let has_connect_command = sql.lines().any(|line| {
+            let trimmed = line.trim().to_uppercase();
+            trimmed.starts_with("CONNECT")
+                || trimmed.starts_with("CONN ")
+                || trimmed.starts_with("DISCONNECT")
+                || trimmed.starts_with("DISC")
+                || trimmed.starts_with('@')
+        });
 
         // Pre-check connection status without holding lock for long
         {
@@ -2745,13 +2749,13 @@ impl SqlEditorWidget {
             };
 
             // Only check connection status if this is not a CONNECT/DISCONNECT command
-            if !is_connect_command && !conn_guard.is_connected() {
+            if !has_connect_command && !conn_guard.is_connected() {
                 fltk::dialog::alert_default("Not connected to database");
                 return;
             }
 
             // For normal commands (not CONNECT/DISCONNECT), we need a connection
-            if !is_connect_command && conn_guard.get_connection().is_none() {
+            if !has_connect_command && conn_guard.get_connection().is_none() {
                 fltk::dialog::alert_default("Not connected to database");
                 return;
             }
@@ -2763,6 +2767,10 @@ impl SqlEditorWidget {
         let sender = self.progress_sender.clone();
         let query_running = self.query_running.clone();
         let current_query_connection = self.current_query_connection.clone();
+        let cancel_flag = self.cancel_flag.clone();
+
+        // Reset cancel flag before starting new execution
+        cancel_flag.store(false, Ordering::SeqCst);
 
         *query_running.borrow_mut() = true;
 
@@ -2778,7 +2786,7 @@ impl SqlEditorWidget {
                 }
 
                 // Acquire connection lock inside thread and hold it during execution
-                let conn_guard = lock_connection(&shared_connection);
+                let mut conn_guard = lock_connection(&shared_connection);
 
                 let mut conn_opt = conn_guard.get_connection();
                 let mut conn_name = if conn_guard.is_connected() {
@@ -2863,7 +2871,7 @@ impl SqlEditorWidget {
                 }];
 
                 while let Some(frame) = frames.last_mut() {
-                    if stop_execution {
+                    if stop_execution || cancel_flag.load(Ordering::Relaxed) {
                         break;
                     }
 
@@ -4689,17 +4697,23 @@ impl SqlEditorWidget {
                                         service_name,
                                     };
 
-                                    let mut shared_conn_guard = lock_connection(&shared_connection);
-                                    match shared_conn_guard.connect(conn_info.clone()) {
+                                    // Use the already-held conn_guard to avoid deadlock
+                                    match conn_guard.connect(conn_info.clone()) {
                                         Ok(_) => {
-                                            conn_opt = shared_conn_guard.get_connection();
-                                            if shared_conn_guard.is_connected() {
+                                            conn_opt = conn_guard.get_connection();
+                                            if conn_guard.is_connected() {
                                                 conn_name =
-                                                    shared_conn_guard.get_info().name.clone();
+                                                    conn_guard.get_info().name.clone();
                                             } else {
                                                 conn_name.clear();
                                             }
-                                            drop(shared_conn_guard);
+                                            // Update cancel connection so break_execution() uses the new connection
+                                            if let Some(ref conn) = conn_opt {
+                                                SqlEditorWidget::set_current_query_connection(
+                                                    &current_query_connection,
+                                                    Some(Arc::clone(conn)),
+                                                );
+                                            }
                                             match session.lock() {
                                                 Ok(mut guard) => guard.reset(),
                                                 Err(poisoned) => {
@@ -4750,16 +4764,20 @@ impl SqlEditorWidget {
                                     }
                                 }
                                 ToolCommand::Disconnect => {
-                                    let mut shared_conn_guard = lock_connection(&shared_connection);
-                                    if shared_conn_guard.is_connected() {
-                                        shared_conn_guard.disconnect();
-                                        conn_opt = shared_conn_guard.get_connection();
-                                        if shared_conn_guard.is_connected() {
-                                            conn_name = shared_conn_guard.get_info().name.clone();
+                                    // Use the already-held conn_guard to avoid deadlock
+                                    if conn_guard.is_connected() {
+                                        // Clear cancel connection before disconnect
+                                        SqlEditorWidget::set_current_query_connection(
+                                            &current_query_connection,
+                                            None,
+                                        );
+                                        conn_guard.disconnect();
+                                        conn_opt = conn_guard.get_connection();
+                                        if conn_guard.is_connected() {
+                                            conn_name = conn_guard.get_info().name.clone();
                                         } else {
                                             conn_name.clear();
                                         }
-                                        drop(shared_conn_guard);
                                         match session.lock() {
                                             Ok(mut guard) => guard.reset(),
                                             Err(poisoned) => {
@@ -5365,7 +5383,7 @@ impl SqlEditorWidget {
                                         .unwrap_or_default();
 
                                 for (cursor_name, mut cursor) in ref_cursors {
-                                    if stop_execution {
+                                    if stop_execution || cancel_flag.load(Ordering::Relaxed) {
                                         break;
                                     }
                                     let index = result_index;
@@ -5409,6 +5427,9 @@ impl SqlEditorWidget {
                                             }
                                         },
                                         &mut |row| {
+                                            if cancel_flag.load(Ordering::Relaxed) {
+                                                return false;
+                                            }
                                             if let Some(timeout_duration) = query_timeout {
                                                 if cursor_start.elapsed() >= timeout_duration {
                                                     cursor_timed_out = true;
@@ -5546,7 +5567,7 @@ impl SqlEditorWidget {
                                 }
 
                                 for (idx, mut cursor) in implicit_results.into_iter().enumerate() {
-                                    if stop_execution {
+                                    if stop_execution || cancel_flag.load(Ordering::Relaxed) {
                                         break;
                                     }
                                     let index = result_index;
@@ -5589,6 +5610,9 @@ impl SqlEditorWidget {
                                             }
                                         },
                                         &mut |row| {
+                                            if cancel_flag.load(Ordering::Relaxed) {
+                                                return false;
+                                            }
                                             if let Some(timeout_duration) = query_timeout {
                                                 if cursor_start.elapsed() >= timeout_duration {
                                                     cursor_timed_out = true;
@@ -5886,6 +5910,9 @@ impl SqlEditorWidget {
                                             }
                                         },
                                         &mut |row| {
+                                            if cancel_flag.load(Ordering::Relaxed) {
+                                                return false;
+                                            }
                                             if let Some(timeout_duration) = query_timeout {
                                                 if statement_start.elapsed() >= timeout_duration {
                                                     timed_out = true;
