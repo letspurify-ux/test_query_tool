@@ -792,6 +792,9 @@ pub struct IntellisenseData {
     all_columns_entries: Vec<NameEntry>,
     all_columns_dirty: bool,
     relations_upper: HashSet<String>,
+    /// Names of virtual tables (CTEs, subquery aliases) whose columns were
+    /// derived from SQL text rather than database metadata.
+    virtual_table_keys: HashSet<String>,
 }
 
 impl IntellisenseData {
@@ -811,6 +814,7 @@ impl IntellisenseData {
             all_columns_entries: Vec::new(),
             all_columns_dirty: false,
             relations_upper: HashSet::new(),
+            virtual_table_keys: HashSet::new(),
         }
     }
 
@@ -1025,6 +1029,28 @@ impl IntellisenseData {
                 .insert(table.clone(), Self::build_entries(columns));
         }
         self.all_columns_entries.clear();
+        self.all_columns_dirty = true;
+        self.virtual_table_keys.clear();
+    }
+
+    /// Clear previously inferred virtual table columns (CTEs, subquery aliases).
+    /// These may be stale because the user edited the SQL text.
+    pub fn clear_virtual_tables(&mut self) {
+        for key in self.virtual_table_keys.drain() {
+            self.columns.remove(&key);
+            self.column_entries_by_table.remove(&key);
+        }
+        self.all_columns_dirty = true;
+    }
+
+    /// Register columns for a virtual table (CTE or subquery alias).
+    /// These are text-derived columns, not loaded from the database.
+    pub fn set_virtual_table_columns(&mut self, name: &str, columns: Vec<String>) {
+        let key = name.to_uppercase();
+        self.columns.insert(key.clone(), columns.clone());
+        self.column_entries_by_table
+            .insert(key.clone(), Self::build_entries(&columns));
+        self.virtual_table_keys.insert(key);
         self.all_columns_dirty = true;
     }
 

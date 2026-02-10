@@ -70,6 +70,17 @@ pub struct ScopedTableRef {
 pub struct CteDefinition {
     pub name: String,
     pub explicit_columns: Vec<String>,
+    /// Tokens inside the CTE body parentheses (the SELECT statement).
+    pub body_tokens: Vec<SqlToken>,
+}
+
+/// A subquery alias with its body tokens, for column inference.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct SubqueryDefinition {
+    pub alias: String,
+    pub body_tokens: Vec<SqlToken>,
+    pub depth: usize,
 }
 
 /// Result of deep context analysis at cursor position.
@@ -84,6 +95,8 @@ pub struct CursorContext {
     pub tables_in_scope: Vec<ScopedTableRef>,
     /// CTEs defined in WITH clause
     pub ctes: Vec<CteDefinition>,
+    /// Subquery aliases with their body tokens for column inference
+    pub subqueries: Vec<SubqueryDefinition>,
     /// The qualifier before cursor (e.g., "t" in "t.col")
     pub qualifier: Option<String>,
     /// Resolved table names for the qualifier
@@ -132,6 +145,7 @@ pub fn analyze_cursor_context(before_cursor: &[SqlToken], full_statement: &[SqlT
         depth: phase_analysis.depth,
         tables_in_scope,
         ctes,
+        subqueries: table_analysis.subqueries,
         qualifier: None,
         qualifier_tables: Vec::new(),
     }
@@ -350,20 +364,22 @@ fn analyze_phase(tokens: &[SqlToken]) -> PhaseAnalysis {
 
 struct TableAnalysis {
     tables: Vec<ScopedTableRef>,
+    subqueries: Vec<SubqueryDefinition>,
 }
 
 /// Collect all table references from the full statement, tracking depth.
 /// Returns tables visible at the given `target_depth`.
 fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysis {
     let mut all_tables: Vec<ScopedTableRef> = Vec::new();
+    let mut all_subqueries: Vec<SubqueryDefinition> = Vec::new();
     let mut depth: usize = 0;
     let mut phase_stack: Vec<SqlPhase> = vec![SqlPhase::Initial];
     let mut expect_table = false;
     let mut cte_state = CteState::None;
     let mut cte_paren_depth: usize = 0;
     // Track subquery aliases: when we close a paren at a certain depth in FROM context,
-    // look for an alias
-    let mut subquery_depths: Vec<usize> = Vec::new();
+    // store (depth, start_token_idx) so we can capture body tokens
+    let mut subquery_tracks: Vec<(usize, usize)> = Vec::new(); // (depth, start_idx)
     let mut idx = 0;
 
     while idx < tokens.len() {
@@ -380,7 +396,7 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                 expect_table = false;
 
                 if matches!(parent_phase, SqlPhase::FromClause) {
-                    subquery_depths.push(depth);
+                    subquery_tracks.push((depth, idx + 1)); // depth after increment, token after '('
                 }
                 if matches!(cte_state, CteState::ExpectBody) {
                     cte_state = CteState::InBody;
@@ -394,11 +410,21 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                     cte_state = CteState::None;
                 }
 
-                let was_subquery = subquery_depths.last().copied() == Some(depth);
+                let was_subquery = subquery_tracks.last().map(|t| t.0) == Some(depth);
                 if was_subquery {
-                    subquery_depths.pop();
+                    let (_, start_idx) = subquery_tracks.pop().unwrap();
                     // Look for alias after the closing paren
                     if let Some((alias, next_idx)) = parse_subquery_alias(tokens, idx + 1) {
+                        // Capture body tokens for column inference
+                        let body_tokens: Vec<SqlToken> = tokens[start_idx..idx]
+                            .iter()
+                            .cloned()
+                            .collect();
+                        all_subqueries.push(SubqueryDefinition {
+                            alias: alias.clone(),
+                            body_tokens,
+                            depth: depth.saturating_sub(1),
+                        });
                         all_tables.push(ScopedTableRef {
                             name: alias.clone(),
                             alias: Some(alias),
@@ -442,11 +468,12 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
             SqlToken::Symbol(sym) if sym == ";" => {
                 // Statement boundary - reset everything
                 all_tables.clear();
+                all_subqueries.clear();
                 depth = 0;
                 phase_stack = vec![SqlPhase::Initial];
                 expect_table = false;
                 cte_state = CteState::None;
-                subquery_depths.clear();
+                subquery_tracks.clear();
                 idx += 1;
                 continue;
             }
@@ -607,7 +634,16 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
         .filter(|t| t.depth <= target_depth)
         .collect();
 
-    TableAnalysis { tables: visible }
+    // Filter subqueries visible at target_depth
+    let visible_subqueries: Vec<SubqueryDefinition> = all_subqueries
+        .into_iter()
+        .filter(|s| s.depth <= target_depth)
+        .collect();
+
+    TableAnalysis {
+        tables: visible,
+        subqueries: visible_subqueries,
+    }
 }
 
 /// Parse CTE definitions from WITH clause.
@@ -693,16 +729,27 @@ fn parse_ctes(tokens: &[SqlToken]) -> Vec<CteDefinition> {
             }
         }
 
-        // Skip CTE body (balanced parens)
+        // Capture CTE body tokens (balanced parens)
+        let mut body_tokens = Vec::new();
         if let Some(SqlToken::Symbol(s)) = tokens.get(idx) {
             if s == "(" {
                 idx += 1;
                 let mut paren_depth = 1;
                 while idx < tokens.len() && paren_depth > 0 {
                     match &tokens[idx] {
-                        SqlToken::Symbol(s) if s == "(" => paren_depth += 1,
-                        SqlToken::Symbol(s) if s == ")" => paren_depth -= 1,
-                        _ => {}
+                        SqlToken::Symbol(s) if s == "(" => {
+                            paren_depth += 1;
+                            body_tokens.push(tokens[idx].clone());
+                        }
+                        SqlToken::Symbol(s) if s == ")" => {
+                            paren_depth -= 1;
+                            if paren_depth > 0 {
+                                body_tokens.push(tokens[idx].clone());
+                            }
+                        }
+                        _ => {
+                            body_tokens.push(tokens[idx].clone());
+                        }
                     }
                     idx += 1;
                 }
@@ -712,6 +759,7 @@ fn parse_ctes(tokens: &[SqlToken]) -> Vec<CteDefinition> {
         ctes.push(CteDefinition {
             name: cte_name,
             explicit_columns,
+            body_tokens,
         });
 
         // Check for comma (another CTE) or end
@@ -963,6 +1011,214 @@ pub fn resolve_all_scope_tables(tables_in_scope: &[ScopedTableRef]) -> Vec<Strin
     }
 
     result
+}
+
+/// Extract projected column names from a SELECT statement's token stream.
+/// Returns column names/aliases in the order they appear in the SELECT list.
+/// Items that cannot be resolved (e.g., `*`, expressions without aliases) are omitted.
+pub fn extract_select_list_columns(tokens: &[SqlToken]) -> Vec<String> {
+    let mut columns = Vec::new();
+    let mut idx = 0;
+
+    // Find SELECT keyword
+    while idx < tokens.len() {
+        match &tokens[idx] {
+            SqlToken::Word(w) if w.eq_ignore_ascii_case("SELECT") => {
+                idx += 1;
+                break;
+            }
+            SqlToken::Comment(_) => {
+                idx += 1;
+                continue;
+            }
+            _ => {
+                idx += 1;
+                continue;
+            }
+        }
+    }
+
+    // Skip DISTINCT / ALL / UNIQUE
+    while idx < tokens.len() {
+        match &tokens[idx] {
+            SqlToken::Word(w) => {
+                let u = w.to_uppercase();
+                if matches!(u.as_str(), "DISTINCT" | "ALL" | "UNIQUE") {
+                    idx += 1;
+                    continue;
+                }
+                break;
+            }
+            SqlToken::Comment(_) => {
+                idx += 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+
+    // Collect tokens for each SELECT item (delimited by comma at depth 0)
+    let mut depth = 0usize;
+    let mut item_tokens: Vec<&SqlToken> = Vec::new();
+
+    while idx < tokens.len() {
+        let token = &tokens[idx];
+
+        match token {
+            SqlToken::Symbol(s) if s == "(" => {
+                depth += 1;
+                item_tokens.push(token);
+            }
+            SqlToken::Symbol(s) if s == ")" => {
+                depth = depth.saturating_sub(1);
+                item_tokens.push(token);
+            }
+            SqlToken::Symbol(s) if s == "," && depth == 0 => {
+                if let Some(col) = resolve_item_column_name(&item_tokens) {
+                    columns.push(col);
+                }
+                item_tokens.clear();
+            }
+            SqlToken::Word(w) if depth == 0 => {
+                let u = w.to_uppercase();
+                if matches!(u.as_str(), "FROM" | "INTO" | "BULK") {
+                    if let Some(col) = resolve_item_column_name(&item_tokens) {
+                        columns.push(col);
+                    }
+                    item_tokens.clear();
+                    break;
+                }
+                item_tokens.push(token);
+            }
+            SqlToken::Comment(_) => { /* skip */ }
+            _ => {
+                item_tokens.push(token);
+            }
+        }
+        idx += 1;
+    }
+
+    // Handle last item if we ran out of tokens (incomplete SQL)
+    if !item_tokens.is_empty() {
+        if let Some(col) = resolve_item_column_name(&item_tokens) {
+            columns.push(col);
+        }
+    }
+
+    columns
+}
+
+/// Given the tokens of a single SELECT item, determine the output column name.
+fn resolve_item_column_name(item_tokens: &[&SqlToken]) -> Option<String> {
+    let meaningful: Vec<&SqlToken> = item_tokens
+        .iter()
+        .copied()
+        .filter(|t| !matches!(t, SqlToken::Comment(_)))
+        .collect();
+
+    if meaningful.is_empty() {
+        return None;
+    }
+
+    // Check for lone `*`
+    if meaningful.len() == 1 {
+        if let SqlToken::Symbol(s) = meaningful[0] {
+            if s == "*" {
+                return None;
+            }
+        }
+    }
+
+    // Check for `qualifier.*` pattern
+    if meaningful.len() >= 2 {
+        if let SqlToken::Symbol(s) = meaningful[meaningful.len() - 1] {
+            if s == "*" {
+                return None;
+            }
+        }
+    }
+
+    let last = meaningful.last()?;
+    let second_last = if meaningful.len() >= 2 {
+        Some(meaningful[meaningful.len() - 2])
+    } else {
+        None
+    };
+
+    // Case 1: Explicit alias `... AS alias_name`
+    if let SqlToken::Word(alias) = last {
+        if let Some(SqlToken::Word(kw)) = second_last {
+            if kw.eq_ignore_ascii_case("AS") {
+                return Some(alias.clone());
+            }
+        }
+    }
+
+    // Case 2: Implicit alias — last token is a Word following `)` or another Word
+    if let SqlToken::Word(alias) = last {
+        let alias_upper = alias.to_uppercase();
+        if !is_select_item_trailing_keyword(&alias_upper) {
+            if let Some(prev) = second_last {
+                let is_implicit = match prev {
+                    SqlToken::Symbol(s) if s == ")" => true,
+                    SqlToken::Word(_) => {
+                        // Two consecutive words: the second is an implicit alias
+                        // unless the first is AS (already handled above)
+                        meaningful.len() > 1
+                    }
+                    SqlToken::Symbol(s) if s == "." => false, // qualifier.column, not alias
+                    _ => false,
+                };
+                if is_implicit {
+                    return Some(alias.clone());
+                }
+            }
+        }
+    }
+
+    // Case 3: Simple column reference (single word)
+    if meaningful.len() == 1 {
+        if let SqlToken::Word(name) = meaningful[0] {
+            return Some(name.clone());
+        }
+    }
+
+    // Case 4: Qualified column `qualifier.column`
+    if meaningful.len() == 3 {
+        if let (SqlToken::Word(_), SqlToken::Symbol(dot), SqlToken::Word(col)) =
+            (meaningful[0], meaningful[1], meaningful[2])
+        {
+            if dot == "." {
+                return Some(col.clone());
+            }
+        }
+    }
+
+    // Expression without alias — cannot determine column name
+    None
+}
+
+fn is_select_item_trailing_keyword(word: &str) -> bool {
+    matches!(
+        word,
+        "FROM"
+            | "WHERE"
+            | "GROUP"
+            | "ORDER"
+            | "HAVING"
+            | "INTO"
+            | "UNION"
+            | "INTERSECT"
+            | "EXCEPT"
+            | "MINUS"
+            | "FETCH"
+            | "FOR"
+            | "LIMIT"
+            | "OFFSET"
+            | "CONNECT"
+            | "START"
+            | "BULK"
+    )
 }
 
 #[cfg(test)]

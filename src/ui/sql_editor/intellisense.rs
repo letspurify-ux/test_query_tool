@@ -777,15 +777,58 @@ impl SqlEditorWidget {
             intellisense_context::resolve_all_scope_tables(&deep_ctx.tables_in_scope)
         };
 
-        // Also check if CTE names should be loaded as virtual tables
-        // CTE names are already in tables_in_scope, but we also pre-load columns
-        // for any CTE whose underlying tables we know about
         let include_columns = qualifier.is_some()
             || matches!(context, SqlContext::ColumnName | SqlContext::ColumnOrAll);
 
+        // Register CTE and subquery alias columns (text-based, no DB needed)
+        {
+            let mut data = intellisense_data.borrow_mut();
+            // Clear stale virtual table columns from previous trigger
+            data.clear_virtual_tables();
+
+            // Register CTE columns
+            for cte in &deep_ctx.ctes {
+                let columns = if !cte.explicit_columns.is_empty() {
+                    cte.explicit_columns.clone()
+                } else if !cte.body_tokens.is_empty() {
+                    intellisense_context::extract_select_list_columns(&cte.body_tokens)
+                } else {
+                    Vec::new()
+                };
+                if !columns.is_empty() {
+                    data.set_virtual_table_columns(&cte.name, columns);
+                }
+            }
+
+            // Register subquery alias columns
+            for subq in &deep_ctx.subqueries {
+                let columns =
+                    intellisense_context::extract_select_list_columns(&subq.body_tokens);
+                if !columns.is_empty() {
+                    data.set_virtual_table_columns(&subq.alias, columns);
+                }
+            }
+        }
+
+        // Load columns from DB for real tables (skip virtual tables)
         if include_columns {
             for table in &column_tables {
-                Self::request_table_columns(table, intellisense_data, column_sender, connection);
+                let is_virtual = deep_ctx
+                    .ctes
+                    .iter()
+                    .any(|c| c.name.eq_ignore_ascii_case(table))
+                    || deep_ctx
+                        .subqueries
+                        .iter()
+                        .any(|s| s.alias.eq_ignore_ascii_case(table));
+                if !is_virtual {
+                    Self::request_table_columns(
+                        table,
+                        intellisense_data,
+                        column_sender,
+                        connection,
+                    );
+                }
             }
         }
 

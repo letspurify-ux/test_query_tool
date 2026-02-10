@@ -782,3 +782,171 @@ fn pivot_clause_phase() {
     );
     assert_eq!(ctx.phase, SqlPhase::WhereClause);
 }
+
+// ─── SELECT list column extraction tests ─────────────────────────────────
+
+#[test]
+fn extract_simple_columns() {
+    let tokens = tokenize("SELECT id, name, age FROM users");
+    let cols = extract_select_list_columns(&tokens);
+    assert_eq!(cols, vec!["id", "name", "age"]);
+}
+
+#[test]
+fn extract_qualified_columns() {
+    let tokens = tokenize("SELECT e.empno, e.ename FROM emp e");
+    let cols = extract_select_list_columns(&tokens);
+    assert_eq!(cols, vec!["empno", "ename"]);
+}
+
+#[test]
+fn extract_aliased_columns() {
+    let tokens = tokenize("SELECT COUNT(*) AS cnt, AVG(sal) AS avg_sal FROM emp");
+    let cols = extract_select_list_columns(&tokens);
+    assert_eq!(cols, vec!["cnt", "avg_sal"]);
+}
+
+#[test]
+fn extract_implicit_alias() {
+    let tokens = tokenize("SELECT e.deptno, COUNT(*) emp_cnt FROM emp e GROUP BY e.deptno");
+    let cols = extract_select_list_columns(&tokens);
+    assert_eq!(cols, vec!["deptno", "emp_cnt"]);
+}
+
+#[test]
+fn extract_star_skipped() {
+    let tokens = tokenize("SELECT * FROM emp");
+    let cols = extract_select_list_columns(&tokens);
+    assert!(cols.is_empty());
+}
+
+#[test]
+fn extract_qualified_star_skipped() {
+    let tokens = tokenize("SELECT e.* FROM emp e");
+    let cols = extract_select_list_columns(&tokens);
+    assert!(cols.is_empty());
+}
+
+#[test]
+fn extract_mixed_columns_and_star() {
+    let tokens = tokenize("SELECT id, e.*, name FROM emp e");
+    let cols = extract_select_list_columns(&tokens);
+    assert_eq!(cols, vec!["id", "name"]);
+}
+
+#[test]
+fn extract_select_distinct() {
+    let tokens = tokenize("SELECT DISTINCT id, name FROM users");
+    let cols = extract_select_list_columns(&tokens);
+    assert_eq!(cols, vec!["id", "name"]);
+}
+
+#[test]
+fn extract_nested_function_with_alias() {
+    let tokens = tokenize("SELECT NVL(COALESCE(a, b), c) AS result FROM t");
+    let cols = extract_select_list_columns(&tokens);
+    assert_eq!(cols, vec!["result"]);
+}
+
+// ─── CTE body token capture tests ───────────────────────────────────────
+
+#[test]
+fn cte_body_tokens_captured() {
+    let ctx = analyze(
+        "WITH emp_base AS (SELECT e.empno, e.ename, e.deptno FROM emp e) \
+         SELECT eb.| FROM emp_base eb",
+    );
+    let cte = ctx
+        .ctes
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case("emp_base"))
+        .unwrap();
+    assert!(!cte.body_tokens.is_empty());
+    let cols = extract_select_list_columns(&cte.body_tokens);
+    assert_eq!(cols, vec!["empno", "ename", "deptno"]);
+}
+
+#[test]
+fn cte_explicit_columns_present() {
+    let ctx = analyze(
+        "WITH cte(x, y) AS (SELECT id, name FROM users) SELECT c.| FROM cte c",
+    );
+    let cte = ctx
+        .ctes
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case("cte"))
+        .unwrap();
+    assert_eq!(cte.explicit_columns.len(), 2);
+    assert_eq!(cte.explicit_columns, vec!["x", "y"]);
+}
+
+#[test]
+fn cte_chain_columns_inferred() {
+    let sql = "WITH emp_base AS (\
+            SELECT e.empno, e.ename, e.deptno, e.sal, e.hiredate FROM emp e\
+        ), \
+        dept_agg AS (\
+            SELECT eb.deptno, COUNT(*) AS emp_cnt, AVG(eb.sal) AS avg_sal \
+            FROM emp_base eb GROUP BY eb.deptno\
+        ) \
+        SELECT d.deptno, c.| FROM dept d JOIN dept_agg c ON c.deptno = d.deptno";
+    let ctx = analyze(sql);
+    let dept_agg = ctx
+        .ctes
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case("dept_agg"))
+        .unwrap();
+    let cols = extract_select_list_columns(&dept_agg.body_tokens);
+    assert_eq!(cols, vec!["deptno", "emp_cnt", "avg_sal"]);
+}
+
+#[test]
+fn cte_emp_base_columns_inferred() {
+    let sql = "WITH emp_base AS (\
+            SELECT e.empno, e.ename, e.deptno, e.sal, e.hiredate FROM emp e\
+        ), \
+        dept_agg AS (\
+            SELECT eb.deptno, COUNT(*) AS emp_cnt, AVG(eb.sal) AS avg_sal \
+            FROM emp_base eb GROUP BY eb.deptno\
+        ) \
+        SELECT d.deptno, c.avg_sal FROM dept d JOIN dept_agg c ON c.deptno = d.deptno WHERE |";
+    let ctx = analyze(sql);
+    let emp_base = ctx
+        .ctes
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case("emp_base"))
+        .unwrap();
+    let cols = extract_select_list_columns(&emp_base.body_tokens);
+    assert_eq!(cols, vec!["empno", "ename", "deptno", "sal", "hiredate"]);
+}
+
+// ─── Subquery alias column extraction tests ─────────────────────────────
+
+#[test]
+fn subquery_alias_columns_captured() {
+    let ctx = analyze(
+        "SELECT sub.| FROM (SELECT id, name, age FROM users) sub",
+    );
+    assert!(!ctx.subqueries.is_empty());
+    let subq = ctx
+        .subqueries
+        .iter()
+        .find(|s| s.alias.eq_ignore_ascii_case("sub"))
+        .unwrap();
+    let cols = extract_select_list_columns(&subq.body_tokens);
+    assert_eq!(cols, vec!["id", "name", "age"]);
+}
+
+#[test]
+fn subquery_alias_with_expressions() {
+    let ctx = analyze(
+        "SELECT v.| FROM (SELECT dept_id, COUNT(*) AS cnt, MAX(sal) max_sal FROM emp GROUP BY dept_id) v",
+    );
+    let subq = ctx
+        .subqueries
+        .iter()
+        .find(|s| s.alias.eq_ignore_ascii_case("v"))
+        .unwrap();
+    let cols = extract_select_list_columns(&subq.body_tokens);
+    assert_eq!(cols, vec!["dept_id", "cnt", "max_sal"]);
+}
