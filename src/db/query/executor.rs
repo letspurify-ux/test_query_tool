@@ -2534,8 +2534,158 @@ impl ObjectBrowser {
         conn: &Connection,
         package_name: &str,
     ) -> Result<Vec<PackageRoutine>, OracleError> {
-        // Optimized query using EXISTS instead of LEFT JOIN and GROUP BY
-        // This reduces the number of rows scanned in user_arguments
+        // Fast path: parse package spec source from USER_SOURCE to identify
+        // PROCEDURE vs FUNCTION declarations. This avoids the slow
+        // user_arguments view entirely, which is the main bottleneck.
+        let pkg_upper = package_name.to_uppercase();
+        if let Ok(routines) = Self::get_package_routines_from_source(conn, &pkg_upper) {
+            if !routines.is_empty() {
+                return Ok(routines);
+            }
+        }
+
+        // Fallback: query user_procedures + user_arguments if source parsing
+        // returned no results (e.g. wrapped/encrypted packages)
+        Self::get_package_routines_from_dict(conn, &pkg_upper)
+    }
+
+    /// Parse package spec source text to extract PROCEDURE/FUNCTION declarations.
+    /// Much faster than querying user_arguments because USER_SOURCE is a simple
+    /// table scan with no complex joins.
+    fn get_package_routines_from_source(
+        conn: &Connection,
+        package_name: &str,
+    ) -> Result<Vec<PackageRoutine>, OracleError> {
+        let sql = "SELECT text FROM user_source WHERE name = :1 AND type = 'PACKAGE' ORDER BY line";
+        let mut stmt = conn.statement(sql).build()?;
+        let rows = stmt.query(&[&package_name])?;
+
+        let mut source = String::new();
+        for row_result in rows {
+            let row: Row = row_result?;
+            let line: String = row.get(0)?;
+            source.push_str(&line);
+        }
+
+        Ok(Self::parse_package_spec_routines(&source))
+    }
+
+    /// Parse package specification source to extract routine names and types.
+    /// Looks for top-level PROCEDURE/FUNCTION keywords, skipping those inside
+    /// comments, string literals, and type/cursor declarations.
+    fn parse_package_spec_routines(source: &str) -> Vec<PackageRoutine> {
+        let mut routines: Vec<PackageRoutine> = Vec::new();
+        let mut seen = HashSet::new();
+        let upper = source.to_uppercase();
+        let bytes = upper.as_bytes();
+        let len = bytes.len();
+        let mut i = 0;
+
+        while i < len {
+            // Skip single-line comments
+            if i + 1 < len && bytes[i] == b'-' && bytes[i + 1] == b'-' {
+                while i < len && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            // Skip block comments
+            if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+                i += 2;
+                while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+                continue;
+            }
+            // Skip string literals
+            if bytes[i] == b'\'' {
+                i += 1;
+                while i < len {
+                    if bytes[i] == b'\'' {
+                        i += 1;
+                        if i < len && bytes[i] == b'\'' {
+                            i += 1; // escaped quote
+                        } else {
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+
+            // Check for PROCEDURE or FUNCTION keyword
+            let (keyword, routine_type) =
+                if i + 9 <= len && &upper[i..i + 9] == "PROCEDURE" {
+                    (9, "PROCEDURE")
+                } else if i + 8 <= len && &upper[i..i + 8] == "FUNCTION" {
+                    (8, "FUNCTION")
+                } else {
+                    i += 1;
+                    continue;
+                };
+
+            // Ensure keyword is not part of a larger identifier
+            if i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_') {
+                i += keyword;
+                continue;
+            }
+            let after = i + keyword;
+            if after < len && (bytes[after].is_ascii_alphanumeric() || bytes[after] == b'_') {
+                i += keyword;
+                continue;
+            }
+
+            // Extract the routine name following the keyword
+            let mut j = after;
+            while j < len && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            // Handle optional quoted identifier
+            let name_start = j;
+            if j < len && bytes[j] == b'"' {
+                j += 1;
+                let qs = j;
+                while j < len && bytes[j] != b'"' {
+                    j += 1;
+                }
+                let name = source[qs..j].to_string();
+                if !name.is_empty() && seen.insert(name.to_uppercase()) {
+                    routines.push(PackageRoutine {
+                        name: name.to_uppercase(),
+                        routine_type: routine_type.to_string(),
+                    });
+                }
+                i = j + 1;
+            } else {
+                while j < len && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'$' || bytes[j] == b'#') {
+                    j += 1;
+                }
+                if j > name_start {
+                    let name = upper[name_start..j].to_string();
+                    if !name.is_empty() && seen.insert(name.clone()) {
+                        routines.push(PackageRoutine {
+                            name,
+                            routine_type: routine_type.to_string(),
+                        });
+                    }
+                }
+                i = j;
+            }
+        }
+
+        routines.sort_by(|a, b| a.name.cmp(&b.name));
+        routines
+    }
+
+    /// Fallback: determine routine types via user_procedures + user_arguments.
+    /// Used when source parsing fails (e.g. wrapped/encrypted packages).
+    fn get_package_routines_from_dict(
+        conn: &Connection,
+        package_name: &str,
+    ) -> Result<Vec<PackageRoutine>, OracleError> {
         let sql = r#"
             SELECT DISTINCT
                 p.procedure_name,
@@ -2562,7 +2712,7 @@ impl ObjectBrowser {
                 return Err(err);
             }
         };
-        let rows = match stmt.query(&[&package_name.to_uppercase()]) {
+        let rows = match stmt.query(&[&package_name]) {
             Ok(rows) => rows,
             Err(err) => {
                 eprintln!("Database operation failed: {err}");
