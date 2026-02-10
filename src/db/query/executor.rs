@@ -2617,10 +2617,12 @@ impl ObjectBrowser {
             }
 
             // Check for PROCEDURE or FUNCTION keyword
+            // Use byte-level comparison to avoid panicking on multi-byte
+            // UTF-8 continuation bytes (e.g. Korean characters in comments).
             let (keyword, routine_type) =
-                if i + 9 <= len && &upper[i..i + 9] == "PROCEDURE" {
+                if bytes.get(i..i + 9) == Some(b"PROCEDURE" as &[u8]) {
                     (9, "PROCEDURE")
-                } else if i + 8 <= len && &upper[i..i + 8] == "FUNCTION" {
+                } else if bytes.get(i..i + 8) == Some(b"FUNCTION" as &[u8]) {
                     (8, "FUNCTION")
                 } else {
                     i += 1;
@@ -2651,7 +2653,7 @@ impl ObjectBrowser {
                 while j < len && bytes[j] != b'"' {
                     j += 1;
                 }
-                let name = source[qs..j].to_string();
+                let name = source.get(qs..j).unwrap_or("").to_string();
                 if !name.is_empty() && seen.insert(name.to_uppercase()) {
                     routines.push(PackageRoutine {
                         name: name.to_uppercase(),
@@ -2664,7 +2666,7 @@ impl ObjectBrowser {
                     j += 1;
                 }
                 if j > name_start {
-                    let name = upper[name_start..j].to_string();
+                    let name = upper.get(name_start..j).unwrap_or("").to_string();
                     if !name.is_empty() && seen.insert(name.clone()) {
                         routines.push(PackageRoutine {
                             name,

@@ -433,14 +433,14 @@ impl FindReplaceDialog {
                             while let Some((match_start, match_end)) =
                                 find_next_match(&text, &search_text, search_pos as i32, false)
                             {
-                                result.push_str(&text[search_pos..match_start]);
+                                result.push_str(text.get(search_pos..match_start).unwrap_or(""));
                                 result.push_str(&replace_text);
                                 search_pos = match_end;
                                 if search_pos >= text.len() {
                                     break;
                                 }
                             }
-                            result.push_str(&text[search_pos..]);
+                            result.push_str(text.get(search_pos..).unwrap_or(""));
                             result
                         };
 

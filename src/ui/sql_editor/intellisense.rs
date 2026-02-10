@@ -1213,7 +1213,7 @@ impl SqlEditorWidget {
         let start = buffer.line_start(start).max(0);
         let text = buffer.text_range(start, cursor_pos).unwrap_or_default();
         if let Some(pos) = text.rfind(';') {
-            return text[pos + 1..].to_string();
+            return text.get(pos + 1..).unwrap_or("").to_string();
         }
         text
     }
