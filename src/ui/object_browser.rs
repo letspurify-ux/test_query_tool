@@ -14,7 +14,7 @@ use std::thread;
 use crate::db::{
     lock_connection, try_lock_connection, CompilationError, ConstraintInfo, IndexInfo,
     ObjectBrowser, PackageRoutine, ProcedureArgument, SequenceInfo, SharedConnection,
-    TableColumnDetail,
+    SynonymInfo, TableColumnDetail,
 };
 use crate::ui::constants::*;
 use crate::ui::font_settings::FontProfile;
@@ -53,6 +53,7 @@ struct ObjectCache {
     procedures: Vec<String>,
     functions: Vec<String>,
     sequences: Vec<String>,
+    synonyms: Vec<String>,
     packages: Vec<String>,
     package_routines: HashMap<String, Vec<PackageRoutine>>,
 }
@@ -72,6 +73,7 @@ enum ObjectActionResult {
         result: Result<Vec<ConstraintInfo>, String>,
     },
     SequenceInfo(Result<SequenceInfo, String>),
+    SynonymInfo(Result<SynonymInfo, String>),
     Ddl(Result<String, String>),
     RoutineScript {
         qualified_name: String,
@@ -133,6 +135,7 @@ impl ObjectBrowserWidget {
         tree.add("Procedures");
         tree.add("Functions");
         tree.add("Sequences");
+        tree.add("Synonyms");
         tree.add("Packages");
 
         // Make tree resizable (takes remaining space after filter input)
@@ -153,6 +156,9 @@ impl ObjectBrowserWidget {
             item.close();
         }
         if let Some(mut item) = tree.find_item("Sequences") {
+            item.close();
+        }
+        if let Some(mut item) = tree.find_item("Synonyms") {
             item.close();
         }
         if let Some(mut item) = tree.find_item("Packages") {
@@ -414,6 +420,34 @@ impl ObjectBrowserWidget {
                             Err(err) => {
                                 fltk::dialog::alert_default(&format!(
                                     "Failed to get sequence info: {}",
+                                    err
+                                ));
+                            }
+                        },
+                        ObjectActionResult::SynonymInfo(result) => match result {
+                            Ok(info) => {
+                                let mut details =
+                                    format!("=== Synonym Info: {} ===\n\n", info.name);
+                                details.push_str(&format!(
+                                    "{:<18} {}\n",
+                                    "Table Owner", info.table_owner
+                                ));
+                                details.push_str(&format!(
+                                    "{:<18} {}\n",
+                                    "Table Name", info.table_name
+                                ));
+                                if !info.db_link.is_empty() {
+                                    details.push_str(&format!(
+                                        "{:<18} {}\n",
+                                        "DB Link", info.db_link
+                                    ));
+                                }
+
+                                ObjectBrowserWidget::show_info_dialog("Synonym Info", &details);
+                            }
+                            Err(err) => {
+                                fltk::dialog::alert_default(&format!(
+                                    "Failed to get synonym info: {}",
                                     err
                                 ));
                             }
@@ -758,7 +792,8 @@ impl ObjectBrowserWidget {
         }
 
         match parent_type_upper.as_str() {
-            "TABLES" | "VIEWS" | "PROCEDURES" | "FUNCTIONS" | "SEQUENCES" | "PACKAGES" => {
+            "TABLES" | "VIEWS" | "PROCEDURES" | "FUNCTIONS" | "SEQUENCES" | "SYNONYMS"
+            | "PACKAGES" => {
                 Some(ObjectItem::Simple {
                     object_type: parent_type_upper,
                     object_name,
@@ -1171,6 +1206,9 @@ impl ObjectBrowserWidget {
                 ObjectItem::Simple { object_type, .. } if object_type == "SEQUENCES" => {
                     "View Info|Generate DDL"
                 }
+                ObjectItem::Simple { object_type, .. } if object_type == "SYNONYMS" => {
+                    "View Info|Generate DDL"
+                }
                 ObjectItem::PackageRoutine { routine_type, .. } => {
                     if routine_type == "FUNCTION" {
                         "Execute Function"
@@ -1509,10 +1547,17 @@ impl ObjectBrowserWidget {
                             // conn_guard drops here, releasing the lock
                         });
                     }
-                    ("View Info", ObjectItem::Simple { object_name, .. }) => {
+                    (
+                        "View Info",
+                        ObjectItem::Simple {
+                            object_type,
+                            object_name,
+                        },
+                    ) => {
                         let connection = connection.clone();
                         let sender = action_sender.clone();
-                        let sequence_name = object_name.clone();
+                        let name = object_name.clone();
+                        let obj_type = object_type.clone();
                         thread::spawn(move || {
                             // Try to acquire connection lock without blocking
                             let Some(conn_guard) = try_lock_connection(&connection) else {
@@ -1522,15 +1567,56 @@ impl ObjectBrowserWidget {
                                 return;
                             };
 
-                            let result = if !conn_guard.is_connected() {
-                                Err("Not connected to database".to_string())
-                            } else if let Some(db_conn) = conn_guard.get_connection() {
-                                ObjectBrowser::get_sequence_info(db_conn.as_ref(), &sequence_name)
-                                    .map_err(|err| err.to_string())
-                            } else {
-                                Err("Not connected to database".to_string())
+                            let send_err = |sender: &std::sync::mpsc::Sender<ObjectActionResult>,
+                                            obj_type: &str,
+                                            msg: &str| {
+                                match obj_type {
+                                    "SYNONYMS" => {
+                                        let _ = sender.send(ObjectActionResult::SynonymInfo(
+                                            Err(msg.to_string()),
+                                        ));
+                                    }
+                                    "SEQUENCES" => {
+                                        let _ = sender.send(ObjectActionResult::SequenceInfo(
+                                            Err(msg.to_string()),
+                                        ));
+                                    }
+                                    other => {
+                                        eprintln!("Unexpected object type for View Info: {other}");
+                                    }
+                                }
                             };
-                            let _ = sender.send(ObjectActionResult::SequenceInfo(result));
+
+                            if !conn_guard.is_connected() {
+                                send_err(&sender, &obj_type, "Not connected to database");
+                                app::awake();
+                                return;
+                            }
+
+                            if let Some(db_conn) = conn_guard.get_connection() {
+                                match obj_type.as_str() {
+                                    "SYNONYMS" => {
+                                        let result = ObjectBrowser::get_synonym_info(
+                                            db_conn.as_ref(),
+                                            &name,
+                                        )
+                                        .map_err(|err| err.to_string());
+                                        let _ =
+                                            sender.send(ObjectActionResult::SynonymInfo(result));
+                                    }
+                                    _ => {
+                                        let result = ObjectBrowser::get_sequence_info(
+                                            db_conn.as_ref(),
+                                            &name,
+                                        )
+                                        .map_err(|err| err.to_string());
+                                        let _ =
+                                            sender.send(ObjectActionResult::SequenceInfo(result));
+                                    }
+                                }
+                            } else {
+                                send_err(&sender, &obj_type, "Not connected to database");
+                            }
                             app::awake();
                             // conn_guard drops here, releasing the lock
                         });
@@ -1548,6 +1634,7 @@ impl ObjectBrowserWidget {
                             "PROCEDURES" => Some("PROCEDURE"),
                             "FUNCTIONS" => Some("FUNCTION"),
                             "SEQUENCES" => Some("SEQUENCE"),
+                            "SYNONYMS" => Some("SYNONYM"),
                             "PACKAGES" => Some("PACKAGE"),
                             _ => None,
                         };
@@ -1586,6 +1673,10 @@ impl ObjectBrowserWidget {
                                             &object_name,
                                         ),
                                         "SEQUENCE" => ObjectBrowser::get_sequence_ddl(
+                                            db_conn.as_ref(),
+                                            &object_name,
+                                        ),
+                                        "SYNONYM" => ObjectBrowser::get_synonym_ddl(
                                             db_conn.as_ref(),
                                             &object_name,
                                         ),
@@ -1719,6 +1810,11 @@ impl ObjectBrowserWidget {
                 send_update(&sender, &cache);
             }
 
+            if let Ok(synonyms) = ObjectBrowser::get_synonyms(db_conn.as_ref()) {
+                cache.synonyms = synonyms;
+                send_update(&sender, &cache);
+            }
+
             if let Ok(packages) = ObjectBrowser::get_packages(db_conn.as_ref()) {
                 cache.packages = packages;
                 send_update(&sender, &cache);
@@ -1739,6 +1835,7 @@ impl ObjectBrowserWidget {
             "Procedures",
             "Functions",
             "Sequences",
+            "Synonyms",
             "Packages",
         ];
 
@@ -1762,6 +1859,7 @@ impl ObjectBrowserWidget {
             "Procedures",
             "Functions",
             "Sequences",
+            "Synonyms",
             "Packages",
         ];
 
@@ -1802,6 +1900,11 @@ impl ObjectBrowserWidget {
         for seq in &cache.sequences {
             if filter_text.is_empty() || seq.to_lowercase().contains(filter_text) {
                 tree.add(&format!("Sequences/{}", seq));
+            }
+        }
+        for syn in &cache.synonyms {
+            if filter_text.is_empty() || syn.to_lowercase().contains(filter_text) {
+                tree.add(&format!("Synonyms/{}", syn));
             }
         }
 

@@ -2411,6 +2411,14 @@ pub struct SequenceInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct SynonymInfo {
+    pub name: String,
+    pub table_owner: String,
+    pub table_name: String,
+    pub db_link: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct PackageRoutine {
     pub name: String,
     pub routine_type: String,
@@ -2522,6 +2530,52 @@ impl ObjectBrowser {
             order_flag,
             cache_size,
             last_number,
+        })
+    }
+
+    pub fn get_synonyms(conn: &Connection) -> Result<Vec<String>, OracleError> {
+        let sql = "SELECT synonym_name FROM user_synonyms ORDER BY synonym_name";
+        Self::get_object_list(conn, sql)
+    }
+
+    pub fn get_synonym_info(
+        conn: &Connection,
+        syn_name: &str,
+    ) -> Result<SynonymInfo, OracleError> {
+        let sql = r#"
+            SELECT
+                synonym_name,
+                NVL(table_owner, ''),
+                NVL(table_name, ''),
+                NVL(db_link, '')
+            FROM user_synonyms
+            WHERE synonym_name = :1
+        "#;
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let row = match stmt.query_row(&[&syn_name.to_uppercase()]) {
+            Ok(row) => row,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+
+        let name: String = row.get(0)?;
+        let table_owner: String = row.get(1)?;
+        let table_name: String = row.get(2)?;
+        let db_link: String = row.get(3)?;
+
+        Ok(SynonymInfo {
+            name,
+            table_owner,
+            table_name,
+            db_link,
         })
     }
 
@@ -3582,6 +3636,33 @@ impl ObjectBrowser {
             }
         };
         let row = match stmt.query_row(&[&seq_name.to_uppercase()]) {
+            Ok(row) => row,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let ddl: String = match row.get(0) {
+            Ok(ddl) => ddl,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        Ok(Self::normalize_generated_ddl(ddl))
+    }
+
+    /// Generate DDL for a synonym
+    pub fn get_synonym_ddl(conn: &Connection, syn_name: &str) -> Result<String, OracleError> {
+        let sql = "SELECT DBMS_METADATA.GET_DDL('SYNONYM', :1) FROM DUAL";
+        let mut stmt = match conn.statement(sql).build() {
+            Ok(stmt) => stmt,
+            Err(err) => {
+                eprintln!("Database operation failed: {err}");
+                return Err(err);
+            }
+        };
+        let row = match stmt.query_row(&[&syn_name.to_uppercase()]) {
             Ok(row) => row,
             Err(err) => {
                 eprintln!("Database operation failed: {err}");
