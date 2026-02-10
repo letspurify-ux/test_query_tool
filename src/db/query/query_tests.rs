@@ -2209,19 +2209,38 @@ fn test_set_sqlblanklines_command_parsed() {
 
 #[test]
 fn test_sqlblanklines_off_splits_top_level_statement_on_blank_line() {
-    let sql = "SELECT 1\n\nFROM dual;";
+    let sql = "SET SQLBLANKLINES OFF\nSELECT 1\n\nFROM dual;";
     let items = QueryExecutor::split_script_items(sql);
 
     assert_eq!(
         items.len(),
-        2,
+        3,
         "Blank line should split statement when SQLBLANKLINES is OFF"
     );
+    assert!(matches!(
+        &items[0],
+        ScriptItem::ToolCommand(ToolCommand::SetSqlBlankLines { enabled: false })
+    ));
     assert!(
-        matches!(&items[0], ScriptItem::Statement(stmt) if stmt.eq_ignore_ascii_case("SELECT 1"))
+        matches!(&items[1], ScriptItem::Statement(stmt) if stmt.eq_ignore_ascii_case("SELECT 1"))
     );
     assert!(
-        matches!(&items[1], ScriptItem::Statement(stmt) if stmt.eq_ignore_ascii_case("FROM dual"))
+        matches!(&items[2], ScriptItem::Statement(stmt) if stmt.eq_ignore_ascii_case("FROM dual"))
+    );
+}
+
+#[test]
+fn test_default_sqlblanklines_on_keeps_blank_line_inside_statement() {
+    let sql = "SELECT *\n\nFROM user_tables;";
+    let items = QueryExecutor::split_script_items(sql);
+
+    assert_eq!(
+        items.len(),
+        1,
+        "Blank line should NOT split statement by default (SQLBLANKLINES ON)"
+    );
+    assert!(
+        matches!(&items[0], ScriptItem::Statement(stmt) if stmt.contains("SELECT") && stmt.contains("FROM"))
     );
 }
 
