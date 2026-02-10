@@ -93,19 +93,17 @@ struct DragState {
 }
 
 impl ResultTableWidget {
-    fn display_char_count(text: &str, max_cell_display_chars: usize) -> usize {
+    /// Returns the character count of the longest line in `text`,
+    /// capped at `max_cell_display_chars`. Used for column width estimation
+    /// so that multi-line cells are sized by their widest line, not total length.
+    fn longest_line_char_count(text: &str, max_cell_display_chars: usize) -> usize {
         if max_cell_display_chars == 0 {
             return 0;
         }
-        let mut count = 0usize;
-        for _ in text.chars().take(max_cell_display_chars + 1) {
-            count += 1;
-        }
-        if count > max_cell_display_chars {
-            max_cell_display_chars
-        } else {
-            count
-        }
+        text.lines()
+            .map(|line| line.chars().count().min(max_cell_display_chars))
+            .max()
+            .unwrap_or(0)
     }
 
     fn show_cell_text_dialog(value: &str, font_profile: FontProfile, font_size: u32) {
@@ -211,19 +209,16 @@ impl ResultTableWidget {
         )
     }
 
-    fn estimate_text_width_from_char_count(char_count: usize, font_size: u32) -> i32 {
-        let char_count = char_count as i32;
-        let avg_char_px = ((font_size as i32 * 62) + 99) / 100;
-        let raw = char_count.saturating_mul(avg_char_px) + TABLE_CELL_PADDING * 2 + 2;
-        raw.clamp(
-            Self::min_col_width_for_font(font_size),
-            Self::max_col_width_for_font(font_size),
-        )
-    }
-
     fn estimate_display_width(text: &str, font_size: u32, max_cell_display_chars: usize) -> i32 {
-        let display_chars = Self::display_char_count(text, max_cell_display_chars);
-        Self::estimate_text_width_from_char_count(display_chars, font_size)
+        let display_chars = Self::longest_line_char_count(text, max_cell_display_chars);
+        let avg_char_px = ((font_size as i32 * 62) + 99) / 100;
+        let raw = display_chars as i32 * avg_char_px + TABLE_CELL_PADDING * 2 + 2;
+        // Cap scales with the cell preview setting rather than a fixed font-based limit,
+        // so users who raise the preview length get proportionally wider columns.
+        // A hard ceiling of 2000 px prevents absurdly wide columns at large preview values.
+        let setting_max =
+            (max_cell_display_chars as i32 * avg_char_px + TABLE_CELL_PADDING * 2 + 2).min(2000);
+        raw.clamp(Self::min_col_width_for_font(font_size), setting_max)
     }
 
     fn update_widths_with_row(
