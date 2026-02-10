@@ -3492,10 +3492,7 @@ impl SqlEditorWidget {
                                         }
                                     };
 
-                                    let autocommit_enabled = {
-                                        let conn_guard = lock_connection(&shared_connection);
-                                        conn_guard.auto_commit()
-                                    };
+                                    let autocommit_enabled = conn_guard.auto_commit();
 
                                     let serveroutput_line = if server_output.enabled {
                                         if server_output.size == 0 {
@@ -4180,10 +4177,7 @@ impl SqlEditorWidget {
                                     );
                                 }
                                 ToolCommand::SetAutoCommit { enabled } => {
-                                    {
-                                        let mut conn_guard = lock_connection(&shared_connection);
-                                        conn_guard.set_auto_commit(enabled);
-                                    }
+                                    conn_guard.set_auto_commit(enabled);
                                     auto_commit = enabled;
                                     SqlEditorWidget::emit_script_message(
                                         &sender,

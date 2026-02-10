@@ -1060,7 +1060,7 @@ impl QueryExecutor {
     pub fn split_script_items(sql: &str) -> Vec<ScriptItem> {
         let mut items: Vec<ScriptItem> = Vec::new();
         let mut builder = StatementBuilder::new();
-        let mut sqlblanklines_enabled = false;
+        let mut sqlblanklines_enabled = true;
 
         // Helper to add statement with comment stripping and extra semicolon removal
         let add_statement = |stmt: String, items: &mut Vec<ScriptItem>| {
@@ -1192,7 +1192,7 @@ impl QueryExecutor {
     pub fn split_format_items(sql: &str) -> Vec<FormatItem> {
         let mut items: Vec<FormatItem> = Vec::new();
         let mut builder = StatementBuilder::new();
-        let mut sqlblanklines_enabled = false;
+        let mut sqlblanklines_enabled = true;
 
         let add_statement = |stmt: String, items: &mut Vec<FormatItem>| {
             let cleaned = stmt.trim();
