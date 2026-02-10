@@ -1306,37 +1306,33 @@ pub fn get_word_at_cursor(text: &str, cursor_pos: usize) -> (String, usize, usiz
 }
 
 // Detect context for smarter suggestions (after FROM, after SELECT, etc.)
-#[allow(dead_code)]
+// Uses the deep context analyzer for accurate depth-aware detection.
 pub fn detect_sql_context(text: &str, cursor_pos: usize) -> SqlContext {
+    use crate::ui::intellisense_context::{self, SqlPhase};
+    use crate::ui::sql_editor::SqlEditorWidget;
+
     let end = cursor_pos.min(text.len());
-    let upper = String::from_utf8_lossy(&text.as_bytes()[..end]).to_ascii_uppercase();
+    let before = &text[..end];
+    let tokens = SqlEditorWidget::tokenize_sql(before);
+    let full_tokens = SqlEditorWidget::tokenize_sql(text);
+    let ctx = intellisense_context::analyze_cursor_context(&tokens, &full_tokens);
 
-    // Simple context detection
-    let words: Vec<&str> = upper.split_whitespace().collect();
-
-    if let Some(last_keyword) = words.iter().rev().find(|w| {
-        matches!(
-            w.as_ref(),
-            "FROM"
-                | "JOIN"
-                | "INTO"
-                | "UPDATE"
-                | "TABLE"
-                | "SELECT"
-                | "WHERE"
-                | "AND"
-                | "OR"
-                | "SET"
-        )
-    }) {
-        match *last_keyword {
-            "FROM" | "JOIN" | "INTO" | "UPDATE" | "TABLE" => SqlContext::TableName,
-            "SELECT" => SqlContext::ColumnOrAll,
-            "WHERE" | "AND" | "OR" | "SET" => SqlContext::ColumnName,
-            _ => SqlContext::General,
-        }
-    } else {
-        SqlContext::General
+    match ctx.phase {
+        SqlPhase::FromClause
+        | SqlPhase::IntoClause
+        | SqlPhase::UpdateTarget
+        | SqlPhase::DeleteTarget
+        | SqlPhase::MergeTarget => SqlContext::TableName,
+        SqlPhase::SelectList => SqlContext::ColumnOrAll,
+        SqlPhase::WhereClause
+        | SqlPhase::JoinCondition
+        | SqlPhase::GroupByClause
+        | SqlPhase::HavingClause
+        | SqlPhase::OrderByClause
+        | SqlPhase::SetClause
+        | SqlPhase::ConnectByClause
+        | SqlPhase::StartWithClause => SqlContext::ColumnName,
+        _ => SqlContext::General,
     }
 }
 

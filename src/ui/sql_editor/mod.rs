@@ -50,12 +50,6 @@ const MAX_PROGRESS_MESSAGES_PER_POLL: usize = 200;
 const PROGRESS_POLL_INTERVAL_SECONDS: f64 = 0.05;
 
 #[derive(Clone)]
-struct TableReference {
-    table: String,
-    alias: Option<String>,
-}
-
-#[derive(Clone)]
 pub enum QueryProgress {
     BatchStart,
     StatementStart {
