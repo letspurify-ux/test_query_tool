@@ -6,7 +6,6 @@ use fltk::{
     text::{PositionType, TextBuffer, TextEditor},
 };
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -20,6 +19,7 @@ use crate::db::{
 use crate::ui::intellisense::{
     detect_sql_context, get_word_at_cursor, IntellisenseData, IntellisensePopup, SqlContext,
 };
+use crate::ui::intellisense_context;
 use crate::ui::FindReplaceDialog;
 
 use super::*;
@@ -744,15 +744,42 @@ impl SqlEditorWidget {
             word
         };
 
+        // Use deep context analyzer for accurate depth-aware analysis
         let context_text = Self::context_before_cursor(buffer, cursor_pos);
-        let context = detect_sql_context(&context_text, context_text.len());
         let statement_text = Self::statement_context(buffer, cursor_pos);
-        let table_refs = if statement_text.is_empty() {
-            Self::collect_table_references(&context_text)
+
+        let before_tokens = Self::tokenize_sql(&context_text);
+        let full_text = if statement_text.is_empty() {
+            &context_text
         } else {
-            Self::collect_table_references(&statement_text)
+            &statement_text
         };
-        let column_tables = Self::resolve_column_tables(&table_refs, qualifier.as_deref());
+        let full_tokens = Self::tokenize_sql(full_text);
+        let deep_ctx =
+            intellisense_context::analyze_cursor_context(&before_tokens, &full_tokens);
+
+        let context = if deep_ctx.phase.is_table_context() {
+            SqlContext::TableName
+        } else if deep_ctx.phase.is_column_context() {
+            if matches!(deep_ctx.phase, intellisense_context::SqlPhase::SelectList) {
+                SqlContext::ColumnOrAll
+            } else {
+                SqlContext::ColumnName
+            }
+        } else {
+            SqlContext::General
+        };
+
+        // Resolve column tables using deep context
+        let column_tables = if let Some(ref q) = qualifier {
+            intellisense_context::resolve_qualifier_tables(q, &deep_ctx.tables_in_scope)
+        } else {
+            intellisense_context::resolve_all_scope_tables(&deep_ctx.tables_in_scope)
+        };
+
+        // Also check if CTE names should be loaded as virtual tables
+        // CTE names are already in tables_in_scope, but we also pre-load columns
+        // for any CTE whose underlying tables we know about
         let include_columns = qualifier.is_some()
             || matches!(context, SqlContext::ColumnName | SqlContext::ColumnOrAll);
 
@@ -1303,195 +1330,6 @@ impl SqlEditorWidget {
 
     fn is_identifier_byte(byte: u8) -> bool {
         byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
-    }
-
-    fn collect_table_references(text: &str) -> Vec<TableReference> {
-        let tokens = Self::tokenize_sql(text);
-        let mut references = Vec::new();
-        let mut expect_table = false;
-        let mut idx = 0;
-
-        while idx < tokens.len() {
-            match &tokens[idx] {
-                SqlToken::Symbol(sym) if sym == ";" => {
-                    references.clear();
-                    expect_table = false;
-                    idx += 1;
-                    continue;
-                }
-                SqlToken::Word(word) => {
-                    let upper = word.to_uppercase();
-                    if Self::is_table_intro_keyword(&upper) {
-                        expect_table = true;
-                        idx += 1;
-                        continue;
-                    }
-                    if Self::is_table_stop_keyword(&upper) {
-                        expect_table = false;
-                        idx += 1;
-                        continue;
-                    }
-                    if expect_table {
-                        if let Some((table, next_idx)) = Self::parse_table_name(&tokens, idx) {
-                            let (alias, after_alias) = Self::parse_alias(&tokens, next_idx);
-                            references.push(TableReference { table, alias });
-                            if let Some(SqlToken::Symbol(sym)) = tokens.get(after_alias) {
-                                if sym == "," {
-                                    expect_table = true;
-                                    idx = after_alias + 1;
-                                    continue;
-                                }
-                            }
-                            expect_table = false;
-                            idx = after_alias;
-                            continue;
-                        }
-                        expect_table = false;
-                    }
-                }
-                _ => {}
-            }
-            idx += 1;
-        }
-
-        references
-    }
-
-    fn resolve_column_tables(
-        table_refs: &[TableReference],
-        qualifier: Option<&str>,
-    ) -> Vec<String> {
-        let mut tables = Vec::new();
-        let mut seen = HashSet::new();
-
-        if let Some(qualifier) = qualifier {
-            let qualifier_upper = qualifier.to_uppercase();
-            for table_ref in table_refs {
-                let table_upper = table_ref.table.to_uppercase();
-                let alias_upper = table_ref.alias.as_ref().map(|a| a.to_uppercase());
-                if table_upper == qualifier_upper
-                    || alias_upper.as_deref() == Some(qualifier_upper.as_str())
-                {
-                    if seen.insert(table_upper) {
-                        tables.push(table_ref.table.clone());
-                    }
-                    return tables;
-                }
-            }
-            if seen.insert(qualifier_upper) {
-                tables.push(qualifier.to_string());
-            }
-            return tables;
-        }
-
-        for table_ref in table_refs {
-            let table_upper = table_ref.table.to_uppercase();
-            if seen.insert(table_upper) {
-                tables.push(table_ref.table.clone());
-            }
-        }
-
-        tables
-    }
-
-    fn parse_table_name(tokens: &[SqlToken], start: usize) -> Option<(String, usize)> {
-        match tokens.get(start) {
-            Some(SqlToken::Symbol(sym)) if sym == "(" => None,
-            Some(SqlToken::Word(word)) => {
-                let mut table = word.clone();
-                let mut idx = start + 1;
-                if matches!(tokens.get(idx), Some(SqlToken::Symbol(sym)) if sym == ".") {
-                    if let Some(SqlToken::Word(name)) = tokens.get(idx + 1) {
-                        table = name.clone();
-                        idx += 2;
-                    }
-                }
-                Some((table, idx))
-            }
-            _ => None,
-        }
-    }
-
-    fn parse_alias(tokens: &[SqlToken], start: usize) -> (Option<String>, usize) {
-        match tokens.get(start) {
-            Some(SqlToken::Word(word)) => {
-                let upper = word.to_uppercase();
-                if upper == "AS" {
-                    if let Some(SqlToken::Word(alias)) = tokens.get(start + 1) {
-                        return (Some(alias.clone()), start + 2);
-                    }
-                    return (None, start + 1);
-                }
-                if !Self::is_alias_breaker(&upper) {
-                    return (Some(word.clone()), start + 1);
-                }
-            }
-            _ => {}
-        }
-
-        (None, start)
-    }
-
-    fn is_table_intro_keyword(word: &str) -> bool {
-        matches!(word, "FROM" | "JOIN" | "INTO" | "UPDATE")
-    }
-
-    fn is_table_stop_keyword(word: &str) -> bool {
-        matches!(
-            word,
-            "WHERE"
-                | "GROUP"
-                | "ORDER"
-                | "HAVING"
-                | "CONNECT"
-                | "START"
-                | "UNION"
-                | "INTERSECT"
-                | "EXCEPT"
-                | "MINUS"
-                | "FETCH"
-                | "FOR"
-                | "WINDOW"
-                | "QUALIFY"
-                | "LIMIT"
-                | "OFFSET"
-                | "RETURNING"
-                | "VALUES"
-                | "SET"
-        )
-    }
-
-    fn is_alias_breaker(word: &str) -> bool {
-        matches!(
-            word,
-            "ON" | "JOIN"
-                | "INNER"
-                | "LEFT"
-                | "RIGHT"
-                | "FULL"
-                | "CROSS"
-                | "OUTER"
-                | "WHERE"
-                | "GROUP"
-                | "ORDER"
-                | "HAVING"
-                | "CONNECT"
-                | "START"
-                | "UNION"
-                | "INTERSECT"
-                | "EXCEPT"
-                | "MINUS"
-                | "FETCH"
-                | "FOR"
-                | "WINDOW"
-                | "QUALIFY"
-                | "LIMIT"
-                | "OFFSET"
-                | "RETURNING"
-                | "VALUES"
-                | "SET"
-                | "USING"
-        )
     }
 
     /// Show quick describe dialog for a table/view structure.

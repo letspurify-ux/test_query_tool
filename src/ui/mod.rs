@@ -3,6 +3,7 @@ pub mod constants;
 pub mod find_replace;
 pub mod font_settings;
 pub mod intellisense;
+pub mod intellisense_context;
 pub mod main_window;
 pub mod menu;
 pub mod object_browser;
