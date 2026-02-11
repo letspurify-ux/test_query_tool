@@ -16,10 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
-use crate::db::{
-    ConnectionInfo, QueryExecutor, QueryResult, SharedConnection, TableColumnDetail,
-};
-use oracle::Connection;
+use crate::db::{ConnectionInfo, QueryExecutor, QueryResult, SharedConnection, TableColumnDetail};
 use crate::ui::constants::*;
 use crate::ui::font_settings::{configured_editor_profile, configured_ui_font_size, FontProfile};
 use crate::ui::intellisense::{IntellisenseData, IntellisensePopup};
@@ -30,6 +27,7 @@ use crate::ui::syntax_highlight::{
 };
 use crate::ui::theme;
 use crate::utils::{AppConfig, QueryHistory};
+use oracle::Connection;
 
 mod execution;
 mod intellisense;
@@ -521,7 +519,13 @@ impl SqlEditorWidget {
         }
 
         // Start polling
-        schedule_poll(receiver, progress_callback, query_running, execute_callback, cancel_flag);
+        schedule_poll(
+            receiver,
+            progress_callback,
+            query_running,
+            execute_callback,
+            cancel_flag,
+        );
     }
 
     fn setup_column_loader(&self, column_receiver: mpsc::Receiver<ColumnLoadUpdate>) {
@@ -732,7 +736,7 @@ impl SqlEditorWidget {
                             }
                             UiActionResult::QueryAlreadyRunning => {
                                 fltk::dialog::message_default(
-                                    "A query is already running. Please wait for it to complete."
+                                    "A query is already running. Please wait for it to complete.",
                                 );
                             }
                         }

@@ -2538,10 +2538,7 @@ impl ObjectBrowser {
         Self::get_object_list(conn, sql)
     }
 
-    pub fn get_synonym_info(
-        conn: &Connection,
-        syn_name: &str,
-    ) -> Result<SynonymInfo, OracleError> {
+    pub fn get_synonym_info(conn: &Connection, syn_name: &str) -> Result<SynonymInfo, OracleError> {
         let sql = r#"
             SELECT
                 synonym_name,
@@ -2673,15 +2670,14 @@ impl ObjectBrowser {
             // Check for PROCEDURE or FUNCTION keyword
             // Use byte-level comparison to avoid panicking on multi-byte
             // UTF-8 continuation bytes (e.g. Korean characters in comments).
-            let (keyword, routine_type) =
-                if bytes.get(i..i + 9) == Some(b"PROCEDURE" as &[u8]) {
-                    (9, "PROCEDURE")
-                } else if bytes.get(i..i + 8) == Some(b"FUNCTION" as &[u8]) {
-                    (8, "FUNCTION")
-                } else {
-                    i += 1;
-                    continue;
-                };
+            let (keyword, routine_type) = if bytes.get(i..i + 9) == Some(b"PROCEDURE" as &[u8]) {
+                (9, "PROCEDURE")
+            } else if bytes.get(i..i + 8) == Some(b"FUNCTION" as &[u8]) {
+                (8, "FUNCTION")
+            } else {
+                i += 1;
+                continue;
+            };
 
             // Ensure keyword is not part of a larger identifier
             if i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_') {
@@ -2716,7 +2712,12 @@ impl ObjectBrowser {
                 }
                 i = j + 1;
             } else {
-                while j < len && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b'$' || bytes[j] == b'#') {
+                while j < len
+                    && (bytes[j].is_ascii_alphanumeric()
+                        || bytes[j] == b'_'
+                        || bytes[j] == b'$'
+                        || bytes[j] == b'#')
+                {
                     j += 1;
                 }
                 if j > name_start {

@@ -1262,7 +1262,12 @@ impl ResultTableWidget {
         self.recalculate_widths_for_current_font();
         // Force FLTK to recalculate the table's internal layout after
         // row height / column width changes from the new font metrics.
-        let (x, y, w, h) = (self.table.x(), self.table.y(), self.table.w(), self.table.h());
+        let (x, y, w, h) = (
+            self.table.x(),
+            self.table.y(),
+            self.table.w(),
+            self.table.h(),
+        );
         self.table.resize(x, y, w, h);
         self.table.redraw();
     }

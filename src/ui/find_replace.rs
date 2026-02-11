@@ -1,7 +1,16 @@
 use crate::ui::center_on_main;
 use crate::ui::constants::*;
 use crate::ui::theme;
-use fltk::{app, button::{Button, CheckButton}, enums::{CallbackTrigger, FrameType}, group::Flex, input::Input, prelude::*, text::{TextBuffer, TextEditor}, window::Window};
+use fltk::{
+    app,
+    button::{Button, CheckButton},
+    enums::{CallbackTrigger, FrameType},
+    group::Flex,
+    input::Input,
+    prelude::*,
+    text::{TextBuffer, TextEditor},
+    window::Window,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -340,7 +349,6 @@ impl FindReplaceDialog {
             let _ = sender_for_close.send(DialogMessage::Close);
             app::awake();
         });
-        
 
         dialog.show();
 

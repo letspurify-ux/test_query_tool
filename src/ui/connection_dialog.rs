@@ -414,7 +414,10 @@ impl ConnectionDialog {
                         let mut cfg = config.borrow_mut();
                         cfg.add_recent_connection(info.clone());
                         if let Err(e) = cfg.save() {
-                            fltk::dialog::alert_default(&format!("Failed to save connection: {}", e));
+                            fltk::dialog::alert_default(&format!(
+                                "Failed to save connection: {}",
+                                e
+                            ));
                         } else {
                             saved_browser.clear();
                             for conn in cfg.get_all_connections() {

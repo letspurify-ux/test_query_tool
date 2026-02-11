@@ -1,4 +1,13 @@
-use fltk::{app, browser::HoldBrowser, button::Button, enums::FrameType, group::Flex, prelude::*, text::{StyleTableEntry, TextBuffer, TextDisplay}, window::Window};
+use fltk::{
+    app,
+    browser::HoldBrowser,
+    button::Button,
+    enums::FrameType,
+    group::Flex,
+    prelude::*,
+    text::{StyleTableEntry, TextBuffer, TextDisplay},
+    window::Window,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::{mpsc, OnceLock};
@@ -397,9 +406,7 @@ impl QueryHistoryDialog {
         } else {
             Some(message.to_string())
         };
-        let error_line = error_message
-            .as_deref()
-            .and_then(parse_error_line);
+        let error_line = error_message.as_deref().and_then(parse_error_line);
         let entry = QueryHistoryEntry {
             sql: sql.to_string(),
             timestamp: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),

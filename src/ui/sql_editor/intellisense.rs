@@ -6,6 +6,7 @@ use fltk::{
     text::{PositionType, TextBuffer, TextEditor},
 };
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -755,8 +756,7 @@ impl SqlEditorWidget {
             &statement_text
         };
         let full_tokens = Self::tokenize_sql(full_text);
-        let deep_ctx =
-            intellisense_context::analyze_cursor_context(&before_tokens, &full_tokens);
+        let deep_ctx = intellisense_context::analyze_cursor_context(&before_tokens, &full_tokens);
 
         let context = if deep_ctx.phase.is_table_context() {
             SqlContext::TableName
@@ -780,33 +780,62 @@ impl SqlEditorWidget {
         let include_columns = qualifier.is_some()
             || matches!(context, SqlContext::ColumnName | SqlContext::ColumnOrAll);
 
-        // Register CTE and subquery alias columns (text-based, no DB needed)
+        // Register CTE and subquery alias columns (text-based, with wildcard
+        // expansion from base table metadata when possible).
+        let mut virtual_wildcard_dependencies: HashMap<String, Vec<String>> = HashMap::new();
         {
             let mut data = intellisense_data.borrow_mut();
             // Clear stale virtual table columns from previous trigger
             data.clear_virtual_tables();
+        }
 
-            // Register CTE columns
-            for cte in &deep_ctx.ctes {
-                let columns = if !cte.explicit_columns.is_empty() {
-                    cte.explicit_columns.clone()
-                } else if !cte.body_tokens.is_empty() {
-                    intellisense_context::extract_select_list_columns(&cte.body_tokens)
-                } else {
-                    Vec::new()
-                };
-                if !columns.is_empty() {
-                    data.set_virtual_table_columns(&cte.name, columns);
+        // Register CTE columns
+        for cte in &deep_ctx.ctes {
+            let mut columns = if !cte.explicit_columns.is_empty() {
+                cte.explicit_columns.clone()
+            } else if !cte.body_tokens.is_empty() {
+                intellisense_context::extract_select_list_columns(&cte.body_tokens)
+            } else {
+                Vec::new()
+            };
+            if cte.explicit_columns.is_empty() && !cte.body_tokens.is_empty() {
+                let (wildcard_columns, wildcard_tables) = Self::expand_virtual_table_wildcards(
+                    &cte.body_tokens,
+                    intellisense_data,
+                    column_sender,
+                    connection,
+                );
+                if !wildcard_tables.is_empty() {
+                    virtual_wildcard_dependencies.insert(cte.name.to_uppercase(), wildcard_tables);
                 }
+                columns.extend(wildcard_columns);
             }
+            Self::dedup_column_names_case_insensitive(&mut columns);
+            if !columns.is_empty() {
+                intellisense_data
+                    .borrow_mut()
+                    .set_virtual_table_columns(&cte.name, columns);
+            }
+        }
 
-            // Register subquery alias columns
-            for subq in &deep_ctx.subqueries {
-                let columns =
-                    intellisense_context::extract_select_list_columns(&subq.body_tokens);
-                if !columns.is_empty() {
-                    data.set_virtual_table_columns(&subq.alias, columns);
-                }
+        // Register subquery alias columns
+        for subq in &deep_ctx.subqueries {
+            let mut columns = intellisense_context::extract_select_list_columns(&subq.body_tokens);
+            let (wildcard_columns, wildcard_tables) = Self::expand_virtual_table_wildcards(
+                &subq.body_tokens,
+                intellisense_data,
+                column_sender,
+                connection,
+            );
+            if !wildcard_tables.is_empty() {
+                virtual_wildcard_dependencies.insert(subq.alias.to_uppercase(), wildcard_tables);
+            }
+            columns.extend(wildcard_columns);
+            Self::dedup_column_names_case_insensitive(&mut columns);
+            if !columns.is_empty() {
+                intellisense_data
+                    .borrow_mut()
+                    .set_virtual_table_columns(&subq.alias, columns);
             }
         }
 
@@ -836,7 +865,17 @@ impl SqlEditorWidget {
             let data = intellisense_data.borrow();
             column_tables.iter().any(|table| {
                 let key = table.to_uppercase();
-                data.columns_loading.contains(&key)
+                if data.columns_loading.contains(&key) {
+                    return true;
+                }
+                virtual_wildcard_dependencies
+                    .get(&key)
+                    .map_or(false, |deps| {
+                        deps.iter().any(|dep| {
+                            let dep_key = dep.to_uppercase();
+                            data.columns_loading.contains(&dep_key)
+                        })
+                    })
             })
         } else {
             false
@@ -904,6 +943,39 @@ impl SqlEditorWidget {
         *completion_range.borrow_mut() = Some((completion_start, cursor_pos_usize));
         let mut editor = editor.clone();
         let _ = editor.take_focus();
+    }
+
+    fn expand_virtual_table_wildcards(
+        body_tokens: &[SqlToken],
+        intellisense_data: &Rc<RefCell<IntellisenseData>>,
+        column_sender: &mpsc::Sender<ColumnLoadUpdate>,
+        connection: &SharedConnection,
+    ) -> (Vec<String>, Vec<String>) {
+        let body_ctx = intellisense_context::analyze_cursor_context(body_tokens, body_tokens);
+        let wildcard_tables = intellisense_context::extract_select_list_wildcard_tables(
+            body_tokens,
+            &body_ctx.tables_in_scope,
+        );
+        if wildcard_tables.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+
+        let mut wildcard_columns = Vec::new();
+        for table in &wildcard_tables {
+            Self::request_table_columns(table, intellisense_data, column_sender, connection);
+            let columns = {
+                let data = intellisense_data.borrow();
+                data.get_columns_for_table(table)
+            };
+            wildcard_columns.extend(columns);
+        }
+        Self::dedup_column_names_case_insensitive(&mut wildcard_columns);
+        (wildcard_columns, wildcard_tables)
+    }
+
+    fn dedup_column_names_case_insensitive(columns: &mut Vec<String>) {
+        let mut seen = HashSet::new();
+        columns.retain(|column| seen.insert(column.to_uppercase()));
     }
 
     fn maybe_prefetch_columns_for_word(
@@ -1225,7 +1297,8 @@ impl SqlEditorWidget {
             let object_type_upper = object_type.to_uppercase();
             match object_type_upper.as_str() {
                 "TABLE" | "VIEW" => {
-                    if let Ok(columns) = ObjectBrowser::get_table_structure(conn, &object_name_upper)
+                    if let Ok(columns) =
+                        ObjectBrowser::get_table_structure(conn, &object_name_upper)
                     {
                         if !columns.is_empty() {
                             return Ok(QuickDescribeData::TableColumns(columns));
@@ -1251,8 +1324,7 @@ impl SqlEditorWidget {
                     }
                 }
                 "PACKAGE" => {
-                    if let Ok(ddl) = ObjectBrowser::get_package_spec_ddl(conn, &object_name_upper)
-                    {
+                    if let Ok(ddl) = ObjectBrowser::get_package_spec_ddl(conn, &object_name_upper) {
                         return Ok(QuickDescribeData::Text {
                             title: format!("Describe: {} (PACKAGE)", object_name_upper),
                             content: ddl,
@@ -1393,7 +1465,11 @@ impl SqlEditorWidget {
 
         while i < len {
             let b = bytes[i];
-            let next = if i + 1 < len { Some(bytes[i + 1]) } else { None };
+            let next = if i + 1 < len {
+                Some(bytes[i + 1])
+            } else {
+                None
+            };
 
             if state.in_line_comment {
                 if b == b'\n' {
@@ -1890,5 +1966,27 @@ mod intellisense_regression_tests {
             .expect("column loader should emit a completion update even when lock is busy");
         assert_eq!(update.table, "EMP");
         assert!(update.columns.is_empty());
+    }
+
+    #[test]
+    fn expand_virtual_table_wildcards_uses_loaded_base_table_columns() {
+        let data = Rc::new(RefCell::new(IntellisenseData::new()));
+        {
+            let mut guard = data.borrow_mut();
+            guard.tables = vec!["HELP".to_string()];
+            guard.rebuild_indices();
+            guard.set_columns_for_table("HELP", vec!["TOPIC".to_string(), "TEXT".to_string()]);
+        }
+
+        let (sender, _receiver) = mpsc::channel::<ColumnLoadUpdate>();
+        let connection = create_shared_connection();
+        let tokens = SqlEditorWidget::tokenize_sql("SELECT * FROM help");
+
+        let (columns, tables) =
+            SqlEditorWidget::expand_virtual_table_wildcards(&tokens, &data, &sender, &connection);
+
+        let upper_tables: Vec<String> = tables.into_iter().map(|t| t.to_uppercase()).collect();
+        assert_eq!(upper_tables, vec!["HELP"]);
+        assert_eq!(columns, vec!["TOPIC", "TEXT"]);
     }
 }

@@ -120,7 +120,10 @@ enum CteState {
 /// `before_cursor` is the SQL text from statement start up to cursor.
 /// `full_statement` is the complete statement text (for collecting all table references).
 /// `tokenize` is used to tokenize the SQL.
-pub fn analyze_cursor_context(before_cursor: &[SqlToken], full_statement: &[SqlToken]) -> CursorContext {
+pub fn analyze_cursor_context(
+    before_cursor: &[SqlToken],
+    full_statement: &[SqlToken],
+) -> CursorContext {
     let phase_analysis = analyze_phase(before_cursor);
     let table_analysis = collect_tables_deep(full_statement, phase_analysis.depth);
     let ctes = parse_ctes(full_statement);
@@ -261,10 +264,7 @@ fn analyze_phase(tokens: &[SqlToken]) -> PhaseAnalysis {
                         }
                     }
                     "INTO" => {
-                        if matches!(
-                            current_phase,
-                            SqlPhase::SelectList | SqlPhase::Initial
-                        ) {
+                        if matches!(current_phase, SqlPhase::SelectList | SqlPhase::Initial) {
                             phase_stack[depth] = SqlPhase::IntoClause;
                         }
                     }
@@ -416,10 +416,8 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                     // Look for alias after the closing paren
                     if let Some((alias, next_idx)) = parse_subquery_alias(tokens, idx + 1) {
                         // Capture body tokens for column inference
-                        let body_tokens: Vec<SqlToken> = tokens[start_idx..idx]
-                            .iter()
-                            .cloned()
-                            .collect();
+                        let body_tokens: Vec<SqlToken> =
+                            tokens[start_idx..idx].iter().cloned().collect();
                         all_subqueries.push(SubqueryDefinition {
                             alias: alias.clone(),
                             body_tokens,
@@ -534,10 +532,11 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                         phase_stack[depth] = SqlPhase::FromClause;
                         expect_table = true;
                     }
-                    "INTO" if matches!(
-                        phase_stack[depth],
-                        SqlPhase::SelectList | SqlPhase::Initial
-                    ) =>
+                    "INTO"
+                        if matches!(
+                            phase_stack[depth],
+                            SqlPhase::SelectList | SqlPhase::Initial
+                        ) =>
                     {
                         phase_stack[depth] = SqlPhase::IntoClause;
                         expect_table = true;
@@ -662,7 +661,10 @@ fn parse_ctes(tokens: &[SqlToken]) -> Vec<CteDefinition> {
         // If we hit SELECT/INSERT/UPDATE/DELETE before WITH, no CTEs
         if let SqlToken::Word(w) = &tokens[idx] {
             let u = w.to_uppercase();
-            if matches!(u.as_str(), "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE") {
+            if matches!(
+                u.as_str(),
+                "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE"
+            ) {
                 return ctes;
             }
         }
@@ -686,7 +688,10 @@ fn parse_ctes(tokens: &[SqlToken]) -> Vec<CteDefinition> {
         let cte_name = match tokens.get(idx) {
             Some(SqlToken::Word(w)) => {
                 let u = w.to_uppercase();
-                if matches!(u.as_str(), "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE") {
+                if matches!(
+                    u.as_str(),
+                    "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE"
+                ) {
                     break;
                 }
                 w.clone()
@@ -903,15 +908,7 @@ fn parse_subquery_alias(tokens: &[SqlToken], start: usize) -> Option<(String, us
 fn is_join_keyword(word: &str) -> bool {
     matches!(
         word,
-        "JOIN"
-            | "INNER"
-            | "LEFT"
-            | "RIGHT"
-            | "FULL"
-            | "CROSS"
-            | "OUTER"
-            | "NATURAL"
-            | "LATERAL"
+        "JOIN" | "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "OUTER" | "NATURAL" | "LATERAL"
     )
 }
 
@@ -1150,6 +1147,155 @@ pub fn extract_select_list_columns(tokens: &[SqlToken]) -> Vec<String> {
     }
 
     columns
+}
+
+/// Resolve source table names referenced by wildcard items (`*`, `t.*`) in a
+/// SELECT list. Returned names are deduplicated in appearance order.
+pub fn extract_select_list_wildcard_tables(
+    tokens: &[SqlToken],
+    tables_in_scope: &[ScopedTableRef],
+) -> Vec<String> {
+    let mut tables = Vec::new();
+    let mut seen = HashSet::new();
+    let mut idx = 0;
+
+    // Find SELECT keyword
+    while idx < tokens.len() {
+        match &tokens[idx] {
+            SqlToken::Word(w) if w.eq_ignore_ascii_case("SELECT") => {
+                idx += 1;
+                break;
+            }
+            SqlToken::Comment(_) => {
+                idx += 1;
+                continue;
+            }
+            _ => {
+                idx += 1;
+                continue;
+            }
+        }
+    }
+
+    // Skip DISTINCT / ALL / UNIQUE
+    while idx < tokens.len() {
+        match &tokens[idx] {
+            SqlToken::Word(w) => {
+                let u = w.to_uppercase();
+                if matches!(u.as_str(), "DISTINCT" | "ALL" | "UNIQUE") {
+                    idx += 1;
+                    continue;
+                }
+                break;
+            }
+            SqlToken::Comment(_) => {
+                idx += 1;
+                continue;
+            }
+            _ => break,
+        }
+    }
+
+    // Collect tokens for each SELECT item (delimited by comma at depth 0)
+    let mut depth = 0usize;
+    let mut item_tokens: Vec<&SqlToken> = Vec::new();
+
+    while idx < tokens.len() {
+        let token = &tokens[idx];
+
+        match token {
+            SqlToken::Symbol(s) if s == "(" => {
+                depth += 1;
+                item_tokens.push(token);
+            }
+            SqlToken::Symbol(s) if s == ")" => {
+                depth = depth.saturating_sub(1);
+                item_tokens.push(token);
+            }
+            SqlToken::Symbol(s) if s == "," && depth == 0 => {
+                append_wildcard_item_tables(&item_tokens, tables_in_scope, &mut tables, &mut seen);
+                item_tokens.clear();
+            }
+            SqlToken::Word(w) if depth == 0 => {
+                let u = w.to_uppercase();
+                if matches!(u.as_str(), "FROM" | "INTO" | "BULK") {
+                    append_wildcard_item_tables(
+                        &item_tokens,
+                        tables_in_scope,
+                        &mut tables,
+                        &mut seen,
+                    );
+                    item_tokens.clear();
+                    break;
+                }
+                item_tokens.push(token);
+            }
+            SqlToken::Comment(_) => { /* skip */ }
+            _ => {
+                item_tokens.push(token);
+            }
+        }
+        idx += 1;
+    }
+
+    if !item_tokens.is_empty() {
+        append_wildcard_item_tables(&item_tokens, tables_in_scope, &mut tables, &mut seen);
+    }
+
+    tables
+}
+
+fn append_wildcard_item_tables(
+    item_tokens: &[&SqlToken],
+    tables_in_scope: &[ScopedTableRef],
+    tables: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    let meaningful: Vec<&SqlToken> = item_tokens
+        .iter()
+        .copied()
+        .filter(|t| !matches!(t, SqlToken::Comment(_)))
+        .collect();
+
+    if meaningful.is_empty() {
+        return;
+    }
+
+    // Unqualified wildcard: `*`
+    if meaningful.len() == 1 {
+        if let SqlToken::Symbol(s) = meaningful[0] {
+            if s == "*" {
+                for table in resolve_all_scope_tables(tables_in_scope) {
+                    let key = table.to_uppercase();
+                    if seen.insert(key) {
+                        tables.push(table);
+                    }
+                }
+                return;
+            }
+        }
+    }
+
+    // Qualified wildcard: `alias.*` (or `schema.table.*`; we resolve by the
+    // identifier immediately before the final dot).
+    if meaningful.len() >= 3 {
+        let last = meaningful[meaningful.len() - 1];
+        let dot = meaningful[meaningful.len() - 2];
+        let qualifier = meaningful[meaningful.len() - 3];
+        if let (SqlToken::Symbol(star), SqlToken::Symbol(dot_sym), SqlToken::Word(q)) =
+            (last, dot, qualifier)
+        {
+            if star == "*" && dot_sym == "." {
+                let normalized = strip_identifier_quotes(q);
+                for table in resolve_qualifier_tables(&normalized, tables_in_scope) {
+                    let key = table.to_uppercase();
+                    if seen.insert(key) {
+                        tables.push(table);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Given the tokens of a single SELECT item, determine the output column name.

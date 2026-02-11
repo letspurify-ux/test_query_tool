@@ -13,8 +13,8 @@ use std::thread;
 
 use crate::db::{
     lock_connection, try_lock_connection, CompilationError, ConstraintInfo, IndexInfo,
-    ObjectBrowser, PackageRoutine, ProcedureArgument, SequenceInfo, SharedConnection,
-    SynonymInfo, TableColumnDetail,
+    ObjectBrowser, PackageRoutine, ProcedureArgument, SequenceInfo, SharedConnection, SynonymInfo,
+    TableColumnDetail,
 };
 use crate::ui::constants::*;
 use crate::ui::font_settings::FontProfile;
@@ -437,10 +437,8 @@ impl ObjectBrowserWidget {
                                     "Table Name", info.table_name
                                 ));
                                 if !info.db_link.is_empty() {
-                                    details.push_str(&format!(
-                                        "{:<18} {}\n",
-                                        "DB Link", info.db_link
-                                    ));
+                                    details
+                                        .push_str(&format!("{:<18} {}\n", "DB Link", info.db_link));
                                 }
 
                                 ObjectBrowserWidget::show_info_dialog("Synonym Info", &details);
@@ -561,7 +559,7 @@ impl ObjectBrowserWidget {
                         },
                         ObjectActionResult::QueryAlreadyRunning => {
                             fltk::dialog::message_default(
-                                "A query is already running. Please wait for it to complete."
+                                "A query is already running. Please wait for it to complete.",
                             );
                         }
                     },
@@ -588,13 +586,7 @@ impl ObjectBrowserWidget {
             });
         }
 
-        schedule_poll(
-            receiver,
-            sql_callback,
-            tree,
-            object_cache,
-            filter_input,
-        );
+        schedule_poll(receiver, sql_callback, tree, object_cache, filter_input);
     }
 
     fn setup_callbacks(&mut self) {
@@ -656,17 +648,22 @@ impl ObjectBrowserWidget {
                                             let sender = action_sender.clone();
                                             thread::spawn(move || {
                                                 // Try to acquire connection lock without blocking
-                                                let Some(conn_guard) = try_lock_connection(&connection)
+                                                let Some(conn_guard) =
+                                                    try_lock_connection(&connection)
                                                 else {
                                                     // Query is already running, notify user
-                                                    let _ = sender.send(ObjectActionResult::QueryAlreadyRunning);
+                                                    let _ = sender.send(
+                                                        ObjectActionResult::QueryAlreadyRunning,
+                                                    );
                                                     app::awake();
                                                     return;
                                                 };
 
                                                 let result = if !conn_guard.is_connected() {
                                                     Err("Not connected to database".to_string())
-                                                } else if let Some(db_conn) = conn_guard.get_connection() {
+                                                } else if let Some(db_conn) =
+                                                    conn_guard.get_connection()
+                                                {
                                                     ObjectBrowser::get_package_routines(
                                                         db_conn.as_ref(),
                                                         &package_name,
@@ -676,10 +673,12 @@ impl ObjectBrowserWidget {
                                                     Err("Not connected to database".to_string())
                                                 };
 
-                                                let _ = sender.send(ObjectActionResult::PackageRoutines {
-                                                    package_name,
-                                                    result,
-                                                });
+                                                let _ = sender.send(
+                                                    ObjectActionResult::PackageRoutines {
+                                                        package_name,
+                                                        result,
+                                                    },
+                                                );
                                                 app::awake();
                                                 // conn_guard drops here, releasing the lock
                                             });
@@ -793,12 +792,10 @@ impl ObjectBrowserWidget {
 
         match parent_type_upper.as_str() {
             "TABLES" | "VIEWS" | "PROCEDURES" | "FUNCTIONS" | "SEQUENCES" | "SYNONYMS"
-            | "PACKAGES" => {
-                Some(ObjectItem::Simple {
-                    object_type: parent_type_upper,
-                    object_name,
-                })
-            }
+            | "PACKAGES" => Some(ObjectItem::Simple {
+                object_type: parent_type_upper,
+                object_name,
+            }),
             _ => None,
         }
     }
@@ -1462,7 +1459,7 @@ impl ObjectBrowserWidget {
                                 });
                                 app::awake();
                             }
-                            
+
                             // conn_guard drops here, releasing the lock
                         });
                     }
@@ -1567,19 +1564,21 @@ impl ObjectBrowserWidget {
                                 return;
                             };
 
-                            let send_err = |sender: &std::sync::mpsc::Sender<ObjectActionResult>,
+                            let send_err = |sender: &std::sync::mpsc::Sender<
+                                ObjectActionResult,
+                            >,
                                             obj_type: &str,
                                             msg: &str| {
                                 match obj_type {
                                     "SYNONYMS" => {
-                                        let _ = sender.send(ObjectActionResult::SynonymInfo(
-                                            Err(msg.to_string()),
-                                        ));
+                                        let _ = sender.send(ObjectActionResult::SynonymInfo(Err(
+                                            msg.to_string(),
+                                        )));
                                     }
                                     "SEQUENCES" => {
-                                        let _ = sender.send(ObjectActionResult::SequenceInfo(
-                                            Err(msg.to_string()),
-                                        ));
+                                        let _ = sender.send(ObjectActionResult::SequenceInfo(Err(
+                                            msg.to_string(),
+                                        )));
                                     }
                                     other => {
                                         eprintln!("Unexpected object type for View Info: {other}");
@@ -1780,7 +1779,8 @@ impl ObjectBrowserWidget {
             // Keep conn_guard alive (don't drop it) so the lock is held during execution
 
             let mut cache = ObjectCache::default();
-            let send_update = |sender: &std::sync::mpsc::Sender<ObjectCache>, cache: &ObjectCache| {
+            let send_update = |sender: &std::sync::mpsc::Sender<ObjectCache>,
+                               cache: &ObjectCache| {
                 let _ = sender.send(cache.clone());
                 app::awake();
             };

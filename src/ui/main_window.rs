@@ -99,7 +99,7 @@ impl MainWindow {
         let connection = create_shared_connection();
 
         let current_group = fltk::group::Group::try_current();
-        
+
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
 
         let mut window = Window::default()
@@ -364,7 +364,11 @@ impl MainWindow {
     fn open_query_history_dialog(state: &Rc<RefCell<AppState>>) {
         let (mut buffer, mut editor, popups) = {
             let s = state.borrow_mut();
-            (s.sql_buffer.clone(), s.sql_editor.get_editor(), s.popups.clone())
+            (
+                s.sql_buffer.clone(),
+                s.sql_editor.get_editor(),
+                s.popups.clone(),
+            )
         };
         if let Some(sql) = QueryHistoryDialog::show_with_registry(popups) {
             let buffer_length = buffer.length();
@@ -435,16 +439,8 @@ impl MainWindow {
         app::awake();
     }
 
-    fn apply_runtime_ui_font(
-        state: &mut AppState,
-        font: fltk::enums::Font,
-        ui_size: i32,
-    ) {
-        fn apply_widget_font_recursive(
-            widget: &mut Widget,
-            font: fltk::enums::Font,
-            size: i32,
-        ) {
+    fn apply_runtime_ui_font(state: &mut AppState, font: fltk::enums::Font, ui_size: i32) {
+        fn apply_widget_font_recursive(widget: &mut Widget, font: fltk::enums::Font, size: i32) {
             widget.set_label_font(font);
             widget.set_label_size(size);
             if let Some(group) = widget.as_group() {
@@ -1468,12 +1464,9 @@ impl MainWindow {
         let (fg_r, fg_g, fg_b) = theme::app_foreground().to_rgb();
         app::foreground(fg_r, fg_g, fg_b);
 
-
         let current_group = fltk::group::Group::try_current();
 
-
         fltk::group::Group::set_current(None::<&fltk::group::Group>);
-
 
         let mut main_window = MainWindow::new();
         main_window.setup_callbacks();
@@ -1489,7 +1482,6 @@ impl MainWindow {
         if let Some(ref group) = current_group {
             fltk::group::Group::set_current(Some(group));
         }
-
     }
 
     #[allow(dead_code)]

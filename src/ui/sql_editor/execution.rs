@@ -2909,10 +2909,9 @@ impl SqlEditorWidget {
                         let _ = conn.set_call_timeout(previous_timeout);
                         return;
                     }
-                    if let Err(err) = SqlEditorWidget::sync_serveroutput_with_session(
-                        conn.as_ref(),
-                        &session,
-                    ) {
+                    if let Err(err) =
+                        SqlEditorWidget::sync_serveroutput_with_session(conn.as_ref(), &session)
+                    {
                         eprintln!("Failed to apply SERVEROUTPUT setting on session start: {err}");
                     }
                 }
@@ -4760,8 +4759,7 @@ impl SqlEditorWidget {
                                         Ok(_) => {
                                             conn_opt = conn_guard.get_connection();
                                             if conn_guard.is_connected() {
-                                                conn_name =
-                                                    conn_guard.get_info().name.clone();
+                                                conn_name = conn_guard.get_info().name.clone();
                                             } else {
                                                 conn_name.clear();
                                             }
@@ -6056,8 +6054,7 @@ impl SqlEditorWidget {
                                                 }
                                             }
                                             SqlEditorWidget::apply_null_text_to_row(
-                                                &mut row,
-                                                &null_text,
+                                                &mut row, &null_text,
                                             );
                                             buffered_rows.push(row);
                                             if SqlEditorWidget::should_flush_progress_rows(
