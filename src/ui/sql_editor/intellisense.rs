@@ -895,6 +895,8 @@ impl SqlEditorWidget {
         intellisense_popup
             .borrow_mut()
             .show_suggestions(suggestions, popup_x, popup_y);
+        app::redraw();
+        app::flush();
         let completion_start = if prefix.is_empty() {
             cursor_pos_usize
         } else {
@@ -903,6 +905,8 @@ impl SqlEditorWidget {
         *completion_range.borrow_mut() = Some((completion_start, cursor_pos_usize));
         let mut editor = editor.clone();
         let _ = editor.take_focus();
+        app::redraw();
+        app::flush();
     }
 
     fn maybe_prefetch_columns_for_word(
