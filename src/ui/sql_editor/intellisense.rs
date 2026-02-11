@@ -872,19 +872,30 @@ impl SqlEditorWidget {
 
         let popup_width = 320;
         let popup_height = (suggestions.len().min(10) * 20 + 10) as i32;
+        let line_height = editor.text_size() + 4;
 
-        if let Some(win) = editor.window() {
-            let mut popup_x = editor.x() + cursor_x;
-            let mut popup_y = editor.y() + cursor_y + 20;
-            let max_x = (win.w() - popup_width).max(0);
-            let max_y = (win.h() - popup_height).max(0);
-            popup_x = popup_x.clamp(0, max_x);
-            popup_y = popup_y.clamp(0, max_y);
+        // Position popup below the cursor, clamped within editor bounds
+        let mut popup_x = editor.x() + cursor_x;
+        let mut popup_y = editor.y() + cursor_y + line_height;
 
-            intellisense_popup
-                .borrow_mut()
-                .show_suggestions(suggestions, popup_x, popup_y);
+        let editor_right = editor.x() + editor.w();
+        let editor_bottom = editor.y() + editor.h();
+
+        if popup_x + popup_width > editor_right {
+            popup_x = (editor_right - popup_width).max(editor.x());
         }
+        if popup_y + popup_height > editor_bottom {
+            let above_y = editor.y() + cursor_y - popup_height;
+            popup_y = if above_y >= editor.y() {
+                above_y
+            } else {
+                (editor_bottom - popup_height).max(editor.y())
+            };
+        }
+
+        intellisense_popup
+            .borrow_mut()
+            .show_suggestions(suggestions, popup_x, popup_y);
         let completion_start = if prefix.is_empty() {
             cursor_pos_usize
         } else {

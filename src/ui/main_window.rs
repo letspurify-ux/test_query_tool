@@ -642,7 +642,7 @@ impl MainWindow {
                         s.sql_editor.clone()
                     };
                     sql_editor
-                        .hide_intellisense_if_outside(app::event_x_root(), app::event_y_root());
+                        .hide_intellisense_if_outside(app::event_x(), app::event_y());
                     false
                 }
                 fltk::enums::Event::Resize => {
