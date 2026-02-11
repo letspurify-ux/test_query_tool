@@ -533,7 +533,10 @@ impl SqlEditorWidget {
 
                     if key == Key::BackSpace || key == Key::Delete {
                         // After backspace/delete, re-evaluate
-                        if word.len() >= 2 {
+                        if word.len() >= 1
+                            || Self::qualifier_before_word(&buffer_for_handle, cursor_pos as usize)
+                                .is_some()
+                        {
                             Self::trigger_intellisense(
                                 ed,
                                 &buffer_for_handle,
@@ -564,8 +567,8 @@ impl SqlEditorWidget {
                                     &pending_intellisense_for_handle,
                                 );
                             } else if Self::is_identifier_byte(byte) {
-                                // Alphanumeric typed - show/update popup if word is long enough
-                                if word.len() >= 2 {
+                                // Alphanumeric typed - keep suggestions responsive even for a single character
+                                if word.len() >= 1 {
                                     Self::trigger_intellisense(
                                         ed,
                                         &buffer_for_handle,
@@ -755,8 +758,7 @@ impl SqlEditorWidget {
             &statement_text
         };
         let full_tokens = Self::tokenize_sql(full_text);
-        let deep_ctx =
-            intellisense_context::analyze_cursor_context(&before_tokens, &full_tokens);
+        let deep_ctx = intellisense_context::analyze_cursor_context(&before_tokens, &full_tokens);
 
         let context = if deep_ctx.phase.is_table_context() {
             SqlContext::TableName
@@ -802,8 +804,7 @@ impl SqlEditorWidget {
 
             // Register subquery alias columns
             for subq in &deep_ctx.subqueries {
-                let columns =
-                    intellisense_context::extract_select_list_columns(&subq.body_tokens);
+                let columns = intellisense_context::extract_select_list_columns(&subq.body_tokens);
                 if !columns.is_empty() {
                     data.set_virtual_table_columns(&subq.alias, columns);
                 }
@@ -832,14 +833,12 @@ impl SqlEditorWidget {
             }
         }
 
-        let columns_loading = if qualifier.is_some() {
+        let columns_loading = {
             let data = intellisense_data.borrow();
             column_tables.iter().any(|table| {
                 let key = table.to_uppercase();
                 data.columns_loading.contains(&key)
             })
-        } else {
-            false
         };
 
         let suggestions = {
@@ -933,14 +932,17 @@ impl SqlEditorWidget {
         column_sender: &mpsc::Sender<ColumnLoadUpdate>,
         connection: &SharedConnection,
     ) {
-        let table_key = table_name
+        let table_key = table_name.to_string();
+        let relation_name = table_name
+            .split('@')
+            .next()
+            .unwrap_or(table_name)
             .split('.')
             .last()
-            .unwrap_or(table_name)
-            .to_string();
+            .unwrap_or(table_name);
         let should_load = {
             let mut data = intellisense_data.borrow_mut();
-            if !data.is_known_relation(&table_key) {
+            if !data.is_known_relation(relation_name) {
                 return;
             }
             data.mark_columns_loading(&table_key)
@@ -953,6 +955,7 @@ impl SqlEditorWidget {
         let connection = connection.clone();
         let sender = column_sender.clone();
         let table_key_for_thread = table_key.clone();
+        let relation_name_for_thread = relation_name.to_string();
         thread::spawn(move || {
             // Try to acquire connection lock without blocking
             // For column loading (background task), silently ignore if busy
@@ -965,7 +968,7 @@ impl SqlEditorWidget {
             } else if let Some(conn) = conn_guard.get_connection() {
                 match crate::db::ObjectBrowser::get_table_columns(
                     conn.as_ref(),
-                    &table_key_for_thread,
+                    &relation_name_for_thread,
                 ) {
                     Ok(cols) => cols.into_iter().map(|col| col.name).collect(),
                     Err(_) => Vec::new(),
@@ -1220,7 +1223,8 @@ impl SqlEditorWidget {
             let object_type_upper = object_type.to_uppercase();
             match object_type_upper.as_str() {
                 "TABLE" | "VIEW" => {
-                    if let Ok(columns) = ObjectBrowser::get_table_structure(conn, &object_name_upper)
+                    if let Ok(columns) =
+                        ObjectBrowser::get_table_structure(conn, &object_name_upper)
                     {
                         if !columns.is_empty() {
                             return Ok(QuickDescribeData::TableColumns(columns));
@@ -1246,8 +1250,7 @@ impl SqlEditorWidget {
                     }
                 }
                 "PACKAGE" => {
-                    if let Ok(ddl) = ObjectBrowser::get_package_spec_ddl(conn, &object_name_upper)
-                    {
+                    if let Ok(ddl) = ObjectBrowser::get_package_spec_ddl(conn, &object_name_upper) {
                         return Ok(QuickDescribeData::Text {
                             title: format!("Describe: {} (PACKAGE)", object_name_upper),
                             content: ddl,

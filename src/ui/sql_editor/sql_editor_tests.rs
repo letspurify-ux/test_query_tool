@@ -1259,3 +1259,25 @@ END;"#;
         formatted
     );
 }
+
+#[test]
+fn format_sql_nested_select_join_in_from_indents_join_block() {
+    let input = "select *\nfrom (\n    select a.id\n    from t1 a\n) a\nleft outer join (\n    select b.id\n    from t2 b\n) b\non a.id = b.id\nwhere a.id > 0";
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "SELECT *",
+        "FROM (",
+        "    SELECT a.id",
+        "    FROM t1 a",
+        ") a",
+        "    LEFT OUTER JOIN (",
+        "        SELECT b.id",
+        "        FROM t2 b",
+        "    ) b",
+        "    ON a.id = b.id",
+        "WHERE a.id > 0;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
