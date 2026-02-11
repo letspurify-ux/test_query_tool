@@ -91,7 +91,7 @@ impl SqlEditorWidget {
         {
             let mut popup = intellisense_popup.borrow_mut();
             popup.set_selected_callback(move |selected| {
-                let cursor_pos = editor_for_insert.insert_position().max(0) as i32;
+                let cursor_pos = editor_for_insert.insert_position().max(0);
                 let cursor_pos_usize = cursor_pos as usize;
                 let context_text = Self::context_before_cursor(&buffer_for_insert, cursor_pos);
                 let context = detect_sql_context(&context_text, context_text.len());
@@ -125,7 +125,7 @@ impl SqlEditorWidget {
                     buffer_for_insert.replace(start as i32, end as i32, &selected);
                     editor_for_insert.set_insert_position((start + selected.len()) as i32);
                 } else {
-                    buffer_for_insert.insert(cursor_pos as i32, &selected);
+                    buffer_for_insert.insert(cursor_pos, &selected);
                     editor_for_insert
                         .set_insert_position((cursor_pos_usize + selected.len()) as i32);
                 }
@@ -256,7 +256,7 @@ impl SqlEditorWidget {
                                 let selected =
                                     intellisense_popup_for_handle.borrow().get_selected();
                                 if let Some(selected) = selected {
-                                    let cursor_pos = ed.insert_position().max(0) as i32;
+                                    let cursor_pos = ed.insert_position().max(0);
                                     let cursor_pos_usize = cursor_pos as usize;
                                     let range = *completion_range_for_handle.borrow();
                                     let (start, end) = if let Some((range_start, range_end)) = range
@@ -527,7 +527,7 @@ impl SqlEditorWidget {
                     }
 
                     // Handle typing - update intellisense filter
-                    let cursor_pos = ed.insert_position().max(0) as i32;
+                    let cursor_pos = ed.insert_position().max(0);
                     let (word, _, _) = Self::word_at_cursor(&buffer_for_handle, cursor_pos);
                     let context_text = Self::context_before_cursor(&buffer_for_handle, cursor_pos);
                     let context = detect_sql_context(&context_text, context_text.len());
@@ -672,10 +672,13 @@ impl SqlEditorWidget {
             return None;
         }
 
-        let path_str = if cleaned.len() >= 7 && cleaned[..7].eq_ignore_ascii_case("file://") {
-            let mut uri_path = cleaned[7..].trim();
-            if uri_path.len() >= 10 && uri_path[..10].eq_ignore_ascii_case("localhost/") {
-                uri_path = &uri_path[9..];
+        let path_str = if let Some(rest) = Self::strip_prefix_ignore_ascii_case(cleaned, "file://")
+        {
+            let mut uri_path = rest.trim();
+            if let Some(after_localhost) =
+                Self::strip_prefix_ignore_ascii_case(uri_path, "localhost")
+            {
+                uri_path = after_localhost;
             }
             #[cfg(windows)]
             {
@@ -699,25 +702,44 @@ impl SqlEditorWidget {
         Some(PathBuf::from(path_str))
     }
 
+    fn strip_prefix_ignore_ascii_case<'a>(value: &'a str, prefix: &str) -> Option<&'a str> {
+        let value_bytes = value.as_bytes();
+        let prefix_bytes = prefix.as_bytes();
+        if value_bytes.len() < prefix_bytes.len() {
+            return None;
+        }
+        if value_bytes[..prefix_bytes.len()].eq_ignore_ascii_case(prefix_bytes) {
+            return value.get(prefix_bytes.len()..);
+        }
+        None
+    }
+
     fn decode_uri_percent(value: &str) -> String {
         let bytes = value.as_bytes();
-        let mut out = String::with_capacity(value.len());
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
         let mut i = 0usize;
         while i < bytes.len() {
             if bytes[i] == b'%' && i + 2 < bytes.len() {
-                let hex = [bytes[i + 1], bytes[i + 2]];
-                if let Ok(hex_str) = std::str::from_utf8(&hex) {
-                    if let Ok(v) = u8::from_str_radix(hex_str, 16) {
-                        out.push(v as char);
-                        i += 3;
-                        continue;
+                let hex_value = |b: u8| -> Option<u8> {
+                    match b {
+                        b'0'..=b'9' => Some(b - b'0'),
+                        b'a'..=b'f' => Some(b - b'a' + 10),
+                        b'A'..=b'F' => Some(b - b'A' + 10),
+                        _ => None,
                     }
+                };
+                if let (Some(high), Some(low)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2]))
+                {
+                    out.push((high << 4) | low);
+                    i += 3;
+                    continue;
                 }
             }
-            out.push(bytes[i] as char);
+            out.push(bytes[i]);
             i += 1;
         }
-        out
+        String::from_utf8(out)
+            .unwrap_or_else(|err| String::from_utf8_lossy(&err.into_bytes()).into_owned())
     }
 
     pub fn trigger_intellisense(
@@ -730,7 +752,7 @@ impl SqlEditorWidget {
         connection: &SharedConnection,
         pending_intellisense: &Rc<RefCell<Option<PendingIntellisense>>>,
     ) {
-        let cursor_pos = editor.insert_position().max(0) as i32;
+        let cursor_pos = editor.insert_position().max(0);
         let cursor_pos_usize = cursor_pos as usize;
         let (word, start, _) = Self::word_at_cursor(buffer, cursor_pos);
         let qualifier = Self::qualifier_before_word(buffer, start);
@@ -861,24 +883,14 @@ impl SqlEditorWidget {
             }
         }
 
-        let columns_loading = if qualifier.is_some() {
+        let columns_loading = {
             let data = intellisense_data.borrow();
-            column_tables.iter().any(|table| {
-                let key = table.to_uppercase();
-                if data.columns_loading.contains(&key) {
-                    return true;
-                }
-                virtual_wildcard_dependencies
-                    .get(&key)
-                    .map_or(false, |deps| {
-                        deps.iter().any(|dep| {
-                            let dep_key = dep.to_uppercase();
-                            data.columns_loading.contains(&dep_key)
-                        })
-                    })
-            })
-        } else {
-            false
+            Self::has_column_loading_for_scope(
+                include_columns,
+                &column_tables,
+                &virtual_wildcard_dependencies,
+                &data,
+            )
         };
 
         let suggestions = {
@@ -895,17 +907,18 @@ impl SqlEditorWidget {
             }
         };
 
+        let should_refresh_when_columns_ready = include_columns && columns_loading;
+        if should_refresh_when_columns_ready {
+            *pending_intellisense.borrow_mut() = Some(PendingIntellisense { cursor_pos });
+        } else {
+            *pending_intellisense.borrow_mut() = None;
+        }
+
         if suggestions.is_empty() {
-            if columns_loading {
-                *pending_intellisense.borrow_mut() = Some(PendingIntellisense { cursor_pos });
-            } else {
-                *pending_intellisense.borrow_mut() = None;
-            }
             intellisense_popup.borrow_mut().hide();
             *completion_range.borrow_mut() = None;
             return;
         }
-        *pending_intellisense.borrow_mut() = None;
 
         // Get cursor position in editor's local coordinates (already window-relative in FLTK)
         let (cursor_x, cursor_y) = editor.position_to_xy(editor.insert_position());
@@ -978,6 +991,30 @@ impl SqlEditorWidget {
         columns.retain(|column| seen.insert(column.to_uppercase()));
     }
 
+    fn has_column_loading_for_scope(
+        include_columns: bool,
+        column_tables: &[String],
+        virtual_wildcard_dependencies: &HashMap<String, Vec<String>>,
+        data: &IntellisenseData,
+    ) -> bool {
+        if !include_columns {
+            return false;
+        }
+
+        column_tables.iter().any(|table| {
+            let key = table.to_uppercase();
+            if data.columns_loading.contains(&key) {
+                return true;
+            }
+            virtual_wildcard_dependencies.get(&key).is_some_and(|deps| {
+                deps.iter().any(|dep| {
+                    let dep_key = dep.to_uppercase();
+                    data.columns_loading.contains(&dep_key)
+                })
+            })
+        })
+    }
+
     fn maybe_prefetch_columns_for_word(
         context: SqlContext,
         word: &str,
@@ -1005,22 +1042,25 @@ impl SqlEditorWidget {
         column_sender: &mpsc::Sender<ColumnLoadUpdate>,
         connection: &SharedConnection,
     ) {
-        let table_key = table_name
-            .split('.')
-            .last()
-            .unwrap_or(table_name)
-            .to_string();
-        let should_load = {
-            let mut data = intellisense_data.borrow_mut();
-            if !data.is_known_relation(&table_key) {
-                return;
-            }
-            data.mark_columns_loading(&table_key)
-        };
-
-        if !should_load {
+        let table_key_candidates = Self::table_lookup_key_candidates(table_name);
+        if table_key_candidates.is_empty() {
             return;
         }
+
+        let table_key = {
+            let mut data = intellisense_data.borrow_mut();
+            let selected = table_key_candidates
+                .iter()
+                .find(|candidate| data.is_known_relation(candidate))
+                .cloned();
+            let Some(selected) = selected else {
+                return;
+            };
+            if !data.mark_columns_loading(&selected) {
+                return;
+            }
+            selected
+        };
 
         let connection = connection.clone();
         let sender = column_sender.clone();
@@ -1032,31 +1072,49 @@ impl SqlEditorWidget {
                 let _ = sender.send(ColumnLoadUpdate {
                     table: table_key_for_thread,
                     columns: Vec::new(),
+                    cache_columns: false,
                 });
                 app::awake();
                 return;
             };
 
-            let columns = if !conn_guard.is_connected() {
-                Vec::new()
+            let (columns, cache_columns) = if !conn_guard.is_connected() {
+                (Vec::new(), false)
             } else if let Some(conn) = conn_guard.get_connection() {
                 match crate::db::ObjectBrowser::get_table_columns(
                     conn.as_ref(),
                     &table_key_for_thread,
                 ) {
-                    Ok(cols) => cols.into_iter().map(|col| col.name).collect(),
-                    Err(_) => Vec::new(),
+                    Ok(cols) => (cols.into_iter().map(|col| col.name).collect(), true),
+                    Err(_) => (Vec::new(), false),
                 }
             } else {
-                Vec::new()
+                (Vec::new(), false)
             };
 
             let _ = sender.send(ColumnLoadUpdate {
                 table: table_key_for_thread,
                 columns,
+                cache_columns,
             });
             app::awake();
         });
+    }
+
+    fn table_lookup_key_candidates(table_name: &str) -> Vec<String> {
+        let normalized = Self::strip_identifier_quotes(table_name.trim());
+        if normalized.is_empty() {
+            return Vec::new();
+        }
+
+        let mut candidates = vec![normalized.clone()];
+        if let Some(last) = normalized.rsplit('.').next() {
+            if !last.eq_ignore_ascii_case(&normalized) && !last.trim().is_empty() {
+                candidates.push(last.trim().to_string());
+            }
+        }
+
+        candidates
     }
 
     fn word_at_cursor(buffer: &TextBuffer, cursor_pos: i32) -> (String, usize, usize) {
@@ -1434,11 +1492,10 @@ impl SqlEditorWidget {
                 }
             }
 
-            if matches!(upper.as_str(), "DECLARE" | "BEGIN") {
-                state.block_depth = state.block_depth.saturating_add(1);
-            } else if state.in_create_plsql
-                && state.block_depth == 0
-                && matches!(upper.as_str(), "AS" | "IS")
+            if matches!(upper.as_str(), "DECLARE" | "BEGIN")
+                || (state.in_create_plsql
+                    && state.block_depth == 0
+                    && matches!(upper.as_str(), "AS" | "IS"))
             {
                 state.block_depth = state.block_depth.saturating_add(1);
             } else if upper == "END" {
@@ -1690,9 +1747,7 @@ impl SqlEditorWidget {
         if begin == idx {
             return None;
         }
-        let Some(qualifier) = text.get(begin..idx) else {
-            return None;
-        };
+        let qualifier = text.get(begin..idx)?;
         let qualifier = Self::strip_identifier_quotes(qualifier);
         if qualifier.is_empty() {
             None
@@ -1868,7 +1923,7 @@ impl SqlEditorWidget {
     }
 
     pub fn quick_describe_at_cursor(&self) {
-        let cursor_pos = self.editor.insert_position().max(0) as i32;
+        let cursor_pos = self.editor.insert_position().max(0);
         let Some((word, start, _)) = Self::identifier_at_position(&self.buffer, cursor_pos) else {
             return;
         };
@@ -1913,6 +1968,8 @@ impl SqlEditorWidget {
 mod intellisense_regression_tests {
     use super::*;
     use crate::db::create_shared_connection;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::time::Duration;
 
     #[test]
@@ -1947,6 +2004,20 @@ mod intellisense_regression_tests {
     }
 
     #[test]
+    fn parse_dropped_file_token_decodes_utf8_percent_sequences() {
+        let token = "file:///tmp/%ED%95%9C%EA%B8%80.sql";
+        let parsed = SqlEditorWidget::parse_dropped_file_token(token);
+        assert_eq!(parsed, Some(PathBuf::from("/tmp/한글.sql")));
+    }
+
+    #[test]
+    fn parse_dropped_file_token_handles_case_insensitive_prefixes() {
+        let token = "FiLe://LOCALHOST/tmp/My%20File.sql";
+        let parsed = SqlEditorWidget::parse_dropped_file_token(token);
+        assert_eq!(parsed, Some(PathBuf::from("/tmp/My File.sql")));
+    }
+
+    #[test]
     fn request_table_columns_releases_loading_when_connection_busy() {
         let data = Rc::new(RefCell::new(IntellisenseData::new()));
         {
@@ -1966,6 +2037,65 @@ mod intellisense_regression_tests {
             .expect("column loader should emit a completion update even when lock is busy");
         assert_eq!(update.table, "EMP");
         assert!(update.columns.is_empty());
+        assert!(!update.cache_columns);
+    }
+
+    #[test]
+    fn request_table_columns_keeps_exact_dotted_relation_name() {
+        let data = Rc::new(RefCell::new(IntellisenseData::new()));
+        {
+            let mut guard = data.borrow_mut();
+            guard.tables = vec!["A.B".to_string()];
+            guard.rebuild_indices();
+        }
+
+        let (sender, receiver) = mpsc::channel::<ColumnLoadUpdate>();
+        let connection = create_shared_connection();
+        let _conn_guard = connection.lock().ok();
+
+        SqlEditorWidget::request_table_columns("A.B", &data, &sender, &connection);
+
+        let update = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("known dotted relation name should still be used for column loading");
+        assert_eq!(update.table, "A.B");
+        assert!(!update.cache_columns);
+    }
+
+    #[test]
+    fn request_table_columns_falls_back_to_unqualified_name() {
+        let data = Rc::new(RefCell::new(IntellisenseData::new()));
+        {
+            let mut guard = data.borrow_mut();
+            guard.tables = vec!["EMP".to_string()];
+            guard.rebuild_indices();
+        }
+
+        let (sender, receiver) = mpsc::channel::<ColumnLoadUpdate>();
+        let connection = create_shared_connection();
+        let _conn_guard = connection.lock().ok();
+
+        SqlEditorWidget::request_table_columns("HR.EMP", &data, &sender, &connection);
+
+        let update = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("schema-qualified names should fall back to relation key when needed");
+        assert_eq!(update.table, "EMP");
+        assert!(!update.cache_columns);
+    }
+
+    #[test]
+    fn column_loading_scope_detects_unqualified_pending_refresh() {
+        let mut data = IntellisenseData::new();
+        data.columns_loading.insert("EMP".to_string());
+        let column_tables = vec!["emp".to_string()];
+        let deps = HashMap::new();
+        assert!(SqlEditorWidget::has_column_loading_for_scope(
+            true,
+            &column_tables,
+            &deps,
+            &data
+        ));
     }
 
     #[test]

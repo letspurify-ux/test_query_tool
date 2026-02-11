@@ -356,11 +356,8 @@ impl QueryExecutor {
         stmt: &Statement,
     ) -> Result<Vec<RefCursor>, OracleError> {
         let mut cursors = Vec::new();
-        loop {
-            match stmt.implicit_result()? {
-                Some(cursor) => cursors.push(cursor),
-                None => break,
-            }
+        while let Some(cursor) = stmt.implicit_result()? {
+            cursors.push(cursor);
         }
         Ok(cursors)
     }
@@ -370,9 +367,7 @@ impl QueryExecutor {
         let upper = cleaned.to_uppercase();
         let body = if upper.starts_with("EXECUTE ") {
             cleaned[8..].to_string()
-        } else if upper.starts_with("EXEC ") {
-            cleaned[5..].to_string()
-        } else if upper.starts_with("CALL ") {
+        } else if upper.starts_with("EXEC ") || upper.starts_with("CALL ") {
             cleaned[5..].to_string()
         } else {
             return None;
@@ -418,10 +413,8 @@ impl QueryExecutor {
             }
             if Self::arg_has_named_arrow(&arg) {
                 has_named = true;
-            } else {
-                if has_named {
-                    return Err("Named and positional parameters cannot be mixed.".to_string());
-                }
+            } else if has_named {
+                return Err("Named and positional parameters cannot be mixed.".to_string());
             }
         }
 
@@ -727,9 +720,7 @@ impl QueryExecutor {
             }
 
             if c == ')' {
-                if depth > 0 {
-                    depth -= 1;
-                }
+                depth = depth.saturating_sub(1);
                 current.push(c);
                 i += 1;
                 continue;
@@ -1167,7 +1158,11 @@ impl QueryExecutor {
                         }
                     }
                 }
-                if let Some(prev) = spans.iter().filter(|span| span.end <= line_start).last() {
+                if let Some(prev) = spans
+                    .iter()
+                    .filter(|span| span.end <= line_start)
+                    .next_back()
+                {
                     return Some(prev.text.clone());
                 }
             }
@@ -2051,15 +2046,14 @@ impl QueryExecutor {
                 object_type = "PACKAGE BODY".to_string();
                 idx += 1;
             }
-        } else if object_type == "TYPE" {
-            if tokens
+        } else if object_type == "TYPE"
+            && tokens
                 .get(idx)
                 .map(|t| t.eq_ignore_ascii_case("BODY"))
                 .unwrap_or(false)
-            {
-                object_type = "TYPE BODY".to_string();
-                idx += 1;
-            }
+        {
+            object_type = "TYPE BODY".to_string();
+            idx += 1;
         }
 
         let tracked = matches!(

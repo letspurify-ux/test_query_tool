@@ -821,33 +821,29 @@ impl SqlEditorWidget {
                             if qualifier == Some("CASE") && !case_branch_started.is_empty() {
                                 case_branch_started.pop();
                             }
+                        } else if case_expression_end {
+                            block_stack.pop();
+                            if !case_branch_started.is_empty() {
+                                case_branch_started.pop();
+                            }
                         } else {
-                            if case_expression_end {
-                                block_stack.pop();
-                                if !case_branch_started.is_empty() {
-                                    case_branch_started.pop();
+                            // Plain END - closes BEGIN or DECLARE/PACKAGE_BODY block
+                            // Pop until we find BEGIN or DECLARE/PACKAGE_BODY
+                            let mut closed_block = None;
+                            while let Some(top) = block_stack.pop() {
+                                if top == "BEGIN" || top == "DECLARE" || top == "PACKAGE_BODY" {
+                                    closed_block = Some(top);
+                                    break;
                                 }
-                            } else {
-                                // Plain END - closes BEGIN or DECLARE/PACKAGE_BODY block
-                                // Pop until we find BEGIN or DECLARE/PACKAGE_BODY
-                                let mut closed_block = None;
-                                while let Some(top) = block_stack.pop() {
-                                    if top == "BEGIN" || top == "DECLARE" || top == "PACKAGE_BODY" {
-                                        closed_block = Some(top);
-                                        break;
-                                    }
-                                }
-                                if matches!(closed_block.as_deref(), Some("BEGIN" | "DECLARE"))
-                                    && block_stack.last().is_some_and(|s| s == "PACKAGE_BODY")
-                                {
-                                    pending_package_member_separator = true;
-                                }
+                            }
+                            if matches!(closed_block.as_deref(), Some("BEGIN" | "DECLARE"))
+                                && block_stack.last().is_some_and(|s| s == "PACKAGE_BODY")
+                            {
+                                pending_package_member_separator = true;
                             }
                         }
 
-                        if indent_level > 0 {
-                            indent_level -= 1;
-                        }
+                        indent_level = indent_level.saturating_sub(1);
                         let end_extra =
                             if case_expression_end && (in_sql_case_clause || !in_plsql_block) {
                                 1
@@ -1212,7 +1208,6 @@ impl SqlEditorWidget {
                         }
                     }
 
-                    let started_line = at_line_start;
                     ensure_indent(&mut out, &mut at_line_start, line_indent);
                     if needs_space {
                         out.push(' ');
@@ -1223,7 +1218,6 @@ impl SqlEditorWidget {
                         out.push_str(&word);
                     }
                     needs_space = true;
-                    if started_line {}
                     if upper == "SELECT" {
                         select_list_anchor = Some(out.len());
                         select_list_indent =
@@ -1419,7 +1413,6 @@ impl SqlEditorWidget {
                     if comment_body.ends_with('\n') || comment_body.contains('\n') {
                         at_line_start = true;
                         needs_space = false;
-                        if comment_starts_line {}
                         if in_select_list || column_list_stack.last().copied().unwrap_or(false) {
                             line_indent = base_indent(
                                 indent_level,
@@ -2084,10 +2077,9 @@ impl SqlEditorWidget {
             }
         }
 
-        let Some(create_word_idx) = word_positions.iter().position(|(_, word)| word == "CREATE")
-        else {
-            return None;
-        };
+        let create_word_idx = word_positions
+            .iter()
+            .position(|(_, word)| word == "CREATE")?;
 
         let mut header_idx = create_word_idx + 1;
         while let Some((_, word)) = word_positions.get(header_idx) {
@@ -2101,17 +2093,12 @@ impl SqlEditorWidget {
             break;
         }
 
-        if word_positions
+        if (word_positions
             .get(header_idx)
             .is_some_and(|(_, word)| word == "GLOBAL")
-            && word_positions
-                .get(header_idx + 1)
-                .is_some_and(|(_, word)| word == "TEMPORARY")
-        {
-            header_idx += 2;
-        } else if word_positions
-            .get(header_idx)
-            .is_some_and(|(_, word)| word == "PRIVATE")
+            || word_positions
+                .get(header_idx)
+                .is_some_and(|(_, word)| word == "PRIVATE"))
             && word_positions
                 .get(header_idx + 1)
                 .is_some_and(|(_, word)| word == "TEMPORARY")
@@ -2119,9 +2106,7 @@ impl SqlEditorWidget {
             header_idx += 2;
         }
 
-        let Some((_, create_object)) = word_positions.get(header_idx) else {
-            return None;
-        };
+        let (_, create_object) = word_positions.get(header_idx)?;
         if create_object != "TABLE" {
             return None;
         }
@@ -2140,17 +2125,17 @@ impl SqlEditorWidget {
                     let upper = word.to_uppercase();
                     if !seen_table && upper == "TABLE" {
                         seen_table = true;
-                    } else if seen_table && upper == "AS" {
-                        if tokens[idx + 1..]
+                    } else if seen_table
+                        && upper == "AS"
+                        && tokens[idx + 1..]
                             .iter()
                             .find_map(|t| match t {
                                 SqlToken::Word(w) => Some(w.to_uppercase()),
                                 _ => None,
                             })
                             .is_some_and(|w| w == "SELECT" || w == "WITH")
-                        {
-                            ctas = true;
-                        }
+                    {
+                        ctas = true;
                     }
                 }
                 SqlToken::Symbol(sym) if sym == "(" => {
@@ -3743,61 +3728,32 @@ impl SqlEditorWidget {
                                                         ]
                                                     })
                                                     .collect::<Vec<Vec<String>>>();
-                                                if script_mode {
-                                                    let (heading_enabled, feedback_enabled) =
-                                                        SqlEditorWidget::current_output_settings(
-                                                            &session,
-                                                        );
-                                                    let headers =
-                                                        SqlEditorWidget::apply_heading_setting(
-                                                            vec![
-                                                                "COLUMN".to_string(),
-                                                                "TYPE".to_string(),
-                                                                "NULLABLE".to_string(),
-                                                                "PK".to_string(),
-                                                            ],
-                                                            heading_enabled,
-                                                        );
-                                                    SqlEditorWidget::emit_select_result(
-                                                        &sender,
+                                                let (heading_enabled, feedback_enabled) =
+                                                    SqlEditorWidget::current_output_settings(
                                                         &session,
-                                                        &conn_name,
-                                                        result_index,
-                                                        &title,
-                                                        headers,
-                                                        rows,
-                                                        true,
-                                                        feedback_enabled,
                                                     );
-                                                    result_index += 1;
-                                                } else {
-                                                    let (heading_enabled, feedback_enabled) =
-                                                        SqlEditorWidget::current_output_settings(
-                                                            &session,
-                                                        );
-                                                    let headers =
-                                                        SqlEditorWidget::apply_heading_setting(
-                                                            vec![
-                                                                "COLUMN".to_string(),
-                                                                "TYPE".to_string(),
-                                                                "NULLABLE".to_string(),
-                                                                "PK".to_string(),
-                                                            ],
-                                                            heading_enabled,
-                                                        );
-                                                    SqlEditorWidget::emit_select_result(
-                                                        &sender,
-                                                        &session,
-                                                        &conn_name,
-                                                        result_index,
-                                                        &title,
-                                                        headers,
-                                                        rows,
-                                                        true,
-                                                        feedback_enabled,
+                                                let headers =
+                                                    SqlEditorWidget::apply_heading_setting(
+                                                        vec![
+                                                            "COLUMN".to_string(),
+                                                            "TYPE".to_string(),
+                                                            "NULLABLE".to_string(),
+                                                            "PK".to_string(),
+                                                        ],
+                                                        heading_enabled,
                                                     );
-                                                    result_index += 1;
-                                                }
+                                                SqlEditorWidget::emit_select_result(
+                                                    &sender,
+                                                    &session,
+                                                    &conn_name,
+                                                    result_index,
+                                                    &title,
+                                                    headers,
+                                                    rows,
+                                                    true,
+                                                    feedback_enabled,
+                                                );
+                                                result_index += 1;
                                             }
                                         }
                                         Err(err) => {
@@ -5103,9 +5059,7 @@ impl SqlEditorWidget {
                                     &session,
                                     timing_duration,
                                 );
-                                if timed_out {
-                                    stop_execution = true;
-                                } else if !result_success && !continue_on_error {
+                                if timed_out || (!result_success && !continue_on_error) {
                                     stop_execution = true;
                                 }
                                 continue;
@@ -5172,9 +5126,7 @@ impl SqlEditorWidget {
                                     &session,
                                     timing_duration,
                                 );
-                                if timed_out {
-                                    stop_execution = true;
-                                } else if !result_success && !continue_on_error {
+                                if timed_out || (!result_success && !continue_on_error) {
                                     stop_execution = true;
                                 }
                                 continue;
@@ -5796,9 +5748,7 @@ impl SqlEditorWidget {
                                     timing_duration,
                                 );
 
-                                if timed_out {
-                                    stop_execution = true;
-                                } else if !result.success && !continue_on_error {
+                                if timed_out || (!result.success && !continue_on_error) {
                                     stop_execution = true;
                                 }
                             } else if is_select {
@@ -6200,9 +6150,7 @@ impl SqlEditorWidget {
                                     timing_duration,
                                 );
 
-                                if timed_out {
-                                    stop_execution = true;
-                                } else if !result.success && !continue_on_error {
+                                if timed_out || (!result.success && !continue_on_error) {
                                     stop_execution = true;
                                 }
                             } else {
@@ -6505,9 +6453,7 @@ impl SqlEditorWidget {
                                     timing_duration,
                                 );
 
-                                if timed_out {
-                                    stop_execution = true;
-                                } else if !result.success && !continue_on_error {
+                                if timed_out || (!result.success && !continue_on_error) {
                                     stop_execution = true;
                                 }
                             }

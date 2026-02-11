@@ -1003,6 +1003,11 @@ impl IntellisenseData {
         true
     }
 
+    pub fn clear_columns_loading(&mut self, table_name: &str) {
+        let key = table_name.to_uppercase();
+        self.columns_loading.remove(&key);
+    }
+
     pub fn is_known_relation(&self, name: &str) -> bool {
         let upper = name.to_uppercase();
         if !self.relations_upper.is_empty() {

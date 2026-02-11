@@ -264,8 +264,19 @@ fn analyze_phase(tokens: &[SqlToken]) -> PhaseAnalysis {
                         }
                     }
                     "INTO" => {
-                        if matches!(current_phase, SqlPhase::SelectList | SqlPhase::Initial) {
+                        if matches!(
+                            current_phase,
+                            SqlPhase::SelectList | SqlPhase::Initial | SqlPhase::MergeTarget
+                        ) {
                             phase_stack[depth] = SqlPhase::IntoClause;
+                        }
+                    }
+                    "USING" => {
+                        if matches!(
+                            current_phase,
+                            SqlPhase::MergeTarget | SqlPhase::IntoClause | SqlPhase::FromClause
+                        ) {
+                            phase_stack[depth] = SqlPhase::FromClause;
                         }
                     }
                     "JOIN" => {
@@ -520,6 +531,10 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                         cte_state = CteState::ExpectName;
                         expect_table = false;
                     }
+                    "MERGE" => {
+                        phase_stack[depth] = SqlPhase::MergeTarget;
+                        expect_table = false;
+                    }
                     "SELECT" => {
                         phase_stack[depth] = SqlPhase::SelectList;
                         expect_table = false;
@@ -535,10 +550,19 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                     "INTO"
                         if matches!(
                             phase_stack[depth],
-                            SqlPhase::SelectList | SqlPhase::Initial
+                            SqlPhase::SelectList | SqlPhase::Initial | SqlPhase::MergeTarget
                         ) =>
                     {
                         phase_stack[depth] = SqlPhase::IntoClause;
+                        expect_table = true;
+                    }
+                    "USING"
+                        if matches!(
+                            phase_stack[depth],
+                            SqlPhase::MergeTarget | SqlPhase::IntoClause | SqlPhase::FromClause
+                        ) =>
+                    {
+                        phase_stack[depth] = SqlPhase::FromClause;
                         expect_table = true;
                     }
                     "UPDATE" => {
@@ -829,15 +853,18 @@ fn parse_table_name_deep(tokens: &[SqlToken], start: usize) -> Option<(String, u
             if !is_quoted && (is_join_keyword(&upper) || is_table_stop_keyword(&upper)) {
                 return None;
             }
-            let mut table = strip_identifier_quotes(word);
+            let mut parts = vec![strip_identifier_quotes(word)];
             let mut idx = start + 1;
-            // Handle schema.table
-            if matches!(tokens.get(idx), Some(SqlToken::Symbol(sym)) if sym == ".") {
+            // Handle dotted relation names like schema.table.
+            while matches!(tokens.get(idx), Some(SqlToken::Symbol(sym)) if sym == ".") {
                 if let Some(SqlToken::Word(name)) = tokens.get(idx + 1) {
-                    table = strip_identifier_quotes(name);
+                    parts.push(strip_identifier_quotes(name));
                     idx += 2;
+                    continue;
                 }
+                break;
             }
+            let table = parts.join(".");
             Some((table, idx))
         }
         _ => None,
@@ -990,6 +1017,7 @@ pub fn resolve_qualifier_tables(
     let qualifier_upper = normalize_identifier_for_lookup(qualifier);
     let mut alias_match: Option<(usize, String)> = None;
     let mut name_match: Option<(usize, String)> = None;
+    let mut short_name_match: Option<(usize, String)> = None;
     let mut seen = HashSet::new();
 
     for table_ref in tables_in_scope {
@@ -1015,6 +1043,18 @@ pub fn resolve_qualifier_tables(
                 .map_or(true, |(depth, _)| table_ref.depth >= *depth)
         {
             name_match = Some((table_ref.depth, table_ref.name.clone()));
+            continue;
+        }
+
+        if name_upper
+            .rsplit('.')
+            .next()
+            .is_some_and(|short| short == qualifier_upper)
+            && short_name_match
+                .as_ref()
+                .map_or(true, |(depth, _)| table_ref.depth >= *depth)
+        {
+            short_name_match = Some((table_ref.depth, table_ref.name.clone()));
         }
     }
 
@@ -1025,6 +1065,12 @@ pub fn resolve_qualifier_tables(
     }
 
     if let Some((_, name)) = name_match {
+        if seen.insert(name.to_uppercase()) {
+            return vec![name];
+        }
+    }
+
+    if let Some((_, name)) = short_name_match {
         if seen.insert(name.to_uppercase()) {
             return vec![name];
         }

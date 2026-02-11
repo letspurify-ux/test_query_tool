@@ -225,7 +225,7 @@ fn collect_table_with_schema_prefix() {
     let ctx = analyze("SELECT | FROM hr.employees");
     let names = table_names(&ctx);
     assert!(
-        names.contains(&"EMPLOYEES".to_string()),
+        names.contains(&"HR.EMPLOYEES".to_string()),
         "tables: {:?}",
         names
     );
@@ -471,6 +471,18 @@ fn resolve_qualifier_by_table_name() {
     }];
     let result = resolve_qualifier_tables("employees", &tables);
     assert_eq!(result, vec!["employees"]);
+}
+
+#[test]
+fn resolve_qualifier_by_unqualified_name_for_schema_qualified_table() {
+    let tables = vec![ScopedTableRef {
+        name: "hr.employees".to_string(),
+        alias: None,
+        depth: 0,
+        is_cte: false,
+    }];
+    let result = resolve_qualifier_tables("employees", &tables);
+    assert_eq!(result, vec!["hr.employees"]);
 }
 
 #[test]
@@ -855,6 +867,23 @@ fn merge_target_table() {
         "tables: {:?}",
         names
     );
+}
+
+#[test]
+fn merge_using_source_table_is_collected() {
+    let ctx = analyze(
+        "MERGE INTO target_table t USING source_table s ON t.id = s.id \
+         WHEN MATCHED THEN UPDATE SET t.val = s.val WHERE |",
+    );
+    let names = table_names(&ctx);
+    assert!(names.contains(&"TARGET_TABLE".to_string()), "tables: {:?}", names);
+    assert!(names.contains(&"SOURCE_TABLE".to_string()), "tables: {:?}", names);
+}
+
+#[test]
+fn merge_using_phase_is_table_context() {
+    let ctx = analyze("MERGE INTO target_table t USING |");
+    assert!(ctx.phase.is_table_context());
 }
 
 // ─── Analytic function with OVER clause ──────────────────────────────────

@@ -87,6 +87,7 @@ pub enum QueryProgress {
 pub(crate) struct ColumnLoadUpdate {
     table: String,
     columns: Vec<String>,
+    cache_columns: bool,
 }
 
 #[derive(Clone)]
@@ -560,25 +561,33 @@ impl SqlEditorWidget {
                 loop {
                     match r.try_recv() {
                         Ok(update) => {
-                            {
+                            let should_refresh_pending = {
                                 let mut data = intellisense_data.borrow_mut();
-                                data.set_columns_for_table(&update.table, update.columns);
-                            }
+                                if update.cache_columns {
+                                    data.set_columns_for_table(&update.table, update.columns);
+                                    true
+                                } else {
+                                    data.clear_columns_loading(&update.table);
+                                    false
+                                }
+                            };
 
-                            let pending = pending_intellisense.borrow().clone();
-                            if let Some(pending) = pending {
-                                let cursor_pos = editor.insert_position().max(0);
-                                if cursor_pos == pending.cursor_pos {
-                                    SqlEditorWidget::trigger_intellisense(
-                                        &editor,
-                                        &buffer,
-                                        &intellisense_data,
-                                        &intellisense_popup,
-                                        &completion_range,
-                                        &column_sender,
-                                        &connection,
-                                        &pending_intellisense,
-                                    );
+                            if should_refresh_pending {
+                                let pending = pending_intellisense.borrow().clone();
+                                if let Some(pending) = pending {
+                                    let cursor_pos = editor.insert_position().max(0);
+                                    if cursor_pos == pending.cursor_pos {
+                                        SqlEditorWidget::trigger_intellisense(
+                                            &editor,
+                                            &buffer,
+                                            &intellisense_data,
+                                            &intellisense_popup,
+                                            &completion_range,
+                                            &column_sender,
+                                            &connection,
+                                            &pending_intellisense,
+                                        );
+                                    }
                                 }
                             }
                         }
