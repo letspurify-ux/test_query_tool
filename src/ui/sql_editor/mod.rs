@@ -4,7 +4,7 @@ use fltk::{
     draw::set_cursor,
     enums::{Cursor, FrameType},
     frame::Frame,
-    group::{Flex, FlexType, Pack, PackType},
+    group::{Flex, FlexType, Group, Pack, PackType},
     input::IntInput,
     prelude::*,
     text::{TextBuffer, TextEditor, WrapMode},
@@ -267,6 +267,9 @@ impl SqlEditorWidget {
         button_pack.end();
         group.fixed(&button_pack, BUTTON_ROW_HEIGHT);
 
+        // Overlay group: holds TextEditor + IntellisensePopup as overlay
+        let editor_overlay = Group::default();
+
         // SQL Editor with modern styling
         let buffer = TextBuffer::default();
         let style_buffer = TextBuffer::default();
@@ -295,8 +298,15 @@ impl SqlEditorWidget {
         let style_table = create_style_table_with(editor_profile, editor_size);
         editor.set_highlight_data(style_buffer.clone(), style_table);
 
-        // Add editor to flex and make it resizable (takes remaining space)
-        group.resizable(&editor);
+        // Create intellisense popup inside the overlay group (rendered on top of editor)
+        let intellisense_data = Rc::new(RefCell::new(IntellisenseData::new()));
+        let intellisense_popup = Rc::new(RefCell::new(IntellisensePopup::new()));
+
+        editor_overlay.resizable(&editor);
+        editor_overlay.end();
+
+        // Add overlay group to flex and make it resizable (takes remaining space)
+        group.resizable(&editor_overlay);
         group.end();
 
         let execute_callback: Rc<RefCell<Option<Box<dyn FnMut(&QueryResult)>>>> =
@@ -310,8 +320,6 @@ impl SqlEditorWidget {
         let current_query_connection = Arc::new(Mutex::new(None));
         let cancel_flag = Arc::new(AtomicBool::new(false));
 
-        let intellisense_data = Rc::new(RefCell::new(IntellisenseData::new()));
-        let intellisense_popup = Rc::new(RefCell::new(IntellisensePopup::new()));
         let highlighter = Rc::new(RefCell::new(SqlHighlighter::new()));
         let status_callback: Rc<RefCell<Option<Box<dyn FnMut(&str)>>>> =
             Rc::new(RefCell::new(None));
