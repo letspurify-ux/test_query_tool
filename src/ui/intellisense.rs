@@ -1,5 +1,5 @@
 use crate::ui::theme;
-use fltk::{browser::HoldBrowser, prelude::*, window::Window};
+use fltk::{app, browser::HoldBrowser, prelude::*, window::Window};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -1136,10 +1136,13 @@ impl IntellisensePopup {
         window.set_border(false);
         window.set_color(theme::panel_raised());
         window.make_modal(false);
+        window.set_override();
+        window.clear_visible_focus();
 
         let mut browser = HoldBrowser::default().with_size(320, 200).with_pos(0, 0);
         browser.set_color(theme::panel_alt());
         browser.set_selection_color(theme::selection_strong());
+        browser.clear_visible_focus();
 
         window.end();
 
@@ -1192,6 +1195,8 @@ impl IntellisensePopup {
                     }
                     window.hide();
                     *visible.borrow_mut() = false;
+                    app::redraw();
+                    app::flush();
                 }
             }
         });
@@ -1229,11 +1234,15 @@ impl IntellisensePopup {
         self.window.show();
         self.window.set_on_top();
         *self.visible.borrow_mut() = true;
+        app::redraw();
+        app::flush();
     }
 
     pub fn hide(&mut self) {
         self.window.hide();
         *self.visible.borrow_mut() = false;
+        app::redraw();
+        app::flush();
     }
 
     pub fn is_visible(&self) -> bool {
