@@ -1054,6 +1054,50 @@ SELECT * FROM cte;"#;
 }
 
 #[test]
+fn format_sql_formats_multi_cte_join_subquery_depth_consistently() {
+    let input = "WITH emp_base AS (SELECT e.empno, e.ename, e.deptno, e.sal, e.hiredate FROM emp e WHERE e.hiredate >= DATE '2010-01-01'), dept_agg AS (SELECT eb.deptno, COUNT(*) AS emp_cnt, AVG(eb.sal) AS avg_sal FROM emp_base eb GROUP BY eb.deptno) SELECT d.deptno, d.dname, d.loc, c.emp_cnt, c.avg_sal, (SELECT MAX(eb2.sal) FROM emp_base eb2 WHERE eb2.deptno = c.deptno) AS max_sal_in_dept FROM dept d JOIN dept_agg c ON c.deptno = d.deptno WHERE d.loc = 'SEOUL' AND c.emp_cnt > 3 ORDER BY c.avg_sal DESC;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = r#"WITH emp_base AS (
+    SELECT
+        e.empno,
+        e.ename,
+        e.deptno,
+        e.sal,
+        e.hiredate
+    FROM emp e
+    WHERE e.hiredate >= DATE '2010-01-01'
+),
+dept_agg AS (
+    SELECT
+        eb.deptno,
+        COUNT (*) AS emp_cnt,
+        AVG (eb.sal) AS avg_sal
+    FROM emp_base eb
+    GROUP BY eb.deptno
+)
+SELECT
+    d.deptno,
+    d.dname,
+    d.loc,
+    c.emp_cnt,
+    c.avg_sal,
+    (
+        SELECT MAX (eb2.sal)
+        FROM emp_base eb2
+        WHERE eb2.deptno = c.deptno
+    ) AS max_sal_in_dept
+FROM dept d
+JOIN dept_agg c
+    ON c.deptno = d.deptno
+WHERE d.loc = 'SEOUL'
+    AND c.emp_cnt > 3
+ORDER BY c.avg_sal DESC;"#;
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn format_sql_resets_paren_comma_suppression_after_top_level_semicolon() {
     let input = "SELECT func(a, b;\nSELECT c, d FROM dual";
     let formatted = SqlEditorWidget::format_sql_basic(input);
