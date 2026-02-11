@@ -2607,7 +2607,7 @@ impl SqlEditorWidget {
                         i += 2;
                         continue;
                     }
-                    tokens.push(SqlToken::String(std::mem::take(&mut current)));
+                    tokens.push(SqlToken::Word(std::mem::take(&mut current)));
                     in_double_quote = false;
                     i += 1;
                     continue;
@@ -2767,9 +2767,13 @@ impl SqlEditorWidget {
             if !current.is_empty() {
                 tokens.push(SqlToken::Comment(std::mem::take(&mut current)));
             }
-        } else if in_single_quote || in_double_quote || in_q_quote {
+        } else if in_single_quote || in_q_quote {
             if !current.is_empty() {
                 tokens.push(SqlToken::String(std::mem::take(&mut current)));
+            }
+        } else if in_double_quote {
+            if !current.is_empty() {
+                tokens.push(SqlToken::Word(std::mem::take(&mut current)));
             }
         } else {
             flush_word(&mut current, &mut tokens);

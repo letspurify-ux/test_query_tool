@@ -1364,7 +1364,7 @@ pub fn detect_sql_context(text: &str, cursor_pos: usize) -> SqlContext {
 
 // ASCII-based identifier check.
 fn is_identifier_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$' || byte == b'#'
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

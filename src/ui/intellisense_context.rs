@@ -800,22 +800,36 @@ fn peek_word_upper(tokens: &[SqlToken], idx: usize) -> Option<&'static str> {
     None
 }
 
+fn strip_identifier_quotes(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
+        trimmed[1..trimmed.len() - 1].replace("\"\"", "\"")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn normalize_identifier_for_lookup(value: &str) -> String {
+    strip_identifier_quotes(value).to_uppercase()
+}
+
 /// Parse a table name at the given position (handling schema.table format).
 fn parse_table_name_deep(tokens: &[SqlToken], start: usize) -> Option<(String, usize)> {
     match tokens.get(start) {
         Some(SqlToken::Symbol(sym)) if sym == "(" => None,
         Some(SqlToken::Word(word)) => {
+            let is_quoted = word.trim().starts_with('"') && word.trim().ends_with('"');
             let upper = word.to_uppercase();
             // Skip if this is a keyword rather than a table name
-            if is_join_keyword(&upper) || is_table_stop_keyword(&upper) {
+            if !is_quoted && (is_join_keyword(&upper) || is_table_stop_keyword(&upper)) {
                 return None;
             }
-            let mut table = word.clone();
+            let mut table = strip_identifier_quotes(word);
             let mut idx = start + 1;
             // Handle schema.table
             if matches!(tokens.get(idx), Some(SqlToken::Symbol(sym)) if sym == ".") {
                 if let Some(SqlToken::Word(name)) = tokens.get(idx + 1) {
-                    table = name.clone();
+                    table = strip_identifier_quotes(name);
                     idx += 2;
                 }
             }
@@ -829,15 +843,16 @@ fn parse_table_name_deep(tokens: &[SqlToken], start: usize) -> Option<(String, u
 fn parse_alias_deep(tokens: &[SqlToken], start: usize) -> (Option<String>, usize) {
     match tokens.get(start) {
         Some(SqlToken::Word(word)) => {
+            let is_quoted = word.trim().starts_with('"') && word.trim().ends_with('"');
             let upper = word.to_uppercase();
             if upper == "AS" {
                 if let Some(SqlToken::Word(alias)) = tokens.get(start + 1) {
-                    return (Some(alias.clone()), start + 2);
+                    return (Some(strip_identifier_quotes(alias)), start + 2);
                 }
                 return (None, start + 1);
             }
-            if !is_alias_breaker(&upper) {
-                return (Some(word.clone()), start + 1);
+            if is_quoted || !is_alias_breaker(&upper) {
+                return (Some(strip_identifier_quotes(word)), start + 1);
             }
         }
         _ => {}
@@ -859,6 +874,7 @@ fn parse_subquery_alias(tokens: &[SqlToken], start: usize) -> Option<(String, us
 
     match tokens.get(idx) {
         Some(SqlToken::Word(word)) => {
+            let is_quoted = word.trim().starts_with('"') && word.trim().ends_with('"');
             let upper = word.to_uppercase();
             if upper == "AS" {
                 idx += 1;
@@ -871,12 +887,12 @@ fn parse_subquery_alias(tokens: &[SqlToken], start: usize) -> Option<(String, us
                     break;
                 }
                 if let Some(SqlToken::Word(alias)) = tokens.get(idx) {
-                    return Some((alias.clone(), idx + 1));
+                    return Some((strip_identifier_quotes(alias), idx + 1));
                 }
                 return None;
             }
-            if !is_alias_breaker(&upper) && !is_join_keyword(&upper) {
-                return Some((word.clone(), idx + 1));
+            if is_quoted || (!is_alias_breaker(&upper) && !is_join_keyword(&upper)) {
+                return Some((strip_identifier_quotes(word), idx + 1));
             }
             None
         }
@@ -974,28 +990,56 @@ pub fn resolve_qualifier_tables(
     qualifier: &str,
     tables_in_scope: &[ScopedTableRef],
 ) -> Vec<String> {
-    let qualifier_upper = qualifier.to_uppercase();
-    let mut result = Vec::new();
+    let qualifier_upper = normalize_identifier_for_lookup(qualifier);
+    let mut alias_match: Option<(usize, String)> = None;
+    let mut name_match: Option<(usize, String)> = None;
     let mut seen = HashSet::new();
 
     for table_ref in tables_in_scope {
-        let name_upper = table_ref.name.to_uppercase();
-        let alias_upper = table_ref.alias.as_ref().map(|a| a.to_uppercase());
+        let name_upper = normalize_identifier_for_lookup(&table_ref.name);
+        let alias_upper = table_ref
+            .alias
+            .as_ref()
+            .map(|a| normalize_identifier_for_lookup(a));
 
-        if name_upper == qualifier_upper || alias_upper.as_deref() == Some(&qualifier_upper) {
-            if seen.insert(name_upper.clone()) {
-                result.push(table_ref.name.clone());
+        if alias_upper.as_deref() == Some(qualifier_upper.as_str()) {
+            if alias_match
+                .as_ref()
+                .map_or(true, |(depth, _)| table_ref.depth >= *depth)
+            {
+                alias_match = Some((table_ref.depth, table_ref.name.clone()));
             }
-            return result;
+            continue;
+        }
+
+        if name_upper == qualifier_upper
+            && name_match
+                .as_ref()
+                .map_or(true, |(depth, _)| table_ref.depth >= *depth)
+        {
+            name_match = Some((table_ref.depth, table_ref.name.clone()));
+        }
+    }
+
+    if let Some((_, name)) = alias_match {
+        if seen.insert(name.to_uppercase()) {
+            return vec![name];
+        }
+    }
+
+    if let Some((_, name)) = name_match {
+        if seen.insert(name.to_uppercase()) {
+            return vec![name];
         }
     }
 
     // If no match found, try the qualifier as a direct table name
-    if result.is_empty() && seen.insert(qualifier_upper) {
-        result.push(qualifier.to_string());
+    let normalized = strip_identifier_quotes(qualifier);
+    if seen.insert(normalized.to_uppercase()) {
+        return vec![normalized];
     }
 
-    result
+    Vec::new()
 }
 
 /// Resolve all table names from scope (for unqualified column suggestions).

@@ -206,6 +206,24 @@ fn collect_table_with_schema_prefix() {
 }
 
 #[test]
+fn collect_quoted_table_and_alias() {
+    let ctx = analyze(r#"SELECT "e".| FROM "Emp Table" "e""#);
+    let names = table_names(&ctx);
+    assert!(
+        names.contains(&"EMP TABLE".to_string()),
+        "quoted table should be normalized into scope: {:?}",
+        names
+    );
+    assert!(
+        ctx.tables_in_scope
+            .iter()
+            .any(|t| t.alias.as_deref() == Some("e")),
+        "quoted alias should be normalized into scope: {:?}",
+        ctx.tables_in_scope
+    );
+}
+
+#[test]
 fn collect_multiple_joins() {
     let ctx = analyze(
         "SELECT | FROM employees e \
@@ -467,6 +485,47 @@ fn resolve_qualifier_unknown_falls_back() {
     ];
     let result = resolve_qualifier_tables("unknown", &tables);
     assert_eq!(result, vec!["unknown"]);
+}
+
+#[test]
+fn resolve_qualifier_prefers_deeper_alias_scope() {
+    let tables = vec![
+        ScopedTableRef {
+            name: "outer_table".to_string(),
+            alias: Some("t".to_string()),
+            depth: 0,
+            is_cte: false,
+        },
+        ScopedTableRef {
+            name: "inner_table".to_string(),
+            alias: Some("t".to_string()),
+            depth: 1,
+            is_cte: false,
+        },
+    ];
+    let result = resolve_qualifier_tables("t", &tables);
+    assert_eq!(result, vec!["inner_table"]);
+}
+
+#[test]
+fn resolve_qualifier_prefers_inner_alias_in_nested_query() {
+    let ctx = analyze(
+        "SELECT * FROM outer_t t WHERE EXISTS (SELECT 1 FROM inner_t t WHERE t.|)",
+    );
+    let result = resolve_qualifier_tables("t", &ctx.tables_in_scope);
+    assert_eq!(result, vec!["inner_t"]);
+}
+
+#[test]
+fn resolve_qualifier_matches_quoted_alias() {
+    let tables = vec![ScopedTableRef {
+        name: "Emp Table".to_string(),
+        alias: Some("e".to_string()),
+        depth: 0,
+        is_cte: false,
+    }];
+    let result = resolve_qualifier_tables(r#""e""#, &tables);
+    assert_eq!(result, vec!["Emp Table"]);
 }
 
 // ─── Comment handling tests ──────────────────────────────────────────────

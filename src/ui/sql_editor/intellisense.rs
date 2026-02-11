@@ -957,6 +957,11 @@ impl SqlEditorWidget {
             // Try to acquire connection lock without blocking
             // For column loading (background task), silently ignore if busy
             let Some(conn_guard) = crate::db::try_lock_connection(&connection) else {
+                let _ = sender.send(ColumnLoadUpdate {
+                    table: table_key_for_thread,
+                    columns: Vec::new(),
+                });
+                app::awake();
                 return;
             };
 
@@ -1282,10 +1287,8 @@ impl SqlEditorWidget {
         let start = (cursor_pos - INTELLISENSE_CONTEXT_WINDOW).max(0);
         let start = buffer.line_start(start).max(0);
         let text = buffer.text_range(start, cursor_pos).unwrap_or_default();
-        if let Some(pos) = text.rfind(';') {
-            return text.get(pos + 1..).unwrap_or("").to_string();
-        }
-        text
+        let (stmt_start, _) = Self::statement_bounds_in_text(&text, text.len());
+        text.get(stmt_start..).unwrap_or("").to_string()
     }
 
     fn statement_context(buffer: &TextBuffer, cursor_pos: i32) -> String {
@@ -1305,18 +1308,243 @@ impl SqlEditorWidget {
         if rel_cursor > text.len() {
             rel_cursor = text.len();
         }
-        let bytes = text.as_bytes();
-        let stmt_start = bytes[..rel_cursor]
-            .iter()
-            .rposition(|&b| b == b';')
-            .map(|pos| pos + 1)
-            .unwrap_or(0);
-        let stmt_end = bytes[rel_cursor..]
-            .iter()
-            .position(|&b| b == b';')
-            .map(|pos| rel_cursor + pos)
-            .unwrap_or(text.len());
+        let (stmt_start, stmt_end) = Self::statement_bounds_in_text(&text, rel_cursor);
         text.get(stmt_start..stmt_end).unwrap_or("").to_string()
+    }
+
+    fn statement_bounds_in_text(text: &str, cursor_pos: usize) -> (usize, usize) {
+        #[derive(Default)]
+        struct StatementScanState {
+            in_single_quote: bool,
+            in_double_quote: bool,
+            in_line_comment: bool,
+            in_block_comment: bool,
+            in_q_quote: bool,
+            q_quote_end: Option<char>,
+            pending_create: bool,
+            in_create_plsql: bool,
+            pending_end_qualifier: bool,
+            block_depth: usize,
+        }
+
+        fn apply_word(state: &mut StatementScanState, word: &mut String) {
+            if word.is_empty() {
+                return;
+            }
+
+            let upper = word.to_uppercase();
+
+            if state.pending_end_qualifier {
+                if matches!(upper.as_str(), "IF" | "LOOP" | "CASE") {
+                    state.pending_end_qualifier = false;
+                    word.clear();
+                    return;
+                }
+                state.pending_end_qualifier = false;
+            }
+
+            if upper == "CREATE" {
+                state.pending_create = true;
+                word.clear();
+                return;
+            }
+
+            if state.pending_create {
+                match upper.as_str() {
+                    "OR" | "REPLACE" | "EDITIONABLE" | "NONEDITIONABLE" => {}
+                    "PROCEDURE" | "FUNCTION" | "PACKAGE" | "TRIGGER" | "TYPE" => {
+                        state.in_create_plsql = true;
+                        state.pending_create = false;
+                    }
+                    _ => {
+                        state.pending_create = false;
+                    }
+                }
+            }
+
+            if matches!(upper.as_str(), "DECLARE" | "BEGIN") {
+                state.block_depth = state.block_depth.saturating_add(1);
+            } else if state.in_create_plsql
+                && state.block_depth == 0
+                && matches!(upper.as_str(), "AS" | "IS")
+            {
+                state.block_depth = state.block_depth.saturating_add(1);
+            } else if upper == "END" {
+                state.block_depth = state.block_depth.saturating_sub(1);
+                state.pending_end_qualifier = true;
+                if state.in_create_plsql && state.block_depth == 0 {
+                    state.in_create_plsql = false;
+                }
+            } else if state.block_depth > 0 && matches!(upper.as_str(), "IF" | "LOOP" | "CASE") {
+                state.block_depth = state.block_depth.saturating_add(1);
+            }
+
+            word.clear();
+        }
+
+        let bytes = text.as_bytes();
+        let len = bytes.len();
+        let cursor = cursor_pos.min(len);
+        let mut last_terminator = 0usize;
+        let mut next_terminator = len;
+        let mut word = String::new();
+        let mut state = StatementScanState::default();
+        let mut i = 0usize;
+
+        while i < len {
+            let b = bytes[i];
+            let next = if i + 1 < len { Some(bytes[i + 1]) } else { None };
+
+            if state.in_line_comment {
+                if b == b'\n' {
+                    state.in_line_comment = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if state.in_block_comment {
+                if b == b'*' && next == Some(b'/') {
+                    state.in_block_comment = false;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if state.in_q_quote {
+                if Some(b as char) == state.q_quote_end && next == Some(b'\'') {
+                    state.in_q_quote = false;
+                    state.q_quote_end = None;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+
+            if state.in_single_quote {
+                if b == b'\'' {
+                    if next == Some(b'\'') {
+                        i += 2;
+                        continue;
+                    }
+                    state.in_single_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if state.in_double_quote {
+                if b == b'"' {
+                    if next == Some(b'"') {
+                        i += 2;
+                        continue;
+                    }
+                    state.in_double_quote = false;
+                }
+                i += 1;
+                continue;
+            }
+
+            if b.is_ascii_whitespace() {
+                apply_word(&mut state, &mut word);
+                i += 1;
+                continue;
+            }
+
+            if b == b'-' && next == Some(b'-') {
+                apply_word(&mut state, &mut word);
+                state.in_line_comment = true;
+                i += 2;
+                continue;
+            }
+
+            if b == b'/' && next == Some(b'*') {
+                apply_word(&mut state, &mut word);
+                state.in_block_comment = true;
+                i += 2;
+                continue;
+            }
+
+            if (b == b'n' || b == b'N')
+                && i + 3 < len
+                && (bytes[i + 1] == b'q' || bytes[i + 1] == b'Q')
+                && bytes[i + 2] == b'\''
+            {
+                apply_word(&mut state, &mut word);
+                let delimiter = bytes[i + 3] as char;
+                state.q_quote_end = Some(match delimiter {
+                    '[' => ']',
+                    '{' => '}',
+                    '(' => ')',
+                    '<' => '>',
+                    other => other,
+                });
+                state.in_q_quote = true;
+                i += 4;
+                continue;
+            }
+
+            if (b == b'q' || b == b'Q') && i + 2 < len && bytes[i + 1] == b'\'' {
+                apply_word(&mut state, &mut word);
+                let delimiter = bytes[i + 2] as char;
+                state.q_quote_end = Some(match delimiter {
+                    '[' => ']',
+                    '{' => '}',
+                    '(' => ')',
+                    '<' => '>',
+                    other => other,
+                });
+                state.in_q_quote = true;
+                i += 3;
+                continue;
+            }
+
+            if b == b'\'' {
+                apply_word(&mut state, &mut word);
+                state.in_single_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if b == b'"' {
+                apply_word(&mut state, &mut word);
+                state.in_double_quote = true;
+                i += 1;
+                continue;
+            }
+
+            if Self::is_identifier_byte(b) {
+                word.push(b as char);
+                i += 1;
+                continue;
+            }
+
+            apply_word(&mut state, &mut word);
+            if b == b';' && state.block_depth == 0 {
+                if i < cursor {
+                    last_terminator = i + 1;
+                } else {
+                    next_terminator = i;
+                    break;
+                }
+            }
+            i += 1;
+        }
+
+        apply_word(&mut state, &mut word);
+        (last_terminator.min(len), next_terminator.min(len))
+    }
+
+    fn strip_identifier_quotes(value: &str) -> String {
+        let trimmed = value.trim();
+        if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
+            trimmed[1..trimmed.len() - 1].replace("\"\"", "\"")
+        } else {
+            trimmed.to_string()
+        }
     }
 
     fn qualifier_before_word(buffer: &TextBuffer, word_start: usize) -> Option<String> {
@@ -1338,6 +1566,10 @@ impl SqlEditorWidget {
         if rel_word_start > text.len() {
             rel_word_start = text.len();
         }
+        Self::qualifier_before_word_in_text(&text, rel_word_start)
+    }
+
+    fn qualifier_before_word_in_text(text: &str, rel_word_start: usize) -> Option<String> {
         if rel_word_start == 0 {
             return None;
         }
@@ -1346,6 +1578,27 @@ impl SqlEditorWidget {
             return None;
         }
         let idx = rel_word_start - 1;
+
+        if idx > 0 && bytes.get(idx - 1) == Some(&b'"') {
+            let mut pos = idx - 1;
+            while pos > 0 {
+                pos -= 1;
+                if bytes[pos] == b'"' {
+                    if pos > 0 && bytes[pos - 1] == b'"' {
+                        pos = pos.saturating_sub(1);
+                        continue;
+                    }
+                    let quoted = text.get(pos..idx)?;
+                    let qualifier = Self::strip_identifier_quotes(quoted);
+                    if qualifier.is_empty() {
+                        return None;
+                    }
+                    return Some(qualifier);
+                }
+            }
+            return None;
+        }
+
         let mut begin = idx;
         while begin > 0 {
             if let Some(&byte) = bytes.get(begin - 1) {
@@ -1364,15 +1617,16 @@ impl SqlEditorWidget {
         let Some(qualifier) = text.get(begin..idx) else {
             return None;
         };
+        let qualifier = Self::strip_identifier_quotes(qualifier);
         if qualifier.is_empty() {
             None
         } else {
-            Some(qualifier.to_string())
+            Some(qualifier)
         }
     }
 
     fn is_identifier_byte(byte: u8) -> bool {
-        byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
+        byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$' || byte == b'#'
     }
 
     /// Show quick describe dialog for a table/view structure.
@@ -1576,5 +1830,65 @@ impl SqlEditorWidget {
             });
             app::awake();
         });
+    }
+}
+
+#[cfg(test)]
+mod intellisense_regression_tests {
+    use super::*;
+    use crate::db::create_shared_connection;
+    use std::time::Duration;
+
+    #[test]
+    fn statement_bounds_ignore_semicolon_in_string_literal() {
+        let sql = "SELECT 'a;b' AS txt FROM dual; SELECT 2 FROM dual";
+        let cursor = sql.find("FROM dual").unwrap_or(0);
+        let (start, end) = SqlEditorWidget::statement_bounds_in_text(sql, cursor);
+        assert_eq!(
+            sql.get(start..end).unwrap_or(""),
+            "SELECT 'a;b' AS txt FROM dual"
+        );
+    }
+
+    #[test]
+    fn statement_bounds_ignore_inner_plsql_semicolons() {
+        let sql = "BEGIN\n  v := 1;\n  v := v + 1;\nEND;\nSELECT * FROM dual;";
+        let cursor = sql.find("v + 1").unwrap_or(0);
+        let (start, end) = SqlEditorWidget::statement_bounds_in_text(sql, cursor);
+        assert_eq!(
+            sql.get(start..end).unwrap_or(""),
+            "BEGIN\n  v := 1;\n  v := v + 1;\nEND"
+        );
+    }
+
+    #[test]
+    fn qualifier_before_word_supports_quoted_identifier() {
+        let sql_with_cursor = r#"SELECT "e".| FROM "Emp Table" "e""#;
+        let cursor = sql_with_cursor.find('|').unwrap_or(0);
+        let sql = sql_with_cursor.replace('|', "");
+        let qualifier = SqlEditorWidget::qualifier_before_word_in_text(&sql, cursor);
+        assert_eq!(qualifier.as_deref(), Some("e"));
+    }
+
+    #[test]
+    fn request_table_columns_releases_loading_when_connection_busy() {
+        let data = Rc::new(RefCell::new(IntellisenseData::new()));
+        {
+            let mut guard = data.borrow_mut();
+            guard.tables = vec!["EMP".to_string()];
+            guard.rebuild_indices();
+        }
+
+        let (sender, receiver) = mpsc::channel::<ColumnLoadUpdate>();
+        let connection = create_shared_connection();
+        let _conn_guard = connection.lock().ok();
+
+        SqlEditorWidget::request_table_columns("EMP", &data, &sender, &connection);
+
+        let update = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("column loader should emit a completion update even when lock is busy");
+        assert_eq!(update.table, "EMP");
+        assert!(update.columns.is_empty());
     }
 }
