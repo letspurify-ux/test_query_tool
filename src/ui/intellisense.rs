@@ -1,5 +1,5 @@
 use crate::ui::theme;
-use fltk::{app, browser::HoldBrowser, prelude::*, window::Window};
+use fltk::{browser::HoldBrowser, prelude::*};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -1117,7 +1117,6 @@ impl Default for IntellisenseData {
 
 #[derive(Clone)]
 pub struct IntellisensePopup {
-    window: Window,
     browser: HoldBrowser,
     suggestions: Rc<RefCell<Vec<String>>>,
     selected_callback: Rc<RefCell<Option<Box<dyn FnMut(String)>>>>,
@@ -1126,40 +1125,20 @@ pub struct IntellisensePopup {
 
 impl IntellisensePopup {
     pub fn new() -> Self {
-        // Temporarily suspend current group to prevent popup window from being
-        // added to the parent container (which causes layout issues)
-        let current_group = fltk::group::Group::try_current();
-
-        fltk::group::Group::set_current(None::<&fltk::group::Group>);
-
-        let mut window = Window::default().with_size(320, 200);
-        window.set_border(false);
-        window.set_color(theme::panel_raised());
-        window.make_modal(false);
-        window.set_override();
-        window.clear_visible_focus();
-
         let mut browser = HoldBrowser::default().with_size(320, 200).with_pos(0, 0);
+        browser.set_frame(fltk::enums::FrameType::FlatBox);
         browser.set_color(theme::panel_alt());
         browser.set_selection_color(theme::selection_strong());
         browser.clear_visible_focus();
-
-        window.end();
-
-        // Restore current group
-        if let Some(ref group) = current_group {
-            fltk::group::Group::set_current(Some(group));
-        }
 
         let suggestions = Rc::new(RefCell::new(Vec::new()));
         let selected_callback: Rc<RefCell<Option<Box<dyn FnMut(String)>>>> =
             Rc::new(RefCell::new(None));
         let visible = Rc::new(RefCell::new(false));
 
-        window.hide();
+        browser.hide();
 
         let mut popup = Self {
-            window,
             browser,
             suggestions,
             selected_callback,
@@ -1174,7 +1153,7 @@ impl IntellisensePopup {
         // Browser click callback - handle mouse selection
         let suggestions = self.suggestions.clone();
         let callback = self.selected_callback.clone();
-        let mut window = self.window.clone();
+        let mut browser = self.browser.clone();
         let visible = self.visible.clone();
 
         self.browser.set_callback(move |b| {
@@ -1193,10 +1172,8 @@ impl IntellisensePopup {
                         cb(text);
                         *callback.borrow_mut() = Some(cb);
                     }
-                    window.hide();
+                    browser.hide();
                     *visible.borrow_mut() = false;
-                    app::redraw();
-                    app::flush();
                 }
             }
         });
@@ -1227,22 +1204,16 @@ impl IntellisensePopup {
 
         // Calculate popup size
         let height = (suggestions.len().min(10) * 20 + 10) as i32;
-        self.window.set_size(320, height);
         self.browser.set_size(320, height);
-
-        self.window.set_pos(x, y);
-        self.window.show();
-        self.window.set_on_top();
+        self.browser.set_pos(x, y);
+        self.browser.show();
         *self.visible.borrow_mut() = true;
-        app::redraw();
-        app::flush();
+        self.browser.redraw();
     }
 
     pub fn hide(&mut self) {
-        self.window.hide();
+        self.browser.hide();
         *self.visible.borrow_mut() = false;
-        app::redraw();
-        app::flush();
     }
 
     pub fn is_visible(&self) -> bool {
@@ -1250,10 +1221,10 @@ impl IntellisensePopup {
     }
 
     pub fn contains_point(&self, x: i32, y: i32) -> bool {
-        let left = self.window.x();
-        let top = self.window.y();
-        let right = left + self.window.w();
-        let bottom = top + self.window.h();
+        let left = self.browser.x();
+        let top = self.browser.y();
+        let right = left + self.browser.w();
+        let bottom = top + self.browser.h();
         x >= left && x < right && y >= top && y < bottom
     }
 
