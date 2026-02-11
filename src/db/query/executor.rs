@@ -2545,9 +2545,9 @@ impl ObjectBrowser {
         let sql = r#"
             SELECT
                 synonym_name,
-                NVL(table_owner, ''),
-                NVL(table_name, ''),
-                NVL(db_link, '')
+                table_owner,
+                table_name,
+                db_link
             FROM user_synonyms
             WHERE synonym_name = :1
         "#;
@@ -2567,9 +2567,9 @@ impl ObjectBrowser {
         };
 
         let name: String = row.get(0)?;
-        let table_owner: String = row.get(1)?;
-        let table_name: String = row.get(2)?;
-        let db_link: String = row.get(3)?;
+        let table_owner: String = row.get::<Option<String>>(1)?.unwrap_or_default();
+        let table_name: String = row.get::<Option<String>>(2)?.unwrap_or_default();
+        let db_link: String = row.get::<Option<String>>(3)?.unwrap_or_default();
 
         Ok(SynonymInfo {
             name,
