@@ -8,7 +8,9 @@ fn tokenize(sql: &str) -> Vec<SqlToken> {
 /// Helper: tokenize SQL up to `|` marker (cursor position).
 /// Returns (tokens_before_cursor, full_tokens).
 fn split_at_cursor(sql: &str) -> (Vec<SqlToken>, Vec<SqlToken>) {
-    let cursor_pos = sql.find('|').expect("SQL must contain '|' as cursor marker");
+    let cursor_pos = sql
+        .find('|')
+        .expect("SQL must contain '|' as cursor marker");
     let before = &sql[..cursor_pos];
     let after = &sql[cursor_pos + 1..];
     let full = format!("{}{}", before, after);
@@ -179,30 +181,54 @@ fn depth_in_subquery_from_clause() {
 fn collect_single_table() {
     let ctx = analyze("SELECT | FROM employees");
     let names = table_names(&ctx);
-    assert!(names.contains(&"EMPLOYEES".to_string()), "tables: {:?}", names);
+    assert!(
+        names.contains(&"EMPLOYEES".to_string()),
+        "tables: {:?}",
+        names
+    );
 }
 
 #[test]
 fn collect_multiple_tables() {
     let ctx = analyze("SELECT | FROM employees e, departments d");
     let names = table_names(&ctx);
-    assert!(names.contains(&"EMPLOYEES".to_string()), "tables: {:?}", names);
-    assert!(names.contains(&"DEPARTMENTS".to_string()), "tables: {:?}", names);
+    assert!(
+        names.contains(&"EMPLOYEES".to_string()),
+        "tables: {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"DEPARTMENTS".to_string()),
+        "tables: {:?}",
+        names
+    );
 }
 
 #[test]
 fn collect_join_tables() {
     let ctx = analyze("SELECT | FROM employees e JOIN departments d ON e.dept_id = d.id");
     let names = table_names(&ctx);
-    assert!(names.contains(&"EMPLOYEES".to_string()), "tables: {:?}", names);
-    assert!(names.contains(&"DEPARTMENTS".to_string()), "tables: {:?}", names);
+    assert!(
+        names.contains(&"EMPLOYEES".to_string()),
+        "tables: {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"DEPARTMENTS".to_string()),
+        "tables: {:?}",
+        names
+    );
 }
 
 #[test]
 fn collect_table_with_schema_prefix() {
     let ctx = analyze("SELECT | FROM hr.employees");
     let names = table_names(&ctx);
-    assert!(names.contains(&"EMPLOYEES".to_string()), "tables: {:?}", names);
+    assert!(
+        names.contains(&"EMPLOYEES".to_string()),
+        "tables: {:?}",
+        names
+    );
 }
 
 #[test]
@@ -221,13 +247,19 @@ fn collect_multiple_joins() {
 #[test]
 fn collect_table_aliases() {
     let ctx = analyze("SELECT | FROM employees e");
-    assert!(ctx.tables_in_scope.iter().any(|t| t.alias.as_deref() == Some("e")));
+    assert!(ctx
+        .tables_in_scope
+        .iter()
+        .any(|t| t.alias.as_deref() == Some("e")));
 }
 
 #[test]
 fn collect_table_as_alias() {
     let ctx = analyze("SELECT | FROM employees AS emp");
-    assert!(ctx.tables_in_scope.iter().any(|t| t.alias.as_deref() == Some("emp")));
+    assert!(ctx
+        .tables_in_scope
+        .iter()
+        .any(|t| t.alias.as_deref() == Some("emp")));
 }
 
 // ─── Subquery alias tests ────────────────────────────────────────────────
@@ -283,9 +315,8 @@ fn cte_simple() {
 
 #[test]
 fn cte_multiple() {
-    let ctx = analyze(
-        "WITH a AS (SELECT 1 FROM dual), b AS (SELECT 2 FROM dual) SELECT | FROM a, b",
-    );
+    let ctx =
+        analyze("WITH a AS (SELECT 1 FROM dual), b AS (SELECT 2 FROM dual) SELECT | FROM a, b");
     let cte_n = cte_names(&ctx);
     assert!(cte_n.contains(&"A".to_string()), "CTEs: {:?}", cte_n);
     assert!(cte_n.contains(&"B".to_string()), "CTEs: {:?}", cte_n);
@@ -293,20 +324,20 @@ fn cte_multiple() {
 
 #[test]
 fn cte_with_explicit_columns() {
-    let ctx = analyze(
-        "WITH cte(x, y) AS (SELECT 1, 2 FROM dual) SELECT | FROM cte",
-    );
+    let ctx = analyze("WITH cte(x, y) AS (SELECT 1, 2 FROM dual) SELECT | FROM cte");
     let cte_n = cte_names(&ctx);
     assert!(cte_n.contains(&"CTE".to_string()));
-    let cte_def = ctx.ctes.iter().find(|c| c.name.eq_ignore_ascii_case("cte")).unwrap();
+    let cte_def = ctx
+        .ctes
+        .iter()
+        .find(|c| c.name.eq_ignore_ascii_case("cte"))
+        .unwrap();
     assert_eq!(cte_def.explicit_columns.len(), 2);
 }
 
 #[test]
 fn cte_cursor_in_main_query_where() {
-    let ctx = analyze(
-        "WITH temp AS (SELECT id, name FROM users) SELECT * FROM temp WHERE |",
-    );
+    let ctx = analyze("WITH temp AS (SELECT id, name FROM users) SELECT * FROM temp WHERE |");
     assert_eq!(ctx.phase, SqlPhase::WhereClause);
     assert_eq!(ctx.depth, 0);
     let names = table_names(&ctx);
@@ -315,18 +346,15 @@ fn cte_cursor_in_main_query_where() {
 
 #[test]
 fn cte_cursor_in_cte_body() {
-    let ctx = analyze(
-        "WITH temp AS (SELECT | FROM users) SELECT * FROM temp",
-    );
+    let ctx = analyze("WITH temp AS (SELECT | FROM users) SELECT * FROM temp");
     assert_eq!(ctx.depth, 1);
     assert_eq!(ctx.phase, SqlPhase::SelectList);
 }
 
 #[test]
 fn cte_with_nested_subquery() {
-    let ctx = analyze(
-        "WITH temp AS (SELECT * FROM (SELECT id FROM inner_t) sub) SELECT | FROM temp",
-    );
+    let ctx =
+        analyze("WITH temp AS (SELECT * FROM (SELECT id FROM inner_t) sub) SELECT | FROM temp");
     assert_eq!(ctx.depth, 0);
     assert_eq!(ctx.phase, SqlPhase::SelectList);
     let names = table_names(&ctx);
@@ -337,18 +365,14 @@ fn cte_with_nested_subquery() {
 
 #[test]
 fn nested_subquery_in_where() {
-    let ctx = analyze(
-        "SELECT * FROM employees WHERE dept_id IN (SELECT | FROM departments)",
-    );
+    let ctx = analyze("SELECT * FROM employees WHERE dept_id IN (SELECT | FROM departments)");
     assert_eq!(ctx.depth, 1);
     assert_eq!(ctx.phase, SqlPhase::SelectList);
 }
 
 #[test]
 fn nested_subquery_in_where_from() {
-    let ctx = analyze(
-        "SELECT * FROM employees WHERE dept_id IN (SELECT dept_id FROM |",
-    );
+    let ctx = analyze("SELECT * FROM employees WHERE dept_id IN (SELECT dept_id FROM |");
     assert_eq!(ctx.depth, 1);
     assert_eq!(ctx.phase, SqlPhase::FromClause);
 }
@@ -384,9 +408,7 @@ fn inline_view_with_join() {
 
 #[test]
 fn triple_nested_subquery() {
-    let ctx = analyze(
-        "SELECT * FROM (SELECT * FROM (SELECT | FROM innermost) mid) outer_q",
-    );
+    let ctx = analyze("SELECT * FROM (SELECT * FROM (SELECT | FROM innermost) mid) outer_q");
     assert_eq!(ctx.depth, 2);
     assert_eq!(ctx.phase, SqlPhase::SelectList);
 }
@@ -395,18 +417,14 @@ fn triple_nested_subquery() {
 
 #[test]
 fn union_resets_phase_for_second_select() {
-    let ctx = analyze(
-        "SELECT a FROM t1 UNION ALL SELECT | FROM t2",
-    );
+    let ctx = analyze("SELECT a FROM t1 UNION ALL SELECT | FROM t2");
     assert_eq!(ctx.phase, SqlPhase::SelectList);
     assert_eq!(ctx.depth, 0);
 }
 
 #[test]
 fn union_collects_tables_from_both_parts() {
-    let ctx = analyze(
-        "SELECT a FROM t1 UNION ALL SELECT | FROM t2",
-    );
+    let ctx = analyze("SELECT a FROM t1 UNION ALL SELECT | FROM t2");
     let names = table_names(&ctx);
     assert!(names.contains(&"T2".to_string()), "tables: {:?}", names);
 }
@@ -415,58 +433,50 @@ fn union_collects_tables_from_both_parts() {
 
 #[test]
 fn resolve_qualifier_by_alias() {
-    let tables = vec![
-        ScopedTableRef {
-            name: "employees".to_string(),
-            alias: Some("e".to_string()),
-            depth: 0,
-            is_cte: false,
-        },
-    ];
+    let tables = vec![ScopedTableRef {
+        name: "employees".to_string(),
+        alias: Some("e".to_string()),
+        depth: 0,
+        is_cte: false,
+    }];
     let result = resolve_qualifier_tables("e", &tables);
     assert_eq!(result, vec!["employees"]);
 }
 
 #[test]
 fn resolve_qualifier_by_table_name() {
-    let tables = vec![
-        ScopedTableRef {
-            name: "employees".to_string(),
-            alias: None,
-            depth: 0,
-            is_cte: false,
-        },
-    ];
+    let tables = vec![ScopedTableRef {
+        name: "employees".to_string(),
+        alias: None,
+        depth: 0,
+        is_cte: false,
+    }];
     let result = resolve_qualifier_tables("employees", &tables);
     assert_eq!(result, vec!["employees"]);
 }
 
 #[test]
 fn resolve_qualifier_case_insensitive() {
-    let tables = vec![
-        ScopedTableRef {
-            name: "EMPLOYEES".to_string(),
-            alias: Some("E".to_string()),
-            depth: 0,
-            is_cte: false,
-        },
-    ];
+    let tables = vec![ScopedTableRef {
+        name: "EMPLOYEES".to_string(),
+        alias: Some("E".to_string()),
+        depth: 0,
+        is_cte: false,
+    }];
     let result = resolve_qualifier_tables("e", &tables);
     assert_eq!(result, vec!["EMPLOYEES"]);
 }
 
 #[test]
-fn resolve_qualifier_unknown_falls_back() {
-    let tables = vec![
-        ScopedTableRef {
-            name: "employees".to_string(),
-            alias: Some("e".to_string()),
-            depth: 0,
-            is_cte: false,
-        },
-    ];
+fn resolve_qualifier_unknown_returns_empty() {
+    let tables = vec![ScopedTableRef {
+        name: "employees".to_string(),
+        alias: Some("e".to_string()),
+        depth: 0,
+        is_cte: false,
+    }];
     let result = resolve_qualifier_tables("unknown", &tables);
-    assert_eq!(result, vec!["unknown"]);
+    assert!(result.is_empty());
 }
 
 // ─── Comment handling tests ──────────────────────────────────────────────
@@ -550,7 +560,11 @@ fn complex_cte_with_join_and_subquery() {
     assert_eq!(ctx.phase, SqlPhase::WhereClause);
     assert_eq!(ctx.depth, 0);
     let names = table_names(&ctx);
-    assert!(names.contains(&"DEPARTMENTS".to_string()), "tables: {:?}", names);
+    assert!(
+        names.contains(&"DEPARTMENTS".to_string()),
+        "tables: {:?}",
+        names
+    );
     assert!(
         names.iter().any(|n| n.eq_ignore_ascii_case("dept_stats")),
         "CTE dept_stats should be in scope: {:?}",
@@ -579,18 +593,14 @@ fn oracle_hierarchical_query() {
 #[test]
 fn from_clause_with_function_call_in_select() {
     // Ensure parentheses in function calls don't confuse depth tracking
-    let ctx = analyze(
-        "SELECT NVL(a, 0), COALESCE(b, c, d) FROM |",
-    );
+    let ctx = analyze("SELECT NVL(a, 0), COALESCE(b, c, d) FROM |");
     assert_eq!(ctx.phase, SqlPhase::FromClause);
     assert_eq!(ctx.depth, 0);
 }
 
 #[test]
 fn case_expression_in_select_list() {
-    let ctx = analyze(
-        "SELECT CASE WHEN a = 1 THEN 'x' ELSE 'y' END, | FROM t",
-    );
+    let ctx = analyze("SELECT CASE WHEN a = 1 THEN 'x' ELSE 'y' END, | FROM t");
     assert_eq!(ctx.phase, SqlPhase::SelectList);
     assert_eq!(ctx.depth, 0);
 }
@@ -604,7 +614,11 @@ fn subquery_in_from_with_join_after() {
     );
     assert_eq!(ctx.phase, SqlPhase::WhereClause);
     let names = table_names(&ctx);
-    assert!(names.iter().any(|n| n.eq_ignore_ascii_case("sub")), "tables: {:?}", names);
+    assert!(
+        names.iter().any(|n| n.eq_ignore_ascii_case("sub")),
+        "tables: {:?}",
+        names
+    );
     assert!(names.contains(&"T2".to_string()), "tables: {:?}", names);
 }
 
@@ -618,8 +632,16 @@ fn multiple_subqueries_in_from() {
     );
     assert_eq!(ctx.phase, SqlPhase::WhereClause);
     let names = table_names(&ctx);
-    assert!(names.iter().any(|n| n.eq_ignore_ascii_case("a")), "tables: {:?}", names);
-    assert!(names.iter().any(|n| n.eq_ignore_ascii_case("b")), "tables: {:?}", names);
+    assert!(
+        names.iter().any(|n| n.eq_ignore_ascii_case("a")),
+        "tables: {:?}",
+        names
+    );
+    assert!(
+        names.iter().any(|n| n.eq_ignore_ascii_case("b")),
+        "tables: {:?}",
+        names
+    );
 }
 
 #[test]
@@ -651,9 +673,17 @@ fn in_subquery_from_clause_tables() {
     assert_eq!(ctx.phase, SqlPhase::WhereClause);
     let names = table_names(&ctx);
     // Inside the subquery, departments should be visible
-    assert!(names.contains(&"DEPARTMENTS".to_string()), "tables: {:?}", names);
+    assert!(
+        names.contains(&"DEPARTMENTS".to_string()),
+        "tables: {:?}",
+        names
+    );
     // employees from outer query should also be visible (depth 0 <= depth 1)
-    assert!(names.contains(&"EMPLOYEES".to_string()), "tables: {:?}", names);
+    assert!(
+        names.contains(&"EMPLOYEES".to_string()),
+        "tables: {:?}",
+        names
+    );
 }
 
 // ─── Edge cases ──────────────────────────────────────────────────────────
@@ -681,12 +711,19 @@ fn cursor_in_from_before_any_table() {
 
 #[test]
 fn left_outer_join() {
-    let ctx = analyze(
-        "SELECT | FROM employees e LEFT OUTER JOIN departments d ON e.dept_id = d.id",
-    );
+    let ctx =
+        analyze("SELECT | FROM employees e LEFT OUTER JOIN departments d ON e.dept_id = d.id");
     let names = table_names(&ctx);
-    assert!(names.contains(&"EMPLOYEES".to_string()), "tables: {:?}", names);
-    assert!(names.contains(&"DEPARTMENTS".to_string()), "tables: {:?}", names);
+    assert!(
+        names.contains(&"EMPLOYEES".to_string()),
+        "tables: {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"DEPARTMENTS".to_string()),
+        "tables: {:?}",
+        names
+    );
 }
 
 #[test]
@@ -716,8 +753,16 @@ fn cte_with_subquery_alias_in_main_query() {
     assert_eq!(ctx.depth, 0);
     assert_eq!(ctx.phase, SqlPhase::WhereClause);
     let names = table_names(&ctx);
-    assert!(names.iter().any(|n| n.eq_ignore_ascii_case("sub")), "tables: {:?}", names);
-    assert!(names.iter().any(|n| n.eq_ignore_ascii_case("base")), "tables: {:?}", names);
+    assert!(
+        names.iter().any(|n| n.eq_ignore_ascii_case("sub")),
+        "tables: {:?}",
+        names
+    );
+    assert!(
+        names.iter().any(|n| n.eq_ignore_ascii_case("base")),
+        "tables: {:?}",
+        names
+    );
 }
 
 // ─── Resolve all scope tables ────────────────────────────────────────────
@@ -748,7 +793,11 @@ fn resolve_all_deduplicates() {
 fn merge_target_table() {
     let ctx = analyze("MERGE INTO target_table t USING |");
     let names = table_names(&ctx);
-    assert!(names.contains(&"TARGET_TABLE".to_string()), "tables: {:?}", names);
+    assert!(
+        names.contains(&"TARGET_TABLE".to_string()),
+        "tables: {:?}",
+        names
+    );
 }
 
 // ─── Analytic function with OVER clause ──────────────────────────────────
@@ -766,9 +815,7 @@ fn analytic_over_clause_doesnt_confuse_depth() {
 
 #[test]
 fn recursive_cte_keyword() {
-    let ctx = analyze(
-        "WITH RECURSIVE tree AS (SELECT 1 AS id FROM dual) SELECT | FROM tree",
-    );
+    let ctx = analyze("WITH RECURSIVE tree AS (SELECT 1 AS id FROM dual) SELECT | FROM tree");
     let cte_n = cte_names(&ctx);
     assert!(cte_n.contains(&"TREE".to_string()), "CTEs: {:?}", cte_n);
 }
@@ -777,9 +824,7 @@ fn recursive_cte_keyword() {
 
 #[test]
 fn pivot_clause_phase() {
-    let ctx = analyze(
-        "SELECT * FROM sales PIVOT (SUM(amount) FOR product IN ('A', 'B')) WHERE |",
-    );
+    let ctx = analyze("SELECT * FROM sales PIVOT (SUM(amount) FOR product IN ('A', 'B')) WHERE |");
     assert_eq!(ctx.phase, SqlPhase::WhereClause);
 }
 
@@ -868,9 +913,7 @@ fn cte_body_tokens_captured() {
 
 #[test]
 fn cte_explicit_columns_present() {
-    let ctx = analyze(
-        "WITH cte(x, y) AS (SELECT id, name FROM users) SELECT c.| FROM cte c",
-    );
+    let ctx = analyze("WITH cte(x, y) AS (SELECT id, name FROM users) SELECT c.| FROM cte c");
     let cte = ctx
         .ctes
         .iter()
@@ -924,9 +967,7 @@ fn cte_emp_base_columns_inferred() {
 
 #[test]
 fn subquery_alias_columns_captured() {
-    let ctx = analyze(
-        "SELECT sub.| FROM (SELECT id, name, age FROM users) sub",
-    );
+    let ctx = analyze("SELECT sub.| FROM (SELECT id, name, age FROM users) sub");
     assert!(!ctx.subqueries.is_empty());
     let subq = ctx
         .subqueries
@@ -949,4 +990,39 @@ fn subquery_alias_with_expressions() {
         .unwrap();
     let cols = extract_select_list_columns(&subq.body_tokens);
     assert_eq!(cols, vec!["dept_id", "cnt", "max_sal"]);
+}
+
+#[test]
+fn resolve_qualifier_prefers_alias_match_over_name_fallback() {
+    let tables = vec![
+        ScopedTableRef {
+            name: "employees".to_string(),
+            alias: Some("e".to_string()),
+            depth: 0,
+            is_cte: false,
+        },
+        ScopedTableRef {
+            name: "events".to_string(),
+            alias: Some("ev".to_string()),
+            depth: 0,
+            is_cte: false,
+        },
+    ];
+    let result = resolve_qualifier_tables("e", &tables);
+    assert_eq!(result, vec!["employees"]);
+}
+
+#[test]
+fn parse_schema_qualified_table_keeps_owner_for_scope() {
+    let ctx = analyze("SELECT h.| FROM hr.employees h");
+    let resolved = resolve_qualifier_tables("h", &ctx.tables_in_scope);
+    assert_eq!(resolved, vec!["hr.employees"]);
+}
+
+#[test]
+fn join_alias_after_left_outer_join_is_collected() {
+    let ctx =
+        analyze("SELECT d.| FROM employees e LEFT OUTER JOIN departments d ON e.dept_id = d.id");
+    let resolved = resolve_qualifier_tables("d", &ctx.tables_in_scope);
+    assert_eq!(resolved, vec!["departments"]);
 }

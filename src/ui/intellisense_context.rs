@@ -120,7 +120,10 @@ enum CteState {
 /// `before_cursor` is the SQL text from statement start up to cursor.
 /// `full_statement` is the complete statement text (for collecting all table references).
 /// `tokenize` is used to tokenize the SQL.
-pub fn analyze_cursor_context(before_cursor: &[SqlToken], full_statement: &[SqlToken]) -> CursorContext {
+pub fn analyze_cursor_context(
+    before_cursor: &[SqlToken],
+    full_statement: &[SqlToken],
+) -> CursorContext {
     let phase_analysis = analyze_phase(before_cursor);
     let table_analysis = collect_tables_deep(full_statement, phase_analysis.depth);
     let ctes = parse_ctes(full_statement);
@@ -261,10 +264,7 @@ fn analyze_phase(tokens: &[SqlToken]) -> PhaseAnalysis {
                         }
                     }
                     "INTO" => {
-                        if matches!(
-                            current_phase,
-                            SqlPhase::SelectList | SqlPhase::Initial
-                        ) {
+                        if matches!(current_phase, SqlPhase::SelectList | SqlPhase::Initial) {
                             phase_stack[depth] = SqlPhase::IntoClause;
                         }
                     }
@@ -416,10 +416,8 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                     // Look for alias after the closing paren
                     if let Some((alias, next_idx)) = parse_subquery_alias(tokens, idx + 1) {
                         // Capture body tokens for column inference
-                        let body_tokens: Vec<SqlToken> = tokens[start_idx..idx]
-                            .iter()
-                            .cloned()
-                            .collect();
+                        let body_tokens: Vec<SqlToken> =
+                            tokens[start_idx..idx].iter().cloned().collect();
                         all_subqueries.push(SubqueryDefinition {
                             alias: alias.clone(),
                             body_tokens,
@@ -534,10 +532,11 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                         phase_stack[depth] = SqlPhase::FromClause;
                         expect_table = true;
                     }
-                    "INTO" if matches!(
-                        phase_stack[depth],
-                        SqlPhase::SelectList | SqlPhase::Initial
-                    ) =>
+                    "INTO"
+                        if matches!(
+                            phase_stack[depth],
+                            SqlPhase::SelectList | SqlPhase::Initial
+                        ) =>
                     {
                         phase_stack[depth] = SqlPhase::IntoClause;
                         expect_table = true;
@@ -662,7 +661,10 @@ fn parse_ctes(tokens: &[SqlToken]) -> Vec<CteDefinition> {
         // If we hit SELECT/INSERT/UPDATE/DELETE before WITH, no CTEs
         if let SqlToken::Word(w) = &tokens[idx] {
             let u = w.to_uppercase();
-            if matches!(u.as_str(), "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE") {
+            if matches!(
+                u.as_str(),
+                "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE"
+            ) {
                 return ctes;
             }
         }
@@ -686,7 +688,10 @@ fn parse_ctes(tokens: &[SqlToken]) -> Vec<CteDefinition> {
         let cte_name = match tokens.get(idx) {
             Some(SqlToken::Word(w)) => {
                 let u = w.to_uppercase();
-                if matches!(u.as_str(), "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE") {
+                if matches!(
+                    u.as_str(),
+                    "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE"
+                ) {
                     break;
                 }
                 w.clone()
@@ -812,10 +817,16 @@ fn parse_table_name_deep(tokens: &[SqlToken], start: usize) -> Option<(String, u
             }
             let mut table = word.clone();
             let mut idx = start + 1;
-            // Handle schema.table
+            // Handle schema.table and schema.table@dblink (preserve owner for metadata lookup)
             if matches!(tokens.get(idx), Some(SqlToken::Symbol(sym)) if sym == ".") {
                 if let Some(SqlToken::Word(name)) = tokens.get(idx + 1) {
-                    table = name.clone();
+                    table = format!("{}.{}", table, name);
+                    idx += 2;
+                }
+            }
+            if matches!(tokens.get(idx), Some(SqlToken::Symbol(sym)) if sym == "@") {
+                if let Some(SqlToken::Word(dblink)) = tokens.get(idx + 1) {
+                    table = format!("{}@{}", table, dblink);
                     idx += 2;
                 }
             }
@@ -887,15 +898,7 @@ fn parse_subquery_alias(tokens: &[SqlToken], start: usize) -> Option<(String, us
 fn is_join_keyword(word: &str) -> bool {
     matches!(
         word,
-        "JOIN"
-            | "INNER"
-            | "LEFT"
-            | "RIGHT"
-            | "FULL"
-            | "CROSS"
-            | "OUTER"
-            | "NATURAL"
-            | "LATERAL"
+        "JOIN" | "INNER" | "LEFT" | "RIGHT" | "FULL" | "CROSS" | "OUTER" | "NATURAL" | "LATERAL"
     )
 }
 
@@ -988,11 +991,6 @@ pub fn resolve_qualifier_tables(
             }
             return result;
         }
-    }
-
-    // If no match found, try the qualifier as a direct table name
-    if result.is_empty() && seen.insert(qualifier_upper) {
-        result.push(qualifier.to_string());
     }
 
     result
