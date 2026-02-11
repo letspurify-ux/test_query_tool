@@ -2567,9 +2567,9 @@ impl ObjectBrowser {
         };
 
         let name: String = row.get(0)?;
-        let table_owner: String = row.get::<Option<String>>(1)?.unwrap_or_default();
-        let table_name: String = row.get::<Option<String>>(2)?.unwrap_or_default();
-        let db_link: String = row.get::<Option<String>>(3)?.unwrap_or_default();
+        let table_owner: String = row.get::<_, Option<String>>(1)?.unwrap_or_default();
+        let table_name: String = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+        let db_link: String = row.get::<_, Option<String>>(3)?.unwrap_or_default();
 
         Ok(SynonymInfo {
             name,
