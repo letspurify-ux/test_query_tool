@@ -867,36 +867,24 @@ impl SqlEditorWidget {
         }
         *pending_intellisense.borrow_mut() = None;
 
-        // Get cursor position in editor's local coordinates (already window-relative in FLTK)
+        // Get cursor position in editor-local coordinates.
         let (cursor_x, cursor_y) = editor.position_to_xy(editor.insert_position());
-
-        // Get window's screen coordinates
-        let (win_x, win_y) = editor
-            .window()
-            .map(|win| (win.x_root(), win.y_root()))
-            .unwrap_or((0, 0));
 
         let popup_width = 320;
         let popup_height = (suggestions.len().min(10) * 20 + 10) as i32;
 
-        // Calculate absolute screen position
-        let mut popup_x = win_x + cursor_x;
-        let mut popup_y = win_y + cursor_y + 20;
-
         if let Some(win) = editor.window() {
-            let win_w = win.w();
-            let win_h = win.h();
-            let max_x = (win_x + win_w - popup_width).max(win_x);
-            let max_y = (win_y + win_h - popup_height).max(win_y);
-            popup_x = popup_x.clamp(win_x, max_x);
-            popup_y = popup_y.clamp(win_y, max_y);
-        }
+            let mut popup_x = editor.x() + cursor_x;
+            let mut popup_y = editor.y() + cursor_y + 20;
+            let max_x = (win.w() - popup_width).max(0);
+            let max_y = (win.h() - popup_height).max(0);
+            popup_x = popup_x.clamp(0, max_x);
+            popup_y = popup_y.clamp(0, max_y);
 
-        intellisense_popup
-            .borrow_mut()
-            .show_suggestions(suggestions, popup_x, popup_y);
-        app::redraw();
-        app::flush();
+            intellisense_popup
+                .borrow_mut()
+                .show_suggestions(suggestions, popup_x, popup_y);
+        }
         let completion_start = if prefix.is_empty() {
             cursor_pos_usize
         } else {
@@ -905,8 +893,6 @@ impl SqlEditorWidget {
         *completion_range.borrow_mut() = Some((completion_start, cursor_pos_usize));
         let mut editor = editor.clone();
         let _ = editor.take_focus();
-        app::redraw();
-        app::flush();
     }
 
     fn maybe_prefetch_columns_for_word(
