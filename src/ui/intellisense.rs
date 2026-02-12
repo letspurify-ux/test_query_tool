@@ -1234,7 +1234,7 @@ impl IntellisensePopup {
         self.browser.set_size(320, height);
 
         self.window.set_pos(x, y);
-        if !*self.visible.borrow() {
+        if !self.window.shown() {
             self.window.show();
         }
         *self.visible.borrow_mut() = true;
