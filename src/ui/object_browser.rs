@@ -53,6 +53,7 @@ struct ObjectCache {
     procedures: Vec<String>,
     functions: Vec<String>,
     sequences: Vec<String>,
+    triggers: Vec<String>,
     synonyms: Vec<String>,
     packages: Vec<String>,
     package_routines: HashMap<String, Vec<PackageRoutine>>,
@@ -135,6 +136,7 @@ impl ObjectBrowserWidget {
         tree.add("Procedures");
         tree.add("Functions");
         tree.add("Sequences");
+        tree.add("Triggers");
         tree.add("Synonyms");
         tree.add("Packages");
 
@@ -156,6 +158,9 @@ impl ObjectBrowserWidget {
             item.close();
         }
         if let Some(mut item) = tree.find_item("Sequences") {
+            item.close();
+        }
+        if let Some(mut item) = tree.find_item("Triggers") {
             item.close();
         }
         if let Some(mut item) = tree.find_item("Synonyms") {
@@ -791,8 +796,8 @@ impl ObjectBrowserWidget {
         }
 
         match parent_type_upper.as_str() {
-            "TABLES" | "VIEWS" | "PROCEDURES" | "FUNCTIONS" | "SEQUENCES" | "SYNONYMS"
-            | "PACKAGES" => Some(ObjectItem::Simple {
+            "TABLES" | "VIEWS" | "PROCEDURES" | "FUNCTIONS" | "SEQUENCES" | "TRIGGERS"
+            | "SYNONYMS" | "PACKAGES" => Some(ObjectItem::Simple {
                 object_type: parent_type_upper,
                 object_name,
             }),
@@ -1203,6 +1208,9 @@ impl ObjectBrowserWidget {
                 ObjectItem::Simple { object_type, .. } if object_type == "SEQUENCES" => {
                     "View Info|Generate DDL"
                 }
+                ObjectItem::Simple { object_type, .. } if object_type == "TRIGGERS" => {
+                    "Check Compilation|Generate DDL"
+                }
                 ObjectItem::Simple { object_type, .. } if object_type == "SYNONYMS" => {
                     "View Info|Generate DDL"
                 }
@@ -1376,6 +1384,7 @@ impl ObjectBrowserWidget {
                             "PROCEDURES" => "PROCEDURE",
                             "FUNCTIONS" => "FUNCTION",
                             "PACKAGES" => "PACKAGE",
+                            "TRIGGERS" => "TRIGGER",
                             _ => return,
                         };
                         let connection = connection.clone();
@@ -1633,6 +1642,7 @@ impl ObjectBrowserWidget {
                             "PROCEDURES" => Some("PROCEDURE"),
                             "FUNCTIONS" => Some("FUNCTION"),
                             "SEQUENCES" => Some("SEQUENCE"),
+                            "TRIGGERS" => Some("TRIGGER"),
                             "SYNONYMS" => Some("SYNONYM"),
                             "PACKAGES" => Some("PACKAGE"),
                             _ => None,
@@ -1673,6 +1683,11 @@ impl ObjectBrowserWidget {
                                         ),
                                         "SEQUENCE" => ObjectBrowser::get_sequence_ddl(
                                             db_conn.as_ref(),
+                                            &object_name,
+                                        ),
+                                        "TRIGGER" => ObjectBrowser::get_object_ddl(
+                                            db_conn.as_ref(),
+                                            "TRIGGER",
                                             &object_name,
                                         ),
                                         "SYNONYM" => ObjectBrowser::get_synonym_ddl(
@@ -1810,6 +1825,11 @@ impl ObjectBrowserWidget {
                 send_update(&sender, &cache);
             }
 
+            if let Ok(triggers) = ObjectBrowser::get_triggers(db_conn.as_ref()) {
+                cache.triggers = triggers;
+                send_update(&sender, &cache);
+            }
+
             if let Ok(synonyms) = ObjectBrowser::get_synonyms(db_conn.as_ref()) {
                 cache.synonyms = synonyms;
                 send_update(&sender, &cache);
@@ -1835,6 +1855,7 @@ impl ObjectBrowserWidget {
             "Procedures",
             "Functions",
             "Sequences",
+            "Triggers",
             "Synonyms",
             "Packages",
         ];
@@ -1859,6 +1880,7 @@ impl ObjectBrowserWidget {
             "Procedures",
             "Functions",
             "Sequences",
+            "Triggers",
             "Synonyms",
             "Packages",
         ];
@@ -1900,6 +1922,11 @@ impl ObjectBrowserWidget {
         for seq in &cache.sequences {
             if filter_text.is_empty() || seq.to_lowercase().contains(filter_text) {
                 tree.add(&format!("Sequences/{}", seq));
+            }
+        }
+        for trig in &cache.triggers {
+            if filter_text.is_empty() || trig.to_lowercase().contains(filter_text) {
+                tree.add(&format!("Triggers/{}", trig));
             }
         }
         for syn in &cache.synonyms {
