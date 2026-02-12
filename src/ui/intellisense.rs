@@ -1234,13 +1234,14 @@ impl IntellisensePopup {
         self.browser.set_size(320, height);
 
         self.window.set_pos(x, y);
-        self.window.show();
-        self.window.set_on_top();
+        if !*self.visible.borrow() {
+            self.window.show();
+        }
         *self.visible.borrow_mut() = true;
     }
 
     pub fn hide(&mut self) {
-        self.window.hide();
+        self.window.resize(-10000, -10000, 1, 1);
         *self.visible.borrow_mut() = false;
     }
 
