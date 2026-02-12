@@ -2474,6 +2474,11 @@ impl ObjectBrowser {
         Self::get_object_list(conn, sql)
     }
 
+    pub fn get_triggers(conn: &Connection) -> Result<Vec<String>, OracleError> {
+        let sql = "SELECT trigger_name FROM user_triggers ORDER BY trigger_name";
+        Self::get_object_list(conn, sql)
+    }
+
     pub fn get_sequence_info(
         conn: &Connection,
         seq_name: &str,
