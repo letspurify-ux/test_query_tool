@@ -22,7 +22,6 @@ struct FindReplaceSessionState {
     find_text: String,
     replace_text: String,
     case_sensitive: bool,
-    whole_word: bool,
     search_pos: i32,
     last_search_text: String,
 }
@@ -50,7 +49,6 @@ fn save_find_replace_state(
     find_input: &Input,
     replace_input: Option<&Input>,
     case_check: &CheckButton,
-    whole_word_check: &CheckButton,
     search_pos: i32,
     last_search_text: &str,
 ) {
@@ -61,7 +59,6 @@ fn save_find_replace_state(
             state.replace_text = replace_input.value();
         }
         state.case_sensitive = case_check.value();
-        state.whole_word = whole_word_check.value();
         state.search_pos = search_pos.max(0);
         state.last_search_text = last_search_text.to_string();
     });
@@ -167,8 +164,6 @@ impl FindReplaceDialog {
         options_flex.set_type(fltk::group::FlexType::Row);
         let mut case_check = CheckButton::default().with_label("Case sensitive");
         case_check.set_label_color(theme::text_secondary());
-        let mut whole_word_check = CheckButton::default().with_label("Whole word");
-        whole_word_check.set_label_color(theme::text_secondary());
         options_flex.end();
         main_flex.fixed(&options_flex, CHECKBOX_ROW_HEIGHT);
 
@@ -235,7 +230,6 @@ impl FindReplaceDialog {
             find_input.set_value(&session_snapshot.find_text);
         }
         case_check.set_value(session_snapshot.case_sensitive);
-        whole_word_check.set_value(session_snapshot.whole_word);
 
         if let Some(mut replace_input_widget) = replace_input.clone() {
             if !session_snapshot.replace_text.is_empty() {
@@ -357,7 +351,6 @@ impl FindReplaceDialog {
         let find_input_state = find_input.clone();
         let replace_input_state = replace_input.clone();
         let case_check_state = case_check.clone();
-        let whole_word_check_state = whole_word_check.clone();
         let search_pos_state = search_pos.clone();
         let last_search_text_state = last_search_text.clone();
 
@@ -478,7 +471,6 @@ impl FindReplaceDialog {
                             &find_input_state,
                             replace_input_state.as_ref(),
                             &case_check_state,
-                            &whole_word_check_state,
                             *search_pos_state.borrow(),
                             &last_search_text_state.borrow(),
                         );
@@ -491,7 +483,6 @@ impl FindReplaceDialog {
                         &find_input_state,
                         replace_input_state.as_ref(),
                         &case_check_state,
-                        &whole_word_check_state,
                         *search_pos_state.borrow(),
                         &last_search_text_state.borrow(),
                     );
@@ -503,7 +494,6 @@ impl FindReplaceDialog {
             &find_input_state,
             replace_input_state.as_ref(),
             &case_check_state,
-            &whole_word_check_state,
             *search_pos_state.borrow(),
             &last_search_text_state.borrow(),
         );
