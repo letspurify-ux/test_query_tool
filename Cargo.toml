@@ -1,9 +1,13 @@
 [package]
-name = "oracle_query_tool"
+name = "space_query"
 version = "0.1.0"
 edition = "2021"
-description = "A Toad-like Oracle Query Tool built with Rust and FLTK"
+description = "SPACE Query: a Toad-like Oracle Query Tool built with Rust and FLTK"
 authors = ["Developer"]
+
+[[bin]]
+name = "space_query"
+path = "src/main.rs"
 
 [dependencies]
 fltk = { version = "1.5", features = ["no-pango"] }

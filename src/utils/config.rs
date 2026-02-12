@@ -9,6 +9,9 @@ use std::os::unix::fs::PermissionsExt;
 use crate::db::ConnectionInfo;
 use crate::utils::credential_store;
 
+const APP_DIR_NAME: &str = "space_query";
+const LEGACY_APP_DIR_NAME: &str = "oracle_query_tool";
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct AppConfig {
@@ -25,6 +28,22 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    fn app_file_path(base: Option<PathBuf>, app_dir: &str, file_name: &str) -> Option<PathBuf> {
+        base.map(|mut path| {
+            path.push(app_dir);
+            path.push(file_name);
+            path
+        })
+    }
+
+    fn load_from_path(path: &PathBuf) -> Option<Self> {
+        if !path.exists() {
+            return None;
+        }
+        let content = fs::read_to_string(path).ok()?;
+        serde_json::from_str(&content).ok()
+    }
+
     pub fn new() -> Self {
         Self {
             recent_connections: Vec::new(),
@@ -41,18 +60,22 @@ impl AppConfig {
     }
 
     pub fn config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|mut path| {
-            path.push("oracle_query_tool");
-            path.push("config.json");
-            path
-        })
+        Self::app_file_path(dirs::config_dir(), APP_DIR_NAME, "config.json")
+    }
+
+    fn legacy_config_path() -> Option<PathBuf> {
+        Self::app_file_path(dirs::config_dir(), LEGACY_APP_DIR_NAME, "config.json")
     }
 
     pub fn load() -> Self {
+        let mut loaded_from_legacy = false;
         let mut config = if let Some(path) = Self::config_path() {
-            if path.exists() {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    serde_json::from_str(&content).unwrap_or_else(|_| Self::new())
+            if let Some(loaded) = Self::load_from_path(&path) {
+                loaded
+            } else if let Some(legacy_path) = Self::legacy_config_path() {
+                if let Some(loaded) = Self::load_from_path(&legacy_path) {
+                    loaded_from_legacy = true;
+                    loaded
                 } else {
                     Self::new()
                 }
@@ -80,6 +103,11 @@ impl AppConfig {
         if needs_resave {
             if let Err(e) = config.save() {
                 eprintln!("Failed to re-save config after keyring migration: {}", e);
+            }
+        } else if loaded_from_legacy {
+            // Migrate config location from legacy app folder to new app folder.
+            if let Err(e) = config.save() {
+                eprintln!("Failed to migrate config path: {}", e);
             }
         }
 
@@ -204,6 +232,10 @@ fn default_query_success() -> bool {
 }
 
 impl QueryHistory {
+    fn history_path_for(app_dir: &str) -> Option<PathBuf> {
+        AppConfig::app_file_path(dirs::data_dir(), app_dir, "history.json")
+    }
+
     pub fn new() -> Self {
         Self {
             queries: Vec::new(),
@@ -211,23 +243,44 @@ impl QueryHistory {
     }
 
     pub fn history_path() -> Option<PathBuf> {
-        dirs::data_dir().map(|mut path| {
-            path.push("oracle_query_tool");
-            path.push("history.json");
-            path
-        })
+        Self::history_path_for(APP_DIR_NAME)
+    }
+
+    fn legacy_history_path() -> Option<PathBuf> {
+        Self::history_path_for(LEGACY_APP_DIR_NAME)
     }
 
     pub fn load() -> Self {
-        if let Some(path) = Self::history_path() {
+        let mut loaded_from_legacy = false;
+
+        let loaded = if let Some(path) = Self::history_path() {
             if path.exists() {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(history) = serde_json::from_str(&content) {
-                        return history;
-                    }
+                fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|content| serde_json::from_str::<Self>(&content).ok())
+            } else if let Some(legacy_path) = Self::legacy_history_path() {
+                if legacy_path.exists() {
+                    loaded_from_legacy = true;
+                    fs::read_to_string(&legacy_path)
+                        .ok()
+                        .and_then(|content| serde_json::from_str::<Self>(&content).ok())
+                } else {
+                    None
                 }
+            } else {
+                None
             }
+        } else {
+            None
+        };
+
+        if let Some(history) = loaded {
+            if loaded_from_legacy {
+                let _ = history.save();
+            }
+            return history;
         }
+
         Self::new()
     }
 

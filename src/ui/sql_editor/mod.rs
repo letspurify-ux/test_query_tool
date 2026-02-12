@@ -15,6 +15,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use crate::db::{ConnectionInfo, QueryExecutor, QueryResult, SharedConnection, TableColumnDetail};
 use crate::ui::constants::*;
@@ -545,6 +546,7 @@ impl SqlEditorWidget {
 
         const COLUMN_POLL_ACTIVE_INTERVAL_SECONDS: f64 = 0.05;
         const COLUMN_POLL_IDLE_INTERVAL_SECONDS: f64 = 0.5;
+        const COLUMN_LOADING_STALE_TIMEOUT: Duration = Duration::from_secs(8);
 
         fn schedule_poll(
             receiver: Rc<RefCell<mpsc::Receiver<ColumnLoadUpdate>>>,
@@ -566,14 +568,16 @@ impl SqlEditorWidget {
                     match r.try_recv() {
                         Ok(update) => {
                             processed += 1;
-                            let should_refresh_pending = {
+                            let (should_refresh_pending, should_clear_pending) = {
                                 let mut data = intellisense_data.borrow_mut();
                                 if update.cache_columns {
                                     data.set_columns_for_table(&update.table, update.columns);
-                                    true
+                                    (true, false)
                                 } else {
                                     data.clear_columns_loading(&update.table);
-                                    false
+                                    // If every pending table load has completed without cached
+                                    // columns, clear pending intellisense to avoid retry loops.
+                                    (false, data.columns_loading.is_empty())
                                 }
                             };
 
@@ -592,8 +596,16 @@ impl SqlEditorWidget {
                                             &connection,
                                             &pending_intellisense,
                                         );
+                                    } else {
+                                        // Cursor moved since async load was requested.
+                                        // Drop stale pending state so poll loop can idle.
+                                        *pending_intellisense.borrow_mut() = None;
                                     }
                                 }
+                            }
+
+                            if should_clear_pending {
+                                *pending_intellisense.borrow_mut() = None;
                             }
                         }
                         Err(mpsc::TryRecvError::Empty) => break,
@@ -607,6 +619,21 @@ impl SqlEditorWidget {
 
             if disconnected {
                 return;
+            }
+
+            let stale_cleared = {
+                let mut data = intellisense_data.borrow_mut();
+                data.clear_stale_columns_loading(COLUMN_LOADING_STALE_TIMEOUT)
+            };
+            if stale_cleared > 0 {
+                processed += stale_cleared;
+                let no_columns_loading = {
+                    let data = intellisense_data.borrow();
+                    data.columns_loading.is_empty()
+                };
+                if no_columns_loading {
+                    *pending_intellisense.borrow_mut() = None;
+                }
             }
 
             let has_pending_column_work = {

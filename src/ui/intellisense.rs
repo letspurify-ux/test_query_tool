@@ -3,6 +3,7 @@ use fltk::{browser::HoldBrowser, prelude::*, window::Window};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 // SQL Keywords for autocomplete
 pub const SQL_KEYWORDS: &[&str] = &[
@@ -781,6 +782,7 @@ pub struct IntellisenseData {
     pub tables: Vec<String>,
     pub columns: HashMap<String, Vec<String>>, // table_name -> column_names
     pub columns_loading: HashSet<String>,
+    column_loading_started_at: HashMap<String, Instant>,
     pub views: Vec<String>,
     pub procedures: Vec<String>,
     pub functions: Vec<String>,
@@ -803,6 +805,7 @@ impl IntellisenseData {
             tables: Vec::new(),
             columns: HashMap::new(),
             columns_loading: HashSet::new(),
+            column_loading_started_at: HashMap::new(),
             views: Vec::new(),
             procedures: Vec::new(),
             functions: Vec::new(),
@@ -823,12 +826,16 @@ impl IntellisenseData {
         prefix: &str,
         include_columns: bool,
         column_tables: Option<&[String]>,
+        prefer_relations: bool,
+        prefer_columns: bool,
     ) -> Vec<String> {
         self.ensure_base_indices();
 
         let prefix_upper = prefix.to_uppercase();
         let mut suggestions = Vec::new();
         let mut seen = HashSet::new();
+        let relation_only = prefer_relations && prefix_upper.is_empty();
+        let column_only = prefer_columns && prefix_upper.is_empty();
 
         let push_suggestion =
             |value: String, suggestions: &mut Vec<String>, seen: &mut HashSet<String>| {
@@ -840,6 +847,68 @@ impl IntellisenseData {
                 }
                 suggestions.len() >= MAX_SUGGESTIONS
             };
+
+        if prefer_columns && include_columns {
+            match column_tables {
+                Some(tables) if !tables.is_empty() => {
+                    for table in tables {
+                        let key = table.to_uppercase();
+                        if let Some(cols) = self.column_entries_by_table.get(&key) {
+                            if Self::push_entries(cols, &prefix_upper, &mut suggestions, &mut seen) {
+                                break;
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    if !prefix_upper.is_empty() {
+                        self.ensure_all_columns_entries();
+                        let _ = Self::push_entries(
+                            &self.all_columns_entries,
+                            &prefix_upper,
+                            &mut suggestions,
+                            &mut seen,
+                        );
+                    }
+                }
+            }
+            if column_only && !suggestions.is_empty() {
+                suggestions.sort_unstable();
+                suggestions.dedup();
+                suggestions.truncate(MAX_SUGGESTIONS);
+                return suggestions;
+            }
+        }
+
+        // In table context, prioritize real relation names first.
+        if prefer_relations {
+            if Self::push_entries(
+                &self.table_entries,
+                &prefix_upper,
+                &mut suggestions,
+                &mut seen,
+            ) {
+                suggestions.sort_unstable();
+                suggestions.dedup();
+                return suggestions;
+            }
+            if Self::push_entries(
+                &self.view_entries,
+                &prefix_upper,
+                &mut suggestions,
+                &mut seen,
+            ) {
+                suggestions.sort_unstable();
+                suggestions.dedup();
+                return suggestions;
+            }
+            if relation_only && !suggestions.is_empty() {
+                suggestions.sort_unstable();
+                suggestions.dedup();
+                suggestions.truncate(MAX_SUGGESTIONS);
+                return suggestions;
+            }
+        }
 
         // Add SQL keywords
         for keyword in SQL_KEYWORDS {
@@ -859,28 +928,29 @@ impl IntellisenseData {
             }
         }
 
-        // Add tables
-        if Self::push_entries(
-            &self.table_entries,
-            &prefix_upper,
-            &mut suggestions,
-            &mut seen,
-        ) {
-            suggestions.sort_unstable();
-            suggestions.dedup();
-            return suggestions;
-        }
+        // Add tables/views in non-table context after language items.
+        if !prefer_relations {
+            if Self::push_entries(
+                &self.table_entries,
+                &prefix_upper,
+                &mut suggestions,
+                &mut seen,
+            ) {
+                suggestions.sort_unstable();
+                suggestions.dedup();
+                return suggestions;
+            }
 
-        // Add views
-        if Self::push_entries(
-            &self.view_entries,
-            &prefix_upper,
-            &mut suggestions,
-            &mut seen,
-        ) {
-            suggestions.sort_unstable();
-            suggestions.dedup();
-            return suggestions;
+            if Self::push_entries(
+                &self.view_entries,
+                &prefix_upper,
+                &mut suggestions,
+                &mut seen,
+            ) {
+                suggestions.sort_unstable();
+                suggestions.dedup();
+                return suggestions;
+            }
         }
 
         // Add procedures
@@ -907,7 +977,7 @@ impl IntellisenseData {
             return suggestions;
         }
 
-        if include_columns {
+        if include_columns && !prefer_columns {
             match column_tables {
                 Some(tables) if !tables.is_empty() => {
                     for table in tables {
@@ -988,6 +1058,7 @@ impl IntellisenseData {
     pub fn set_columns_for_table(&mut self, table_name: &str, columns: Vec<String>) {
         let key = table_name.to_uppercase();
         self.columns_loading.remove(&key);
+        self.column_loading_started_at.remove(&key);
         self.columns.insert(key.clone(), columns.clone());
         self.column_entries_by_table
             .insert(key, Self::build_entries(&columns));
@@ -999,13 +1070,36 @@ impl IntellisenseData {
         if self.columns.contains_key(&key) || self.columns_loading.contains(&key) {
             return false;
         }
-        self.columns_loading.insert(key);
+        self.columns_loading.insert(key.clone());
+        self.column_loading_started_at.insert(key, Instant::now());
         true
     }
 
     pub fn clear_columns_loading(&mut self, table_name: &str) {
         let key = table_name.to_uppercase();
         self.columns_loading.remove(&key);
+        self.column_loading_started_at.remove(&key);
+    }
+
+    pub fn clear_stale_columns_loading(&mut self, stale_after: Duration) -> usize {
+        let now = Instant::now();
+        let stale_keys: Vec<String> = self
+            .columns_loading
+            .iter()
+            .filter(|key| {
+                self.column_loading_started_at
+                    .get(*key)
+                    .map_or(true, |started| now.duration_since(*started) >= stale_after)
+            })
+            .cloned()
+            .collect();
+
+        let stale_count = stale_keys.len();
+        for key in stale_keys {
+            self.columns_loading.remove(&key);
+            self.column_loading_started_at.remove(&key);
+        }
+        stale_count
     }
 
     pub fn is_known_relation(&self, name: &str) -> bool {
@@ -1029,6 +1123,8 @@ impl IntellisenseData {
             .map(|name| name.to_uppercase())
             .collect();
         self.column_entries_by_table.clear();
+        self.columns_loading.clear();
+        self.column_loading_started_at.clear();
         for (table, columns) in &self.columns {
             self.column_entries_by_table
                 .insert(table.clone(), Self::build_entries(columns));
@@ -1298,45 +1394,45 @@ impl Default for IntellisensePopup {
     }
 }
 
-// Helper function to extract the current word at cursor position (ASCII-based).
+// Helper function to extract the current word at cursor position (Unicode-aware).
 // cursor_pos is a byte offset from FLTK TextBuffer.
 pub fn get_word_at_cursor(text: &str, cursor_pos: usize) -> (String, usize, usize) {
     if text.is_empty() || cursor_pos == 0 {
         return (String::new(), 0, 0);
     }
 
-    let bytes = text.as_bytes();
-    let pos = cursor_pos.min(bytes.len());
+    let mut pos = cursor_pos.min(text.len());
+    while pos > 0 && !text.is_char_boundary(pos) {
+        pos -= 1;
+    }
 
-    // Find word start by scanning backwards over ASCII identifier bytes
+    // Find word start by scanning backwards over identifier characters.
     let mut start = pos;
     while start > 0 {
-        if let Some(&byte) = bytes.get(start - 1) {
-            if is_identifier_byte(byte) {
-                start -= 1;
-            } else {
-                break;
-            }
+        let Some((prev_start, ch)) = text[..start].char_indices().next_back() else {
+            break;
+        };
+        if is_identifier_char(ch) {
+            start = prev_start;
         } else {
             break;
         }
     }
 
-    // Find word end by scanning forwards over ASCII identifier bytes
+    // Find word end by scanning forwards over identifier characters.
     let mut end = pos;
-    while let Some(&byte) = bytes.get(end) {
-        if is_identifier_byte(byte) {
-            end += 1;
+    while end < text.len() {
+        let Some(ch) = text[end..].chars().next() else {
+            break;
+        };
+        if is_identifier_char(ch) {
+            end += ch.len_utf8();
         } else {
             break;
         }
     }
 
-    // Since we only matched ASCII bytes, start..end is always valid UTF-8
-    let word = bytes
-        .get(start..pos)
-        .map(|slice| String::from_utf8_lossy(slice).into_owned())
-        .unwrap_or_default();
+    let word = text.get(start..pos).unwrap_or("").to_string();
     (word, start, end)
 }
 
@@ -1371,9 +1467,8 @@ pub fn detect_sql_context(text: &str, cursor_pos: usize) -> SqlContext {
     }
 }
 
-// ASCII-based identifier check.
-fn is_identifier_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$' || byte == b'#'
+fn is_identifier_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_' || ch == '$' || ch == '#'
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1383,4 +1478,74 @@ pub enum SqlContext {
     TableName,
     ColumnName,
     ColumnOrAll,
+}
+
+#[cfg(test)]
+mod intellisense_tests {
+    use super::*;
+
+    #[test]
+    fn get_suggestions_prefers_relations_in_table_context_with_empty_prefix() {
+        let mut data = IntellisenseData::new();
+        data.tables = (0..80).map(|i| format!("TBL_{:02}", i)).collect();
+        data.rebuild_indices();
+
+        let suggestions = data.get_suggestions("", false, None, true, false);
+
+        assert_eq!(suggestions.len(), MAX_SUGGESTIONS);
+        assert!(suggestions.iter().all(|s| s.starts_with("TBL_")));
+    }
+
+    #[test]
+    fn get_suggestions_keeps_to_underscore_matches() {
+        let mut data = IntellisenseData::new();
+        let suggestions = data.get_suggestions("TO_", false, None, false, false);
+
+        assert!(suggestions.iter().any(|s| s == "TO_CHAR"));
+        assert!(suggestions.iter().any(|s| s == "TO_CHAR()"));
+    }
+
+    #[test]
+    fn get_suggestions_prefers_columns_in_column_context_with_empty_prefix() {
+        let mut data = IntellisenseData::new();
+        data.tables = vec!["EMP".to_string()];
+        data.rebuild_indices();
+        data.set_columns_for_table("EMP", vec!["EMPNO".to_string(), "ENAME".to_string()]);
+        let column_scope = vec!["EMP".to_string()];
+
+        let suggestions = data.get_suggestions("", true, Some(&column_scope), false, true);
+
+        assert!(suggestions.contains(&"EMPNO".to_string()));
+        assert!(suggestions.contains(&"ENAME".to_string()));
+        assert!(!suggestions.contains(&"SELECT".to_string()));
+    }
+
+    #[test]
+    fn get_suggestions_table_context_empty_prefix_falls_back_to_keywords_when_no_relations() {
+        let mut data = IntellisenseData::new();
+
+        let suggestions = data.get_suggestions("", false, None, true, false);
+
+        assert!(suggestions.contains(&"SELECT".to_string()));
+    }
+
+    #[test]
+    fn get_suggestions_column_context_empty_prefix_falls_back_when_columns_missing() {
+        let mut data = IntellisenseData::new();
+        data.tables = vec!["EMP".to_string()];
+        data.rebuild_indices();
+        let column_scope = vec!["EMP".to_string()];
+
+        let suggestions = data.get_suggestions("", true, Some(&column_scope), false, true);
+
+        assert!(suggestions.contains(&"SELECT".to_string()));
+    }
+
+    #[test]
+    fn get_word_at_cursor_supports_unicode_identifier() {
+        let sql = "SELECT 한글컬럼 FROM dual";
+        let cursor = sql.find(" FROM").unwrap_or(sql.len());
+        let (word, _, _) = get_word_at_cursor(sql, cursor);
+        assert_eq!(word, "한글컬럼");
+    }
 }

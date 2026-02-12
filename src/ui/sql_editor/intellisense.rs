@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use oracle::Connection;
 
@@ -26,6 +27,9 @@ use crate::ui::FindReplaceDialog;
 use super::*;
 
 impl SqlEditorWidget {
+    const COLUMN_LOAD_LOCK_RETRY_ATTEMPTS: usize = 5;
+    const COLUMN_LOAD_LOCK_RETRY_DELAY_MS: u64 = 60;
+
     fn invoke_void_callback(callback_slot: &Rc<RefCell<Option<Box<dyn FnMut()>>>>) -> bool {
         let callback = {
             let mut slot = callback_slot.borrow_mut();
@@ -207,6 +211,7 @@ impl SqlEditorWidget {
                         if popup_visible {
                             intellisense_popup_for_handle.borrow_mut().hide();
                             *completion_range_for_handle.borrow_mut() = None;
+                            *pending_intellisense_for_handle.borrow_mut() = None;
                         }
                         let direction = if key == Key::Up { -1 } else { 1 };
                         widget_for_shortcuts.select_block_in_direction(direction);
@@ -217,6 +222,7 @@ impl SqlEditorWidget {
                         if popup_visible {
                             intellisense_popup_for_handle.borrow_mut().hide();
                             *completion_range_for_handle.borrow_mut() = None;
+                            *pending_intellisense_for_handle.borrow_mut() = None;
                         }
                         let direction = if key == Key::Up { 1 } else { -1 };
                         widget_for_shortcuts.navigate_history(direction);
@@ -229,6 +235,7 @@ impl SqlEditorWidget {
                                 // Close popup, consume event
                                 intellisense_popup_for_handle.borrow_mut().hide();
                                 *completion_range_for_handle.borrow_mut() = None;
+                                *pending_intellisense_for_handle.borrow_mut() = None;
                                 return true;
                             }
                             Key::Up => {
@@ -286,6 +293,7 @@ impl SqlEditorWidget {
                                         );
                                     }
                                     *completion_range_for_handle.borrow_mut() = None;
+                                    *pending_intellisense_for_handle.borrow_mut() = None;
 
                                     // Update syntax highlighting after insertion
                                     let cursor_pos = ed.insert_position().max(0) as usize;
@@ -300,6 +308,7 @@ impl SqlEditorWidget {
                                     *suppress_enter_for_handle.borrow_mut() = true;
                                 }
                                 intellisense_popup_for_handle.borrow_mut().hide();
+                                *pending_intellisense_for_handle.borrow_mut() = None;
                                 return true;
                             }
                             _ => {
@@ -415,23 +424,6 @@ impl SqlEditorWidget {
                         return true;
                     }
 
-                    // Ctrl+Space - trigger intellisense manually
-                    if fltk::app::event_state().contains(fltk::enums::Shortcut::Ctrl)
-                        && key == Key::from_char(' ')
-                    {
-                        Self::trigger_intellisense(
-                            ed,
-                            &buffer_for_handle,
-                            &intellisense_data_for_handle,
-                            &intellisense_popup_for_handle,
-                            &completion_range_for_handle,
-                            &column_sender_for_handle,
-                            &connection_for_handle,
-                            &pending_intellisense_for_handle,
-                        );
-                        return true;
-                    }
-
                     false
                 }
                 Event::KeyUp => {
@@ -447,8 +439,22 @@ impl SqlEditorWidget {
                     let ctrl_or_cmd = state.contains(fltk::enums::Shortcut::Ctrl)
                         || state.contains(fltk::enums::Shortcut::Command);
                     let alt = state.contains(fltk::enums::Shortcut::Alt);
+                    let shift = state.contains(fltk::enums::Shortcut::Shift);
+                    let cursor_pos = ed.insert_position().max(0);
+                    let char_before_cursor =
+                        Self::char_before_cursor(&buffer_for_handle, cursor_pos);
+                    let typed_char = Self::typed_char_from_key_event(
+                        &event_text,
+                        key,
+                        shift,
+                        char_before_cursor,
+                    );
+                    if Self::is_modifier_key(key) {
+                        return false;
+                    }
 
                     if event_text.is_empty()
+                        && typed_char.is_none()
                         && !ctrl_or_cmd
                         && !alt
                         && !matches!(
@@ -472,6 +478,7 @@ impl SqlEditorWidget {
                         if popup_visible {
                             intellisense_popup_for_handle.borrow_mut().hide();
                             *completion_range_for_handle.borrow_mut() = None;
+                            *pending_intellisense_for_handle.borrow_mut() = None;
                         }
                         return false;
                     }
@@ -507,6 +514,7 @@ impl SqlEditorWidget {
                         if popup_visible {
                             intellisense_popup_for_handle.borrow_mut().hide();
                             *completion_range_for_handle.borrow_mut() = None;
+                            *pending_intellisense_for_handle.borrow_mut() = None;
                         }
                         return false;
                     }
@@ -527,7 +535,6 @@ impl SqlEditorWidget {
                     }
 
                     // Handle typing - update intellisense filter
-                    let cursor_pos = ed.insert_position().max(0);
                     let (word, _, _) = Self::word_at_cursor(&buffer_for_handle, cursor_pos);
                     let context_text = Self::context_before_cursor(&buffer_for_handle, cursor_pos);
                     let context = detect_sql_context(&context_text, context_text.len());
@@ -548,12 +555,23 @@ impl SqlEditorWidget {
                         } else {
                             intellisense_popup_for_handle.borrow_mut().hide();
                             *completion_range_for_handle.borrow_mut() = None;
+                            *pending_intellisense_for_handle.borrow_mut() = None;
                         }
-                    } else {
-                        let typed_byte = event_text.as_bytes().first().copied();
-
-                        if let Some(byte) = typed_byte {
-                            if byte == b'.' {
+                    } else if let Some(ch) = typed_char {
+                        if ch == '.' {
+                            Self::trigger_intellisense(
+                                ed,
+                                &buffer_for_handle,
+                                &intellisense_data_for_handle,
+                                &intellisense_popup_for_handle,
+                                &completion_range_for_handle,
+                                &column_sender_for_handle,
+                                &connection_for_handle,
+                                &pending_intellisense_for_handle,
+                            );
+                        } else if Self::is_identifier_char(ch) {
+                            // Alphanumeric typed - show/update popup if word is long enough
+                            if word.len() >= 2 {
                                 Self::trigger_intellisense(
                                     ed,
                                     &buffer_for_handle,
@@ -564,29 +582,17 @@ impl SqlEditorWidget {
                                     &connection_for_handle,
                                     &pending_intellisense_for_handle,
                                 );
-                            } else if Self::is_identifier_byte(byte) {
-                                // Alphanumeric typed - show/update popup if word is long enough
-                                if word.len() >= 2 {
-                                    Self::trigger_intellisense(
-                                        ed,
-                                        &buffer_for_handle,
-                                        &intellisense_data_for_handle,
-                                        &intellisense_popup_for_handle,
-                                        &completion_range_for_handle,
-                                        &column_sender_for_handle,
-                                        &connection_for_handle,
-                                        &pending_intellisense_for_handle,
-                                    );
-                                } else {
-                                    intellisense_popup_for_handle.borrow_mut().hide();
-                                    *completion_range_for_handle.borrow_mut() = None;
-                                }
                             } else {
-                                // Non-identifier character (space, punctuation, etc.)
-                                // Close popup - user is done with this word
                                 intellisense_popup_for_handle.borrow_mut().hide();
                                 *completion_range_for_handle.borrow_mut() = None;
+                                *pending_intellisense_for_handle.borrow_mut() = None;
                             }
+                        } else {
+                            // Non-identifier character (space, punctuation, etc.)
+                            // Close popup - user is done with this word
+                            intellisense_popup_for_handle.borrow_mut().hide();
+                            *completion_range_for_handle.borrow_mut() = None;
+                            *pending_intellisense_for_handle.borrow_mut() = None;
                         }
                     }
 
@@ -902,7 +908,13 @@ impl SqlEditorWidget {
             if qualifier.is_some() {
                 data.get_column_suggestions(&prefix, column_scope)
             } else {
-                data.get_suggestions(&prefix, include_columns, column_scope)
+                data.get_suggestions(
+                    &prefix,
+                    include_columns,
+                    column_scope,
+                    matches!(context, SqlContext::TableName),
+                    matches!(context, SqlContext::ColumnName | SqlContext::ColumnOrAll),
+                )
             }
         };
 
@@ -1065,9 +1077,22 @@ impl SqlEditorWidget {
         let sender = column_sender.clone();
         let table_key_for_thread = table_key.clone();
         thread::spawn(move || {
-            // Try to acquire connection lock without blocking
-            // For column loading (background task), silently ignore if busy
-            let Some(conn_guard) = crate::db::try_lock_connection(&connection) else {
+            // Try-lock with bounded retries to avoid deadlock while still giving
+            // background column loading a chance when the connection is briefly busy.
+            let mut conn_guard = None;
+            for attempt in 0..Self::COLUMN_LOAD_LOCK_RETRY_ATTEMPTS {
+                if let Some(guard) = crate::db::try_lock_connection(&connection) {
+                    conn_guard = Some(guard);
+                    break;
+                }
+                if attempt + 1 < Self::COLUMN_LOAD_LOCK_RETRY_ATTEMPTS {
+                    thread::sleep(Duration::from_millis(
+                        Self::COLUMN_LOAD_LOCK_RETRY_DELAY_MS,
+                    ));
+                }
+            }
+
+            let Some(conn_guard) = conn_guard else {
                 let _ = sender.send(ColumnLoadUpdate {
                     table: table_key_for_thread,
                     columns: Vec::new(),
@@ -1755,8 +1780,63 @@ impl SqlEditorWidget {
         }
     }
 
+    fn char_before_cursor(buffer: &TextBuffer, cursor_pos: i32) -> Option<char> {
+        if cursor_pos <= 0 {
+            return None;
+        }
+        let start = (cursor_pos - 4).max(0);
+        let text = buffer.text_range(start, cursor_pos).unwrap_or_default();
+        text.chars().next_back()
+    }
+
+    fn typed_char_from_key_event(
+        event_text: &str,
+        key: Key,
+        shift: bool,
+        char_before_cursor: Option<char>,
+    ) -> Option<char> {
+        if let Some(ch) = event_text.chars().next() {
+            return Some(ch);
+        }
+
+        if key == Key::from_char('-') {
+            // FLTK can report '_' as key '-' with empty event_text when Shift state is
+            // already released in KeyUp. Infer from the actual inserted buffer character.
+            if let Some(prev) = char_before_cursor {
+                if prev == '_' || prev == '-' {
+                    return Some(prev);
+                }
+            }
+            if shift {
+                return Some('_');
+            }
+            return Some('-');
+        }
+
+        None
+    }
+
+    fn is_modifier_key(key: Key) -> bool {
+        matches!(
+            key,
+            Key::ShiftL
+                | Key::ShiftR
+                | Key::ControlL
+                | Key::ControlR
+                | Key::AltL
+                | Key::AltR
+                | Key::MetaL
+                | Key::MetaR
+                | Key::CapsLock
+        )
+    }
+
+    fn is_identifier_char(ch: char) -> bool {
+        ch.is_alphanumeric() || ch == '_' || ch == '$' || ch == '#'
+    }
+
     fn is_identifier_byte(byte: u8) -> bool {
-        byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$' || byte == b'#'
+        byte.is_ascii() && Self::is_identifier_char(byte as char)
     }
 
     /// Show quick describe dialog for a table/view structure.
@@ -2017,6 +2097,33 @@ mod intellisense_regression_tests {
     }
 
     #[test]
+    fn typed_char_from_key_event_falls_back_for_shifted_underscore() {
+        let ch = SqlEditorWidget::typed_char_from_key_event("", Key::from_char('-'), true, None);
+        assert_eq!(ch, Some('_'));
+    }
+
+    #[test]
+    fn typed_char_from_key_event_infers_underscore_from_buffer_even_without_shift_state() {
+        let ch =
+            SqlEditorWidget::typed_char_from_key_event("", Key::from_char('-'), false, Some('_'));
+        assert_eq!(ch, Some('_'));
+    }
+
+    #[test]
+    fn typed_char_from_key_event_keeps_minus_when_minus_was_inserted() {
+        let ch =
+            SqlEditorWidget::typed_char_from_key_event("", Key::from_char('-'), false, Some('-'));
+        assert_eq!(ch, Some('-'));
+    }
+
+    #[test]
+    fn modifier_key_is_detected_for_shift_release() {
+        assert!(SqlEditorWidget::is_modifier_key(Key::ShiftL));
+        assert!(SqlEditorWidget::is_modifier_key(Key::ShiftR));
+        assert!(!SqlEditorWidget::is_modifier_key(Key::from_char('a')));
+    }
+
+    #[test]
     fn request_table_columns_releases_loading_when_connection_busy() {
         let data = Rc::new(RefCell::new(IntellisenseData::new()));
         {
@@ -2095,6 +2202,17 @@ mod intellisense_regression_tests {
             &deps,
             &data
         ));
+    }
+
+    #[test]
+    fn intellisense_data_clears_stale_column_loading_entries() {
+        let mut data = IntellisenseData::new();
+        assert!(data.mark_columns_loading("EMP"));
+        std::thread::sleep(Duration::from_millis(20));
+
+        let cleared = data.clear_stale_columns_loading(Duration::from_millis(1));
+        assert_eq!(cleared, 1);
+        assert!(!data.columns_loading.contains("EMP"));
     }
 
     #[test]

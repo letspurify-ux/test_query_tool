@@ -350,7 +350,7 @@ impl MenuBarBuilder {
             |_| {
                 show_info_dialog(
                     "About",
-                    "Oracle Query Tool v0.1.0\n\nBuilt with Rust and FLTK\n\nA Toad-like Oracle database query tool.",
+                    "SPACE Query\n\nBuilt with Rust and FLTK",
                     420,
                     240,
                 );

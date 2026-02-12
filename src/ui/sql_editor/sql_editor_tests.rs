@@ -1098,6 +1098,25 @@ ORDER BY c.avg_sal DESC;"#;
 }
 
 #[test]
+fn format_sql_from_subqueries_with_comma_aligns_as_expected() {
+    let input = "SELECT * FROM (SELECT * FROM help) a, (SELECT * FROM help) b WHERE a.TOPIC = b.TOPIC;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = r#"SELECT *
+FROM (
+        SELECT *
+        FROM help
+    ) a,
+    (
+        SELECT *
+        FROM help
+    ) b
+WHERE a.TOPIC = b.TOPIC;"#;
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn format_sql_resets_paren_comma_suppression_after_top_level_semicolon() {
     let input = "SELECT func(a, b;\nSELECT c, d FROM dual";
     let formatted = SqlEditorWidget::format_sql_basic(input);
@@ -1302,4 +1321,42 @@ END;"#;
         "END); should not stay on one line in this pattern, got: {}",
         formatted
     );
+}
+
+#[test]
+fn format_sql_trigger_if_elsif_alignment_matches_expected() {
+    let input = r#"CREATE OR REPLACE NONEDITIONABLE TRIGGER "SYSTEM"."OQT_TRG_CHILD_BIU"
+BEFORE
+    INSERT OR UPDATE ON oqt_t_child
+FOR EACH ROW
+BEGIN
+    IF INSERTING THEN
+        :NEW.updated_at := NULL;
+        IF :NEW.note IS
+                NULL THEN
+                :NEW.note := 'auto-note:' || :NEW.sku;
+        END IF;
+    ELSIF UPDATING THEN
+            :NEW.updated_at := SYSDATE;
+    END IF;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = r#"CREATE OR REPLACE NONEDITIONABLE TRIGGER "SYSTEM"."OQT_TRG_CHILD_BIU"
+BEFORE
+    INSERT OR UPDATE ON oqt_t_child
+FOR EACH ROW
+BEGIN
+    IF INSERTING THEN
+        :NEW.updated_at := NULL;
+        IF :NEW.note IS
+                NULL THEN
+                :NEW.note := 'auto-note:' || :NEW.sku;
+        END IF;
+    ELSIF UPDATING THEN
+            :NEW.updated_at := SYSDATE;
+    END IF;
+END;"#;
+
+    assert_eq!(formatted, expected);
 }

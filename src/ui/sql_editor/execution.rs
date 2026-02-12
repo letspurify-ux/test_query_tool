@@ -687,6 +687,7 @@ impl SqlEditorWidget {
         let mut with_cte_paren_depth = 0usize;
         let mut statement_has_with_clause = false;
         let mut paren_indent_increase_stack: Vec<usize> = Vec::new();
+        let mut trigger_header_active = false;
 
         let newline_with = |out: &mut String,
                             indent_level: usize,
@@ -881,10 +882,35 @@ impl SqlEditorWidget {
                         needs_space = true;
                         idx += 1;
                         continue;
+                    } else if trigger_header_active
+                        && matches!(upper.as_str(), "BEFORE" | "AFTER" | "INSTEAD")
+                    {
+                        newline_with(
+                            &mut out,
+                            base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent),
+                            0,
+                            &mut at_line_start,
+                            &mut needs_space,
+                            &mut line_indent,
+                        );
+                    } else if trigger_header_active
+                        && matches!(upper.as_str(), "INSERT" | "UPDATE" | "DELETE")
+                        && matches!(prev_word_upper.as_deref(), Some("BEFORE" | "AFTER" | "OF"))
+                    {
+                        newline_with(
+                            &mut out,
+                            base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent),
+                            1,
+                            &mut at_line_start,
+                            &mut needs_space,
+                            &mut line_indent,
+                        );
                     } else if clause_keywords.contains(&upper.as_str())
                         && !is_insert_into
                         && !is_merge_into
                         && !is_start_with
+                        && !(trigger_header_active
+                            && matches!(upper.as_str(), "INSERT" | "UPDATE" | "DELETE"))
                     {
                         newline_with(
                             &mut out,
@@ -916,6 +942,7 @@ impl SqlEditorWidget {
                         && !is_or_in_create
                         && !is_between_and
                         && !is_exit_when
+                        && !(trigger_header_active && matches!(upper.as_str(), "OR" | "ON"))
                     {
                         let paren_extra = if suppress_comma_break_depth > 0 { 1 } else { 0 };
                         if upper == "WHEN"
@@ -956,6 +983,9 @@ impl SqlEditorWidget {
                         )
                     {
                         create_object = Some(upper.clone());
+                        if upper == "TRIGGER" {
+                            trigger_header_active = true;
+                        }
                         create_pending = false;
                     } else if matches!(upper.as_str(), "PROCEDURE" | "FUNCTION")
                         && block_stack.iter().any(|s| s == "PACKAGE_BODY")
@@ -1091,7 +1121,21 @@ impl SqlEditorWidget {
                     } else if upper == "OPEN" {
                         open_cursor_pending = true;
                     } else if upper == "FOR" || upper == "WHILE" {
-                        if upper == "FOR" && open_cursor_pending {
+                        if upper == "FOR" && trigger_header_active {
+                            newline_with(
+                                &mut out,
+                                base_indent(
+                                    indent_level,
+                                    in_open_cursor_sql,
+                                    open_cursor_sql_indent,
+                                ),
+                                0,
+                                &mut at_line_start,
+                                &mut needs_space,
+                                &mut line_indent,
+                            );
+                            after_for_while = false;
+                        } else if upper == "FOR" && open_cursor_pending {
                             open_cursor_pending = false;
                             in_open_cursor_sql = true;
                             open_cursor_sql_indent = indent_level.saturating_add(1);
@@ -1305,6 +1349,9 @@ impl SqlEditorWidget {
                     }
 
                     if upper == "DECLARE" || upper == "BEGIN" {
+                        if upper == "BEGIN" {
+                            trigger_header_active = false;
+                        }
                         newline_with(
                             &mut out,
                             base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent),
@@ -1591,7 +1638,7 @@ impl SqlEditorWidget {
                             column_list_stack.push(is_column_list);
                             let indent_increase = if is_subquery || is_column_list {
                                 if is_subquery
-                                    && matches!(current_clause.as_deref(), Some("SELECT"))
+                                    && matches!(current_clause.as_deref(), Some("SELECT" | "FROM"))
                                 {
                                     2
                                 } else {

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ui::sql_editor::SqlToken;
 
@@ -125,7 +125,7 @@ pub fn analyze_cursor_context(
     full_statement: &[SqlToken],
 ) -> CursorContext {
     let phase_analysis = analyze_phase(before_cursor);
-    let table_analysis = collect_tables_deep(full_statement, phase_analysis.depth);
+    let table_analysis = collect_tables_deep(full_statement, &phase_analysis.visible_scope_chain);
     let ctes = parse_ctes(full_statement);
 
     let mut tables_in_scope = table_analysis.tables;
@@ -157,6 +157,7 @@ pub fn analyze_cursor_context(
 struct PhaseAnalysis {
     phase: SqlPhase,
     depth: usize,
+    visible_scope_chain: Vec<usize>,
 }
 
 /// Walk tokens up to cursor to determine the current SQL phase and depth.
@@ -164,6 +165,11 @@ fn analyze_phase(tokens: &[SqlToken]) -> PhaseAnalysis {
     let mut depth: usize = 0;
     // Track phase at each depth level
     let mut phase_stack: Vec<SqlPhase> = vec![SqlPhase::Initial];
+    let mut next_scope_id = 1usize;
+    let mut scope_stack = vec![0usize];
+    let mut visible_parent: HashMap<usize, Option<usize>> = HashMap::new();
+    visible_parent.insert(0, None);
+    let mut pending_lateral_subquery = false;
     let mut cte_state = CteState::None;
     let mut cte_paren_depth: usize = 0;
     let mut idx = 0;
@@ -173,12 +179,32 @@ fn analyze_phase(tokens: &[SqlToken]) -> PhaseAnalysis {
 
         match token {
             SqlToken::Symbol(sym) if sym == "(" => {
+                let parent_phase = phase_stack.get(depth).copied().unwrap_or(SqlPhase::Initial);
+                let parent_scope_id = *scope_stack.last().unwrap_or(&0);
                 depth += 1;
-                if phase_stack.len() <= depth {
-                    phase_stack.push(SqlPhase::Initial);
+                let inherited_phase = if parent_phase.is_column_context() {
+                    parent_phase
                 } else {
-                    phase_stack[depth] = SqlPhase::Initial;
+                    SqlPhase::Initial
+                };
+                if phase_stack.len() <= depth {
+                    phase_stack.push(inherited_phase);
+                } else {
+                    phase_stack[depth] = inherited_phase;
                 }
+                let scope_id = next_scope_id;
+                next_scope_id += 1;
+                scope_stack.push(scope_id);
+                // Derived table/subquery in FROM introduces an isolated scope.
+                let inherited_visible_parent = if matches!(parent_phase, SqlPhase::FromClause)
+                    && !pending_lateral_subquery
+                {
+                    None
+                } else {
+                    Some(parent_scope_id)
+                };
+                visible_parent.insert(scope_id, inherited_visible_parent);
+                pending_lateral_subquery = false;
                 if matches!(cte_state, CteState::ExpectBody) {
                     cte_state = CteState::InBody;
                     cte_paren_depth = depth;
@@ -198,6 +224,10 @@ fn analyze_phase(tokens: &[SqlToken]) -> PhaseAnalysis {
                 if depth > 0 {
                     depth -= 1;
                 }
+                if scope_stack.len() > 1 {
+                    scope_stack.pop();
+                }
+                pending_lateral_subquery = false;
                 idx += 1;
                 continue;
             }
@@ -246,6 +276,13 @@ fn analyze_phase(tokens: &[SqlToken]) -> PhaseAnalysis {
                 }
 
                 let current_phase = phase_stack[depth];
+
+                if upper == "LATERAL" && matches!(current_phase, SqlPhase::FromClause) {
+                    pending_lateral_subquery = true;
+                    idx += 1;
+                    continue;
+                }
+                pending_lateral_subquery = false;
 
                 match upper.as_str() {
                     "WITH" if matches!(current_phase, SqlPhase::Initial) => {
@@ -355,6 +392,7 @@ fn analyze_phase(tokens: &[SqlToken]) -> PhaseAnalysis {
                 }
             }
             SqlToken::Symbol(sym) if sym == "," => {
+                pending_lateral_subquery = false;
                 // After comma in WITH clause at depth 0, expect next CTE name
                 if matches!(cte_state, CteState::None)
                     && depth == 0
@@ -363,14 +401,28 @@ fn analyze_phase(tokens: &[SqlToken]) -> PhaseAnalysis {
                     cte_state = CteState::ExpectName;
                 }
             }
-            _ => {}
+            _ => {
+                pending_lateral_subquery = false;
+            }
         }
         idx += 1;
     }
 
     let phase = phase_stack.get(depth).copied().unwrap_or(SqlPhase::Initial);
+    let mut visible_scope_chain = Vec::new();
+    let mut scope_id = *scope_stack.last().unwrap_or(&0);
+    visible_scope_chain.push(scope_id);
+    while let Some(Some(parent_id)) = visible_parent.get(&scope_id) {
+        visible_scope_chain.push(*parent_id);
+        scope_id = *parent_id;
+    }
+    visible_scope_chain.reverse();
 
-    PhaseAnalysis { phase, depth }
+    PhaseAnalysis {
+        phase,
+        depth,
+        visible_scope_chain,
+    }
 }
 
 struct TableAnalysis {
@@ -379,15 +431,27 @@ struct TableAnalysis {
 }
 
 /// Collect all table references from the full statement, tracking depth.
-/// Returns tables visible at the given `target_depth`.
-fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysis {
-    let mut all_tables: Vec<ScopedTableRef> = Vec::new();
-    let mut all_subqueries: Vec<SubqueryDefinition> = Vec::new();
+/// Returns tables visible from the cursor's active scope chain.
+fn collect_tables_deep(tokens: &[SqlToken], cursor_scope_chain: &[usize]) -> TableAnalysis {
+    struct ParsedTable {
+        table: ScopedTableRef,
+        scope_id: usize,
+    }
+
+    struct ParsedSubquery {
+        subquery: SubqueryDefinition,
+        scope_id: usize,
+    }
+
+    let mut all_tables: Vec<ParsedTable> = Vec::new();
+    let mut all_subqueries: Vec<ParsedSubquery> = Vec::new();
     let mut depth: usize = 0;
     let mut phase_stack: Vec<SqlPhase> = vec![SqlPhase::Initial];
     let mut expect_table = false;
     let mut cte_state = CteState::None;
     let mut cte_paren_depth: usize = 0;
+    let mut next_scope_id = 1usize;
+    let mut scope_stack = vec![0usize];
     // Track subquery aliases: when we close a paren at a certain depth in FROM context,
     // store (depth, start_token_idx) so we can capture body tokens
     let mut subquery_tracks: Vec<(usize, usize)> = Vec::new(); // (depth, start_idx)
@@ -405,6 +469,8 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                 }
                 phase_stack[depth] = SqlPhase::Initial;
                 expect_table = false;
+                scope_stack.push(next_scope_id);
+                next_scope_id += 1;
 
                 if matches!(parent_phase, SqlPhase::FromClause) {
                     subquery_tracks.push((depth, idx + 1)); // depth after increment, token after '('
@@ -439,23 +505,37 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                     }
                     // Look for alias after the closing paren
                     if let Some((alias, next_idx)) = parse_subquery_alias(tokens, idx + 1) {
+                        let parent_scope_id = if scope_stack.len() >= 2 {
+                            scope_stack[scope_stack.len() - 2]
+                        } else {
+                            0
+                        };
                         // Capture body tokens for column inference
                         let body_tokens: Vec<SqlToken> =
                             tokens[start_idx..idx].iter().cloned().collect();
-                        all_subqueries.push(SubqueryDefinition {
-                            alias: alias.clone(),
-                            body_tokens,
-                            depth: depth.saturating_sub(1),
+                        all_subqueries.push(ParsedSubquery {
+                            subquery: SubqueryDefinition {
+                                alias: alias.clone(),
+                                body_tokens,
+                                depth: depth.saturating_sub(1),
+                            },
+                            scope_id: parent_scope_id,
                         });
-                        all_tables.push(ScopedTableRef {
-                            name: alias.clone(),
-                            alias: Some(alias),
-                            depth: depth.saturating_sub(1),
-                            is_cte: false,
+                        all_tables.push(ParsedTable {
+                            table: ScopedTableRef {
+                                name: alias.clone(),
+                                alias: Some(alias),
+                                depth: depth.saturating_sub(1),
+                                is_cte: false,
+                            },
+                            scope_id: parent_scope_id,
                         });
                         idx = next_idx;
                         if depth > 0 {
                             depth -= 1;
+                        }
+                        if scope_stack.len() > 1 {
+                            scope_stack.pop();
                         }
                         continue;
                     }
@@ -463,6 +543,9 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
 
                 if depth > 0 {
                     depth -= 1;
+                }
+                if scope_stack.len() > 1 {
+                    scope_stack.pop();
                 }
                 idx += 1;
                 continue;
@@ -496,6 +579,8 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                 expect_table = false;
                 cte_state = CteState::None;
                 subquery_tracks.clear();
+                next_scope_id = 1;
+                scope_stack = vec![0usize];
                 idx += 1;
                 continue;
             }
@@ -636,11 +721,15 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                             if let Some((table_name, next_idx)) = parse_table_name_deep(tokens, idx)
                             {
                                 let (alias, after_alias) = parse_alias_deep(tokens, next_idx);
-                                all_tables.push(ScopedTableRef {
-                                    name: table_name,
-                                    alias,
-                                    depth,
-                                    is_cte: false,
+                                let scope_id = *scope_stack.last().unwrap_or(&0);
+                                all_tables.push(ParsedTable {
+                                    table: ScopedTableRef {
+                                        name: table_name,
+                                        alias,
+                                        depth,
+                                        is_cte: false,
+                                    },
+                                    scope_id,
                                 });
                                 // Check if next is comma (continue expecting tables)
                                 if let Some(SqlToken::Symbol(sym)) = tokens.get(after_alias) {
@@ -664,16 +753,19 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
         idx += 1;
     }
 
-    // Filter tables visible at target_depth: tables at depth <= target_depth are visible
+    let visible_scope_ids: HashSet<usize> = cursor_scope_chain.iter().copied().collect();
+
+    // Visible objects are those defined in current scope or any ancestor scope.
     let visible: Vec<ScopedTableRef> = all_tables
         .into_iter()
-        .filter(|t| t.depth <= target_depth)
+        .filter(|entry| visible_scope_ids.contains(&entry.scope_id))
+        .map(|entry| entry.table)
         .collect();
 
-    // Filter subqueries visible at target_depth
     let visible_subqueries: Vec<SubqueryDefinition> = all_subqueries
         .into_iter()
-        .filter(|s| s.depth <= target_depth)
+        .filter(|entry| visible_scope_ids.contains(&entry.scope_id))
+        .map(|entry| entry.subquery)
         .collect();
 
     TableAnalysis {
@@ -687,25 +779,35 @@ fn parse_ctes(tokens: &[SqlToken]) -> Vec<CteDefinition> {
     let mut ctes = Vec::new();
     let mut idx = 0;
 
-    // Find WITH keyword
+    // Find top-level WITH keyword
+    let mut depth = 0usize;
+    let mut found_with = false;
     while idx < tokens.len() {
-        if let SqlToken::Word(w) = &tokens[idx] {
-            if w.to_uppercase() == "WITH" {
+        match &tokens[idx] {
+            SqlToken::Symbol(sym) if sym == "(" => depth += 1,
+            SqlToken::Symbol(sym) if sym == ")" => depth = depth.saturating_sub(1),
+            SqlToken::Word(w) if depth == 0 && w.eq_ignore_ascii_case("WITH") => {
                 idx += 1;
+                found_with = true;
                 break;
             }
-        }
-        // If we hit SELECT/INSERT/UPDATE/DELETE before WITH, no CTEs
-        if let SqlToken::Word(w) = &tokens[idx] {
-            let u = w.to_uppercase();
-            if matches!(
-                u.as_str(),
-                "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE"
-            ) {
-                return ctes;
+            // If we hit a top-level statement keyword before WITH, no CTEs.
+            SqlToken::Word(w) if depth == 0 => {
+                let u = w.to_uppercase();
+                if matches!(
+                    u.as_str(),
+                    "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "MERGE"
+                ) {
+                    return ctes;
+                }
             }
+            _ => {}
         }
         idx += 1;
+    }
+
+    if !found_with {
+        return ctes;
     }
 
     // Skip RECURSIVE if present
@@ -908,11 +1010,19 @@ fn parse_alias_deep(tokens: &[SqlToken], start: usize) -> (Option<String>, usize
 /// Parse an alias after a subquery closing ')'.
 fn parse_subquery_alias(tokens: &[SqlToken], start: usize) -> Option<(String, usize)> {
     let mut idx = start;
-    // Skip comments
+    // Skip comments and stray closing parens to recover from malformed SQL like:
+    // `FROM (SELECT ...) ) alias`
     while idx < tokens.len() {
-        if let SqlToken::Comment(_) = &tokens[idx] {
-            idx += 1;
-            continue;
+        match &tokens[idx] {
+            SqlToken::Comment(_) => {
+                idx += 1;
+                continue;
+            }
+            SqlToken::Symbol(sym) if sym == ")" => {
+                idx += 1;
+                continue;
+            }
+            _ => {}
         }
         break;
     }

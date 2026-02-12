@@ -21,7 +21,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::db::{
-    create_shared_connection, lock_connection, ObjectBrowser, QueryResult, SharedConnection,
+    create_shared_connection, lock_connection, try_lock_connection, ObjectBrowser, QueryResult,
+    SharedConnection,
 };
 use crate::ui::constants::*;
 use crate::ui::theme;
@@ -104,7 +105,7 @@ impl MainWindow {
 
         let mut window = Window::default()
             .with_size(1200, 800)
-            .with_label("Oracle Query Tool - Rust Edition")
+            .with_label("SPACE Query")
             .center_screen();
         window.set_id("main_window");
         window.set_color(theme::window_bg());
@@ -929,7 +930,7 @@ impl MainWindow {
                                         s.sql_buffer.set_text(&content);
                                         *s.current_file.borrow_mut() = Some(path.clone());
                                         s.window.set_label(&format!(
-                                            "Oracle Query Tool - {}",
+                                            "SPACE Query - {}",
                                             path.file_name().unwrap_or_default().to_string_lossy()
                                         ));
                                         s.sql_editor.refresh_highlighting();
@@ -948,7 +949,7 @@ impl MainWindow {
                                         let file_label =
                                             path.file_name().unwrap_or_default().to_string_lossy();
                                         s.window.set_label(&format!(
-                                            "Oracle Query Tool - {}",
+                                            "SPACE Query - {}",
                                             file_label
                                         ));
                                         let conn_info = s.connection_info.borrow().clone();
@@ -1104,7 +1105,12 @@ impl MainWindow {
                         }
                         "File/Disconnect" => {
                             let connection = state_for_menu.borrow().connection.clone();
-                            let mut db_conn = lock_connection(&connection);
+                            let Some(mut db_conn) = try_lock_connection(&connection) else {
+                                fltk::dialog::alert_default(
+                                    "Connection is busy. Try again after the current operation finishes.",
+                                );
+                                return;
+                            };
                             db_conn.disconnect();
                             let session = db_conn.session_state();
                             drop(db_conn);

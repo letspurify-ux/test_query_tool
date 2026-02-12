@@ -668,6 +668,24 @@ fn from_clause_with_function_call_in_select() {
 }
 
 #[test]
+fn select_function_arg_cursor_is_column_context() {
+    let ctx = analyze("SELECT MAX(|) FROM HELP");
+    assert_eq!(ctx.phase, SqlPhase::SelectList);
+    assert!(ctx.phase.is_column_context());
+    let names = table_names(&ctx);
+    assert!(names.contains(&"HELP".to_string()));
+}
+
+#[test]
+fn select_function_arg_cursor_with_missing_paren_is_column_context() {
+    let ctx = analyze("SELECT MAX(| FROM HELP");
+    assert_eq!(ctx.phase, SqlPhase::SelectList);
+    assert!(ctx.phase.is_column_context());
+    let names = table_names(&ctx);
+    assert!(names.contains(&"HELP".to_string()));
+}
+
+#[test]
 fn case_expression_in_select_list() {
     let ctx = analyze("SELECT CASE WHEN a = 1 THEN 'x' ELSE 'y' END, | FROM t");
     assert_eq!(ctx.phase, SqlPhase::SelectList);
@@ -747,7 +765,7 @@ fn in_subquery_from_clause_tables() {
         "tables: {:?}",
         names
     );
-    // employees from outer query should also be visible (depth 0 <= depth 1)
+    // employees from outer query should also be visible (ancestor scope visibility)
     assert!(
         names.contains(&"EMPLOYEES".to_string()),
         "tables: {:?}",
@@ -811,6 +829,18 @@ fn natural_join() {
     assert!(names.contains(&"T2".to_string()), "tables: {:?}", names);
 }
 
+#[test]
+fn lateral_subquery_can_see_outer_table_scope() {
+    let ctx = analyze("SELECT * FROM t1 a, LATERAL (SELECT a.| FROM t2 b) l");
+    let names = table_names(&ctx);
+    assert!(
+        names.contains(&"T1".to_string()),
+        "lateral subquery should inherit outer scope table: {:?}",
+        names
+    );
+    assert!(names.contains(&"T2".to_string()), "tables: {:?}", names);
+}
+
 // ─── CTE inside subquery edge case ──────────────────────────────────────
 
 #[test]
@@ -830,6 +860,40 @@ fn cte_with_subquery_alias_in_main_query() {
     assert!(
         names.iter().any(|n| n.eq_ignore_ascii_case("base")),
         "tables: {:?}",
+        names
+    );
+}
+
+#[test]
+fn nested_with_inside_subquery_is_not_collected_as_top_level_cte() {
+    let ctx = analyze(
+        "SELECT * FROM (WITH inner_cte AS (SELECT 1 AS n FROM dual) SELECT n FROM inner_cte) sub WHERE |",
+    );
+    let cte_n = cte_names(&ctx);
+    assert!(
+        !cte_n.contains(&"INNER_CTE".to_string()),
+        "top-level CTEs should not include nested WITH definitions: {:?}",
+        cte_n
+    );
+}
+
+#[test]
+fn sibling_subquery_tables_are_not_visible_inside_current_subquery() {
+    let ctx = analyze(
+        "SELECT * \
+         FROM (SELECT a.id FROM t1 a WHERE a.|) sub1, \
+              (SELECT b.id FROM t2 b) sub2",
+    );
+    let names = table_names(&ctx);
+    assert!(names.contains(&"T1".to_string()), "tables: {:?}", names);
+    assert!(
+        !names.contains(&"T2".to_string()),
+        "sibling subquery table should not leak into current scope: {:?}",
+        names
+    );
+    assert!(
+        !names.iter().any(|n| n.eq_ignore_ascii_case("sub2")),
+        "sibling subquery alias should not leak into current scope: {:?}",
         names
     );
 }
