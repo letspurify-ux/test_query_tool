@@ -1241,7 +1241,7 @@ impl IntellisensePopup {
     }
 
     pub fn hide(&mut self) {
-        self.window.resize(-10000, -10000, 1, 1);
+        self.window.resize(0, 0, 0, 0);
         *self.visible.borrow_mut() = false;
     }
 
