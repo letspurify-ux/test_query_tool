@@ -876,8 +876,16 @@ fn merge_using_source_table_is_collected() {
          WHEN MATCHED THEN UPDATE SET t.val = s.val WHERE |",
     );
     let names = table_names(&ctx);
-    assert!(names.contains(&"TARGET_TABLE".to_string()), "tables: {:?}", names);
-    assert!(names.contains(&"SOURCE_TABLE".to_string()), "tables: {:?}", names);
+    assert!(
+        names.contains(&"TARGET_TABLE".to_string()),
+        "tables: {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"SOURCE_TABLE".to_string()),
+        "tables: {:?}",
+        names
+    );
 }
 
 #[test]
@@ -1103,4 +1111,11 @@ fn subquery_alias_with_expressions() {
         .unwrap();
     let cols = extract_select_list_columns(&subq.body_tokens);
     assert_eq!(cols, vec!["dept_id", "cnt", "max_sal"]);
+}
+
+#[test]
+fn malformed_subquery_parentheses_do_not_panic() {
+    let ctx = analyze("SELECT * FROM (SELECT * FROM emp)) broken_alias |");
+    let names = table_names(&ctx);
+    assert!(names.contains(&"BROKEN_ALIAS".to_string()));
 }
