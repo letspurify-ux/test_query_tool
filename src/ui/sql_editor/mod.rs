@@ -543,6 +543,9 @@ impl SqlEditorWidget {
         let receiver: Rc<RefCell<mpsc::Receiver<ColumnLoadUpdate>>> =
             Rc::new(RefCell::new(column_receiver));
 
+        const COLUMN_POLL_ACTIVE_INTERVAL_SECONDS: f64 = 0.05;
+        const COLUMN_POLL_IDLE_INTERVAL_SECONDS: f64 = 0.5;
+
         fn schedule_poll(
             receiver: Rc<RefCell<mpsc::Receiver<ColumnLoadUpdate>>>,
             intellisense_data: Rc<RefCell<IntellisenseData>>,
@@ -555,12 +558,14 @@ impl SqlEditorWidget {
             pending_intellisense: Rc<RefCell<Option<PendingIntellisense>>>,
         ) {
             let mut disconnected = false;
+            let mut processed = 0usize;
             // Process any pending messages
             {
                 let r = receiver.borrow();
                 loop {
                     match r.try_recv() {
                         Ok(update) => {
+                            processed += 1;
                             let should_refresh_pending = {
                                 let mut data = intellisense_data.borrow_mut();
                                 if update.cache_columns {
@@ -604,8 +609,21 @@ impl SqlEditorWidget {
                 return;
             }
 
-            // Reschedule for next poll
-            app::add_timeout3(0.05, move |_| {
+            let has_pending_column_work = {
+                let data = intellisense_data.borrow();
+                !data.columns_loading.is_empty()
+            } || pending_intellisense.borrow().is_some();
+
+            // Reschedule with adaptive backoff to reduce idle CPU usage.
+            let delay = if processed > 0 {
+                0.0
+            } else if has_pending_column_work {
+                COLUMN_POLL_ACTIVE_INTERVAL_SECONDS
+            } else {
+                COLUMN_POLL_IDLE_INTERVAL_SECONDS
+            };
+
+            app::add_timeout3(delay, move |_| {
                 schedule_poll(
                     Rc::clone(&receiver),
                     Rc::clone(&intellisense_data),

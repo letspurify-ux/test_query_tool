@@ -421,9 +421,22 @@ fn collect_tables_deep(tokens: &[SqlToken], target_depth: usize) -> TableAnalysi
                     cte_state = CteState::None;
                 }
 
+                while subquery_tracks.last().is_some_and(|track| track.0 > depth) {
+                    // Recover gracefully from malformed SQL with unbalanced parentheses.
+                    // Stale entries can otherwise trigger panics when slicing token ranges.
+                    subquery_tracks.pop();
+                }
+
                 let was_subquery = subquery_tracks.last().map(|t| t.0) == Some(depth);
-                if was_subquery {
-                    let (_, start_idx) = subquery_tracks.pop().unwrap();
+                if let Some((_, start_idx)) = was_subquery.then(|| subquery_tracks.pop()).flatten()
+                {
+                    if start_idx > idx {
+                        if depth > 0 {
+                            depth -= 1;
+                        }
+                        idx += 1;
+                        continue;
+                    }
                     // Look for alias after the closing paren
                     if let Some((alias, next_idx)) = parse_subquery_alias(tokens, idx + 1) {
                         // Capture body tokens for column inference
