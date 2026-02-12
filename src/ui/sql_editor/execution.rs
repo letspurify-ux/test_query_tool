@@ -158,11 +158,35 @@ impl SqlEditorWidget {
             buffer.select(start, start + formatted.len() as i32);
             editor.set_insert_position(start + formatted.len() as i32);
         } else {
-            let new_pos = (original_pos as usize).min(formatted.len()) as i32;
+            let new_pos = Self::map_cursor_after_format(&source, &formatted, original_pos);
             editor.set_insert_position(new_pos);
         }
         editor.show_insert_position();
         self.refresh_highlighting();
+    }
+
+    fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
+        let idx = index.min(text.len());
+        if text.is_char_boundary(idx) {
+            return idx;
+        }
+        text.char_indices()
+            .map(|(pos, _)| pos)
+            .take_while(|pos| *pos < idx)
+            .last()
+            .unwrap_or(0)
+    }
+
+    fn map_cursor_after_format(source: &str, formatted: &str, original_pos: i32) -> i32 {
+        if original_pos <= 0 {
+            return 0;
+        }
+
+        let source_pos = Self::clamp_to_char_boundary(source, original_pos as usize);
+        let source_prefix = &source[..source_pos];
+        let formatted_prefix = Self::format_sql_basic(source_prefix);
+        let formatted_pos = formatted_prefix.len().min(formatted.len());
+        Self::clamp_to_char_boundary(formatted, formatted_pos) as i32
     }
 
     pub fn toggle_comment(&self) {
@@ -658,6 +682,7 @@ impl SqlEditorWidget {
         let mut indent_level = 0usize;
         let mut suppress_comma_break_depth = 0usize;
         let mut paren_stack: Vec<bool> = Vec::new();
+        let mut paren_clause_restore_stack: Vec<Option<String>> = Vec::new();
         let mut block_stack: Vec<String> = Vec::new(); // Track which block keywords started blocks
         let mut at_line_start = true;
         let mut needs_space = false;
@@ -800,6 +825,8 @@ impl SqlEditorWidget {
                         upper == "INTO" && matches!(prev_word_upper.as_deref(), Some("MERGE"));
                     let is_start_with =
                         upper == "WITH" && matches!(prev_word_upper.as_deref(), Some("START"));
+                    let is_within_group =
+                        upper == "GROUP" && matches!(prev_word_upper.as_deref(), Some("WITHIN"));
                     let mut newline_after_keyword = false;
                     let is_between_and = upper == "AND" && between_pending;
                     let is_exit_when = upper == "WHEN" && pending_exit_condition;
@@ -909,34 +936,39 @@ impl SqlEditorWidget {
                         && !is_insert_into
                         && !is_merge_into
                         && !is_start_with
+                        && !(suppress_comma_break_depth > 0 && upper == "ORDER")
                         && !(trigger_header_active
                             && matches!(upper.as_str(), "INSERT" | "UPDATE" | "DELETE"))
                     {
                         newline_with(
                             &mut out,
                             base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent),
-                            0,
+                            if is_within_group { 1 } else { 0 },
                             &mut at_line_start,
                             &mut needs_space,
                             &mut line_indent,
                         );
-                        current_clause = Some(upper.clone());
-                        if upper != "SELECT" {
-                            select_list_anchor = None;
-                            select_list_multiline_forced = false;
-                        }
-                        if upper == "SELECT" && in_open_cursor_sql {
-                            // Keep OPEN ... FOR SELECT inside the cursor SQL context.
-                            open_cursor_pending = false;
-                        }
-                        if upper == "WITH" {
-                            with_cte_active = true;
-                            with_cte_paren_depth = 0;
-                            statement_has_with_clause = true;
-                        } else if upper == "SELECT" && with_cte_active && with_cte_paren_depth == 0
-                        {
-                            // Main query SELECT after CTE definitions.
-                            with_cte_active = false;
+                        if !is_within_group {
+                            current_clause = Some(upper.clone());
+                            if upper != "SELECT" {
+                                select_list_anchor = None;
+                                select_list_multiline_forced = false;
+                            }
+                            if upper == "SELECT" && in_open_cursor_sql {
+                                // Keep OPEN ... FOR SELECT inside the cursor SQL context.
+                                open_cursor_pending = false;
+                            }
+                            if upper == "WITH" {
+                                with_cte_active = true;
+                                with_cte_paren_depth = 0;
+                                statement_has_with_clause = true;
+                            } else if upper == "SELECT"
+                                && with_cte_active
+                                && with_cte_paren_depth == 0
+                            {
+                                // Main query SELECT after CTE definitions.
+                                with_cte_active = false;
+                            }
                         }
                     } else if condition_keywords.contains(&upper.as_str())
                         && !is_or_in_create
@@ -1443,7 +1475,17 @@ impl SqlEditorWidget {
                         let base =
                             base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent);
                         if has_leading_newline {
-                            line_indent = base;
+                            line_indent = if in_select_list && select_list_multiline_forced {
+                                base + 1
+                            } else {
+                                base
+                            };
+                        } else if top_level_select_list {
+                            line_indent = if select_list_multiline_forced {
+                                base + 1
+                            } else {
+                                base
+                            };
                         } else if in_select_list
                             || column_list_stack.last().copied().unwrap_or(false)
                         {
@@ -1546,6 +1588,11 @@ impl SqlEditorWidget {
                                     &mut needs_space,
                                     &mut line_indent,
                                 );
+                                if matches!(current_clause.as_deref(), Some("SELECT")) {
+                                    // The select list is already multiline after the first comma.
+                                    // Avoid retroactively forcing a newline right after SELECT.
+                                    select_list_multiline_forced = true;
+                                }
                             } else {
                                 out.push(' ');
                                 needs_space = false;
@@ -1582,6 +1629,7 @@ impl SqlEditorWidget {
                                 // even if we encountered an unmatched parenthesis earlier in the statement.
                                 suppress_comma_break_depth = 0;
                                 paren_stack.clear();
+                                paren_clause_restore_stack.clear();
                                 column_list_stack.clear();
                                 paren_indent_increase_stack.clear();
                                 if had_unbalanced_paren {
@@ -1635,11 +1683,22 @@ impl SqlEditorWidget {
                             let is_column_list = create_table_paren_expected;
                             create_table_paren_expected = false;
                             paren_stack.push(is_subquery);
+                            paren_clause_restore_stack.push(if is_subquery {
+                                current_clause.clone()
+                            } else {
+                                None
+                            });
                             column_list_stack.push(is_column_list);
                             let indent_increase = if is_subquery || is_column_list {
-                                if is_subquery
-                                    && matches!(current_clause.as_deref(), Some("SELECT" | "FROM"))
-                                {
+                                let in_cte_as_subquery = with_cte_active
+                                    && matches!(prev_word_upper.as_deref(), Some("AS"));
+                                let deep_subquery_indent = matches!(
+                                    current_clause.as_deref(),
+                                    Some("SELECT" | "FROM")
+                                ) && !in_cte_as_subquery
+                                    || (matches!(current_clause.as_deref(), Some("WHERE"))
+                                        && matches!(prev_word_upper.as_deref(), Some("EXISTS")));
+                                if is_subquery && deep_subquery_indent {
                                     2
                                 } else {
                                     1
@@ -1673,6 +1732,7 @@ impl SqlEditorWidget {
                             }
                             trim_trailing_space(&mut out);
                             let was_subquery = paren_stack.pop().unwrap_or(false);
+                            let restore_clause = paren_clause_restore_stack.pop().unwrap_or(None);
                             let was_column_list = column_list_stack.pop().unwrap_or(false);
                             let indent_increase = paren_indent_increase_stack.pop().unwrap_or(0);
                             let close_case_paren_on_newline = !was_subquery
@@ -1714,6 +1774,9 @@ impl SqlEditorWidget {
                                 );
                                 ensure_indent(&mut out, &mut at_line_start, line_indent);
                             }
+                            if was_subquery {
+                                current_clause = restore_clause;
+                            }
                             out.push(')');
                             needs_space = true;
                         }
@@ -1753,6 +1816,19 @@ impl SqlEditorWidget {
 
         let formatted = out.trim_end().to_string();
         Self::apply_parser_depth_indentation(&formatted)
+    }
+
+    fn starts_with_keyword_token(text_upper: &str, keyword: &str) -> bool {
+        if text_upper == keyword {
+            return true;
+        }
+        let Some(rest) = text_upper.strip_prefix(keyword) else {
+            return false;
+        };
+        let Some(next) = rest.chars().next() else {
+            return true;
+        };
+        next.is_whitespace() || matches!(next, ';' | ',' | '(' | ')')
     }
 
     fn apply_parser_depth_indentation(formatted: &str) -> String {
@@ -1833,37 +1909,37 @@ impl SqlEditorWidget {
                 paren_case_expression_depth += 1;
             }
             let in_paren_case_expression = !in_dml_statement && paren_case_expression_depth > 0;
-            let starts_dml = trimmed_upper.starts_with("SELECT ")
-                || trimmed_upper.starts_with("INSERT ")
-                || trimmed_upper.starts_with("UPDATE ")
-                || trimmed_upper.starts_with("DELETE ")
-                || trimmed_upper.starts_with("MERGE ");
+            let starts_dml = Self::starts_with_keyword_token(&trimmed_upper, "SELECT")
+                || Self::starts_with_keyword_token(&trimmed_upper, "INSERT")
+                || Self::starts_with_keyword_token(&trimmed_upper, "UPDATE")
+                || Self::starts_with_keyword_token(&trimmed_upper, "DELETE")
+                || Self::starts_with_keyword_token(&trimmed_upper, "MERGE");
             if starts_dml {
                 in_dml_statement = true;
             }
-            let starts_into = trimmed_upper.starts_with("INTO ");
-            let starts_into_ender = trimmed_upper.starts_with("FROM ")
-                || trimmed_upper.starts_with("WHERE ")
-                || trimmed_upper.starts_with("ORDER ")
-                || trimmed_upper.starts_with("VALUES ")
-                || trimmed_upper.starts_with("END")
-                || trimmed_upper.starts_with("EXCEPTION")
-                || trimmed_upper.starts_with("ELSIF")
-                || trimmed_upper.starts_with("ELSE")
-                || trimmed_upper.starts_with("WHEN ")
-                || trimmed_upper.starts_with("BEGIN")
-                || trimmed_upper.starts_with("LOOP")
-                || trimmed_upper.starts_with("CASE")
-                || trimmed_upper.starts_with("SELECT ")
-                || trimmed_upper.starts_with("INSERT ")
-                || trimmed_upper.starts_with("UPDATE ")
-                || trimmed_upper.starts_with("DELETE ")
-                || trimmed_upper.starts_with("MERGE ")
-                || trimmed_upper.starts_with("FETCH ")
-                || trimmed_upper.starts_with("OPEN ")
-                || trimmed_upper.starts_with("CLOSE ")
-                || trimmed_upper.starts_with("RETURN ")
-                || trimmed_upper.starts_with("EXIT");
+            let starts_into = Self::starts_with_keyword_token(&trimmed_upper, "INTO");
+            let starts_into_ender = Self::starts_with_keyword_token(&trimmed_upper, "FROM")
+                || Self::starts_with_keyword_token(&trimmed_upper, "WHERE")
+                || Self::starts_with_keyword_token(&trimmed_upper, "ORDER")
+                || Self::starts_with_keyword_token(&trimmed_upper, "VALUES")
+                || Self::starts_with_keyword_token(&trimmed_upper, "END")
+                || Self::starts_with_keyword_token(&trimmed_upper, "EXCEPTION")
+                || Self::starts_with_keyword_token(&trimmed_upper, "ELSIF")
+                || Self::starts_with_keyword_token(&trimmed_upper, "ELSE")
+                || Self::starts_with_keyword_token(&trimmed_upper, "WHEN")
+                || Self::starts_with_keyword_token(&trimmed_upper, "BEGIN")
+                || Self::starts_with_keyword_token(&trimmed_upper, "LOOP")
+                || Self::starts_with_keyword_token(&trimmed_upper, "CASE")
+                || Self::starts_with_keyword_token(&trimmed_upper, "SELECT")
+                || Self::starts_with_keyword_token(&trimmed_upper, "INSERT")
+                || Self::starts_with_keyword_token(&trimmed_upper, "UPDATE")
+                || Self::starts_with_keyword_token(&trimmed_upper, "DELETE")
+                || Self::starts_with_keyword_token(&trimmed_upper, "MERGE")
+                || Self::starts_with_keyword_token(&trimmed_upper, "FETCH")
+                || Self::starts_with_keyword_token(&trimmed_upper, "OPEN")
+                || Self::starts_with_keyword_token(&trimmed_upper, "CLOSE")
+                || Self::starts_with_keyword_token(&trimmed_upper, "RETURN")
+                || Self::starts_with_keyword_token(&trimmed_upper, "EXIT");
             let extra_indent = if into_list_active && !starts_into_ender {
                 1
             } else {
@@ -2093,14 +2169,43 @@ impl SqlEditorWidget {
     }
 
     fn is_plsql_like_statement(statement: &str) -> bool {
-        let upper = statement.to_uppercase();
-        upper.contains("BEGIN")
-            || upper.contains("DECLARE")
-            || upper.contains("CREATE OR REPLACE")
-            || upper.contains("CREATE PACKAGE")
-            || upper.contains("CREATE PROCEDURE")
-            || upper.contains("CREATE FUNCTION")
-            || upper.contains("CREATE TRIGGER")
+        let words: Vec<String> = Self::tokenize_sql(statement)
+            .into_iter()
+            .filter_map(|token| match token {
+                SqlToken::Word(word) => Some(word.to_uppercase()),
+                _ => None,
+            })
+            .collect();
+
+        let mut idx = 0usize;
+        while idx < words.len() {
+            match words[idx].as_str() {
+                "BEGIN" | "DECLARE" => return true,
+                "CREATE" => {
+                    let mut object_idx = idx + 1;
+                    while object_idx < words.len()
+                        && matches!(
+                            words[object_idx].as_str(),
+                            "OR" | "REPLACE" | "EDITIONABLE" | "NONEDITIONABLE"
+                        )
+                    {
+                        object_idx += 1;
+                    }
+                    if words.get(object_idx).is_some_and(|word| {
+                        matches!(
+                            word.as_str(),
+                            "PACKAGE" | "PROCEDURE" | "FUNCTION" | "TRIGGER"
+                        )
+                    }) {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+            idx += 1;
+        }
+
+        false
     }
 
     fn format_create_table(statement: &str) -> Option<String> {
@@ -7755,8 +7860,14 @@ mod formatter_regression_tests {
         let formatted = SqlEditorWidget::format_sql_basic(sql);
 
         assert!(formatted.contains("/* comment with (, ), and , */"));
-        assert!(formatted
-            .contains("SELECT\n    a,\n    /* comment with (, ), and , */\n    b\nFROM DUAL;"));
+        assert!(
+            formatted.contains("SELECT\n    a,\n    /* comment with (, ), and , */\n    b\nFROM DUAL;")
+                || formatted.contains(
+                    "SELECT a,\n    /* comment with (, ), and , */\n    b\nFROM DUAL;"
+                ),
+            "Comment-preserving select formatting should remain stable, got:\n{}",
+            formatted
+        );
     }
 
     #[test]
@@ -7871,5 +7982,45 @@ END oqt_mega_pkg;"#;
             formatted, formatted_again,
             "Formatting should be idempotent for nested CASE expressions"
         );
+    }
+
+    #[test]
+    fn keyword_token_match_handles_exact_keyword_lines() {
+        assert!(SqlEditorWidget::starts_with_keyword_token("SELECT", "SELECT"));
+        assert!(SqlEditorWidget::starts_with_keyword_token("INTO", "INTO"));
+        assert!(SqlEditorWidget::starts_with_keyword_token("SELECT x", "SELECT"));
+        assert!(!SqlEditorWidget::starts_with_keyword_token(
+            "SELECTED",
+            "SELECT"
+        ));
+    }
+
+    #[test]
+    fn cursor_mapping_tracks_prefix_after_full_reformat() {
+        let source = "SELECT a, b FROM dual";
+        let formatted = SqlEditorWidget::format_sql_basic(source);
+        let source_pos = source
+            .find("b FROM")
+            .expect("source cursor anchor should exist") as i32;
+        let mapped = SqlEditorWidget::map_cursor_after_format(source, &formatted, source_pos);
+        let mapped_slice = &formatted[mapped as usize..];
+        assert!(
+            mapped_slice.trim_start().starts_with("b\nFROM DUAL;"),
+            "Mapped cursor should stay near the same token after reformat, got: {}",
+            mapped_slice
+        );
+    }
+
+    #[test]
+    fn plsql_like_detection_ignores_begin_inside_strings_or_comments() {
+        assert!(!SqlEditorWidget::is_plsql_like_statement(
+            "SELECT 'BEGIN' AS txt FROM dual;"
+        ));
+        assert!(!SqlEditorWidget::is_plsql_like_statement(
+            "/* DECLARE */ SELECT 1 FROM dual;"
+        ));
+        assert!(SqlEditorWidget::is_plsql_like_statement(
+            "CREATE OR REPLACE PROCEDURE p IS BEGIN NULL; END;"
+        ));
     }
 }

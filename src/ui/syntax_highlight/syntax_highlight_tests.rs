@@ -200,6 +200,21 @@ fn test_alter_session_keywords_highlighting() {
 }
 
 #[test]
+fn test_minus_keyword_highlighting() {
+    let highlighter = SqlHighlighter::new();
+    let text = "SELECT 1 FROM dual MINUS SELECT 2 FROM dual";
+    let styles = highlighter.generate_styles(text);
+
+    let minus_pos = text.find("MINUS").unwrap();
+    assert!(
+        styles[minus_pos..minus_pos + 5]
+            .chars()
+            .all(|c| c == STYLE_KEYWORD),
+        "MINUS should be highlighted as keyword"
+    );
+}
+
+#[test]
 fn test_windowed_highlighting_limits_scope() {
     let highlighter = SqlHighlighter::new();
     let text = "SELECT col FROM table;\n".repeat(2000);

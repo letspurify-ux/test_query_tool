@@ -80,6 +80,7 @@ pub const SQL_KEYWORDS: &[&str] = &[
     "UNION",
     "INTERSECT",
     "EXCEPT",
+    "MINUS",
     "EXISTS",
     "ANY",
     "SOME",

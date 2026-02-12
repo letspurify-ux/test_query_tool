@@ -3271,6 +3271,34 @@ SELECT * FROM cte;"#;
     );
 }
 
+#[test]
+fn test_line_block_depths_ignores_subquery_pattern_inside_string_literal() {
+    let sql = r#"BEGIN
+  v_sql := '(SELECT';
+  NULL;
+END;"#;
+    let depths = QueryExecutor::line_block_depths(sql);
+    let expected = vec![0, 1, 1, 0];
+    assert_eq!(
+        depths, expected,
+        "String literal '(SELECT' should not affect subquery depth tracking"
+    );
+}
+
+#[test]
+fn test_line_block_depths_ignores_subquery_pattern_inside_block_comment() {
+    let sql = r#"BEGIN
+  /* (SELECT */
+  NULL;
+END;"#;
+    let depths = QueryExecutor::line_block_depths(sql);
+    let expected = vec![0, 1, 1, 0];
+    assert_eq!(
+        depths, expected,
+        "Block comment '(SELECT' should not affect subquery depth tracking"
+    );
+}
+
 // ── parse_ddl_object_type tests ──
 
 #[test]

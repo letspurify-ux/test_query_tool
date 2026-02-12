@@ -670,6 +670,11 @@ impl QueryExecutor {
         let mut exception_depth_stack: Vec<usize> = Vec::new();
         let mut exception_handler_body = false;
         let mut case_branch_stack: Vec<bool> = Vec::new();
+        let mut scan_in_single_quote = false;
+        let mut scan_in_double_quote = false;
+        let mut scan_in_block_comment = false;
+        let mut scan_in_q_quote = false;
+        let mut scan_q_quote_end: Option<char> = None;
 
         for line in sql.lines() {
             let words = if builder.is_idle() {
@@ -810,9 +815,107 @@ impl QueryExecutor {
             let mut i = 0usize;
             while i < chars.len() {
                 let c = chars[i];
+                let next = chars.get(i + 1).copied();
 
-                if c == '-' && i + 1 < chars.len() && chars[i + 1] == '-' {
+                if scan_in_block_comment {
+                    if c == '*' && next == Some('/') {
+                        scan_in_block_comment = false;
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    continue;
+                }
+
+                if scan_in_q_quote {
+                    if Some(c) == scan_q_quote_end && next == Some('\'') {
+                        scan_in_q_quote = false;
+                        scan_q_quote_end = None;
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    continue;
+                }
+
+                if scan_in_single_quote {
+                    if c == '\'' {
+                        if next == Some('\'') {
+                            i += 2;
+                            continue;
+                        }
+                        scan_in_single_quote = false;
+                    }
+                    i += 1;
+                    continue;
+                }
+
+                if scan_in_double_quote {
+                    if c == '"' {
+                        if next == Some('"') {
+                            i += 2;
+                            continue;
+                        }
+                        scan_in_double_quote = false;
+                    }
+                    i += 1;
+                    continue;
+                }
+
+                if c == '-' && next == Some('-') {
                     break;
+                }
+
+                if c == '/' && next == Some('*') {
+                    scan_in_block_comment = true;
+                    i += 2;
+                    continue;
+                }
+
+                if (c == 'n' || c == 'N')
+                    && matches!(next, Some('q') | Some('Q'))
+                    && chars.get(i + 2) == Some(&'\'')
+                    && chars.get(i + 3).is_some()
+                {
+                    let delimiter = chars[i + 3];
+                    let closing = match delimiter {
+                        '[' => ']',
+                        '{' => '}',
+                        '(' => ')',
+                        '<' => '>',
+                        _ => delimiter,
+                    };
+                    scan_in_q_quote = true;
+                    scan_q_quote_end = Some(closing);
+                    i += 4;
+                    continue;
+                }
+
+                if (c == 'q' || c == 'Q') && next == Some('\'') && chars.get(i + 2).is_some() {
+                    let delimiter = chars[i + 2];
+                    let closing = match delimiter {
+                        '[' => ']',
+                        '{' => '}',
+                        '(' => ')',
+                        '<' => '>',
+                        _ => delimiter,
+                    };
+                    scan_in_q_quote = true;
+                    scan_q_quote_end = Some(closing);
+                    i += 3;
+                    continue;
+                }
+
+                if c == '\'' {
+                    scan_in_single_quote = true;
+                    i += 1;
+                    continue;
+                }
+
+                if c == '"' {
+                    scan_in_double_quote = true;
+                    i += 1;
+                    continue;
                 }
 
                 if c == '(' {

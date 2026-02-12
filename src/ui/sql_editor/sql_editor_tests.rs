@@ -539,6 +539,62 @@ fn format_sql_keeps_insert_into_together() {
 }
 
 #[test]
+fn format_sql_select_and_into_exact_keyword_lines_keep_dml_indentation() {
+    let input = r#"BEGIN
+SELECT
+CASE
+WHEN 1 = 1 THEN 'Y'
+ELSE 'N'
+END
+INTO
+v_flag
+FROM dual;
+END;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "BEGIN",
+        "    SELECT",
+        "        CASE",
+        "            WHEN 1 = 1 THEN 'Y'",
+        "            ELSE 'N'",
+        "        END",
+        "    INTO v_flag",
+        "    FROM DUAL;",
+        "END;",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_where_exists_and_not_exists_layout_regression() {
+    let input = "SELECT * FROM asdf WHERE EXISTS (SELECT 1 FROM oqt_t_order_item oi WHERE oi.order_id = v.order_id AND oi.sku LIKE 'SKU-%') AND NOT EXISTS (SELECT 1 FROM oqt_t_order_item oi WHERE oi.order_id = v.order_id AND oi.qty <= 0);";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = [
+        "SELECT *",
+        "FROM asdf",
+        "WHERE EXISTS (",
+        "        SELECT 1",
+        "        FROM oqt_t_order_item oi",
+        "        WHERE oi.order_id = v.order_id",
+        "            AND oi.sku LIKE 'SKU-%'",
+        "    )",
+        "    AND NOT EXISTS (",
+        "        SELECT 1",
+        "        FROM oqt_t_order_item oi",
+        "        WHERE oi.order_id = v.order_id",
+        "            AND oi.qty <= 0",
+        "    );",
+    ]
+    .join("\n");
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
 fn compute_edited_range_handles_insert_delete_and_replace() {
     assert_eq!(compute_edited_range(5, 3, 0, 20), Some((5, 8)));
     assert_eq!(compute_edited_range(5, 0, 4, 20), Some((5, 9)));
@@ -1098,6 +1154,124 @@ ORDER BY c.avg_sal DESC;"#;
 }
 
 #[test]
+fn format_sql_formats_multi_cte_with_comments_and_scalar_subquery_exactly() {
+    let input = "WITH e AS (SELECT empno, ename, job, mgr, hiredate, sal, comm, deptno FROM oqt_t_emp), d AS (SELECT deptno, dname, loc FROM oqt_t_dept), stats AS (SELECT deptno, COUNT(*) cnt, AVG(sal) avg_sal, SUM(NVL(comm, 0)) sum_comm FROM e GROUP BY deptno) SELECT d.deptno, d.dname, d.loc, s.cnt, ROUND(s.avg_sal, 2) AS avg_sal, s.sum_comm, -- scalar subquery (correlated)\n(SELECT MAX(e2.sal) FROM e e2 WHERE e2.deptno = d.deptno) AS max_sal_in_dept, -- case + analytic in select list via scalar subquery\nCASE WHEN s.cnt = 0 THEN 'EMPTY' WHEN s.avg_sal >= 2500 THEN 'HIGH' ELSE 'NORMAL' END AS dept_grade FROM d LEFT JOIN stats s ON s.deptno = d.deptno ORDER BY d.deptno;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = r#"WITH e AS (
+    SELECT
+        empno,
+        ename,
+        job,
+        mgr,
+        hiredate,
+        sal,
+        comm,
+        deptno
+    FROM oqt_t_emp
+),
+d AS (
+    SELECT
+        deptno,
+        dname,
+        loc
+    FROM oqt_t_dept
+),
+stats AS (
+    SELECT
+        deptno,
+        COUNT (*) cnt,
+        AVG (sal) avg_sal,
+        SUM (NVL (comm, 0)) sum_comm
+    FROM e
+    GROUP BY deptno
+)
+SELECT
+    d.deptno,
+    d.dname,
+    d.loc,
+    s.cnt,
+    ROUND (s.avg_sal, 2) AS avg_sal,
+    s.sum_comm,
+    -- scalar subquery (correlated)
+    (
+        SELECT MAX (e2.sal)
+        FROM e e2
+        WHERE e2.deptno = d.deptno
+    ) AS max_sal_in_dept,
+    -- case + analytic in select list via scalar subquery
+    CASE
+        WHEN s.cnt = 0 THEN 'EMPTY'
+        WHEN s.avg_sal >= 2500 THEN 'HIGH'
+        ELSE 'NORMAL'
+    END AS dept_grade
+FROM d
+LEFT JOIN stats s
+    ON s.deptno = d.deptno
+ORDER BY d.deptno;"#;
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_cte_comment_layout_is_idempotent() {
+    let input = r#"WITH e AS (
+    SELECT
+        empno,
+        ename,
+        job,
+        mgr,
+        hiredate,
+        sal,
+        comm,
+        deptno
+    FROM oqt_t_emp
+),
+d AS (
+    SELECT
+        deptno,
+        dname,
+        loc
+    FROM oqt_t_dept
+),
+stats AS (
+    SELECT
+        deptno,
+        COUNT (*) cnt,
+        AVG (sal) avg_sal,
+        SUM (NVL (comm, 0)) sum_comm
+    FROM e
+    GROUP BY deptno
+)
+SELECT
+    d.deptno,
+    d.dname,
+    d.loc,
+    s.cnt,
+    ROUND (s.avg_sal, 2) AS avg_sal,
+    s.sum_comm,
+    -- scalar subquery (correlated)
+    (
+        SELECT MAX (e2.sal)
+        FROM e e2
+        WHERE e2.deptno = d.deptno
+    ) AS max_sal_in_dept,
+    -- case + analytic in select list via scalar subquery
+    CASE
+        WHEN s.cnt = 0 THEN 'EMPTY'
+        WHEN s.avg_sal >= 2500 THEN 'HIGH'
+        ELSE 'NORMAL'
+    END AS dept_grade
+FROM d
+LEFT JOIN stats s
+    ON s.deptno = d.deptno
+ORDER BY d.deptno;"#;
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    assert_eq!(formatted, input);
+}
+
+#[test]
 fn format_sql_from_subqueries_with_comma_aligns_as_expected() {
     let input = "SELECT * FROM (SELECT * FROM help) a, (SELECT * FROM help) b WHERE a.TOPIC = b.TOPIC;";
 
@@ -1112,6 +1286,76 @@ FROM (
         FROM help
     ) b
 WHERE a.TOPIC = b.TOPIC;"#;
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_filtered_cte_with_window_function_exact_layout() {
+    let input = "filtered AS (SELECT * FROM enriched WHERE (sal > (SELECT AVG(sal) FROM oqt_t_emp WHERE deptno = enriched.deptno)) OR (job IN ('MANAGER', 'ANALYST') AND sal >= 2500)) SELECT f.deptno, f.dname, f.empno, f.ename, f.masked_name, f.job, f.sal, f.sal_band, -- window frame with last_value (needs careful frame)\nLAST_VALUE(f.sal) OVER (PARTITION BY f.deptno ORDER BY f.sal ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_sal_via_last_value FROM filtered f ORDER BY f.deptno, f.sal DESC, f.empno;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = r#"filtered AS (
+    SELECT *
+    FROM enriched
+    WHERE (sal > (
+        SELECT AVG (sal)
+        FROM oqt_t_emp
+        WHERE deptno = enriched.deptno
+    ))
+        OR (job IN ('MANAGER', 'ANALYST')
+            AND sal >= 2500)
+)
+SELECT f.deptno,
+    f.dname,
+    f.empno,
+    f.ename,
+    f.masked_name,
+    f.job,
+    f.sal,
+    f.sal_band,
+    -- window frame with last_value (needs careful frame)
+    LAST_VALUE (f.sal) OVER (PARTITION BY f.deptno ORDER BY f.sal ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS max_sal_via_last_value
+FROM filtered f
+ORDER BY f.deptno,
+    f.sal DESC,
+    f.empno;"#;
+
+    assert_eq!(formatted, expected);
+}
+
+#[test]
+fn format_sql_window_functions_and_listagg_exact_layout() {
+    let input = "WITH base AS (SELECT e.empno, e.ename, e.deptno, e.sal, e.hiredate FROM oqt_t_emp e) SELECT b.*, RANK() OVER (PARTITION BY deptno ORDER BY sal DESC) AS rnk, DENSE_RANK() OVER (PARTITION BY deptno ORDER BY sal DESC) AS drnk, ROW_NUMBER() OVER (PARTITION BY deptno ORDER BY hiredate, empno) AS rn, SUM(sal) OVER (PARTITION BY deptno) AS sum_sal_dept, AVG(sal) OVER (PARTITION BY deptno) AS avg_sal_dept, PERCENT_RANK() OVER (PARTITION BY deptno ORDER BY sal) AS pct_rank, CUME_DIST() OVER (PARTITION BY deptno ORDER BY sal) AS CUME_DIST, -- running total with frame\nSUM(sal) OVER (PARTITION BY deptno ORDER BY hiredate ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sal, -- windowed listagg\nLISTAGG(ename, ',') WITHIN GROUP (ORDER BY ename) OVER (PARTITION BY deptno) AS names_in_dept FROM base b ORDER BY deptno, rnk, empno;";
+
+    let formatted = SqlEditorWidget::format_sql_basic(input);
+    let expected = r#"WITH base AS (
+    SELECT
+        e.empno,
+        e.ename,
+        e.deptno,
+        e.sal,
+        e.hiredate
+    FROM oqt_t_emp e
+)
+SELECT
+    b.*,
+    RANK () OVER (PARTITION BY deptno ORDER BY sal DESC) AS rnk,
+    DENSE_RANK () OVER (PARTITION BY deptno ORDER BY sal DESC) AS drnk,
+    ROW_NUMBER () OVER (PARTITION BY deptno ORDER BY hiredate, empno) AS rn,
+    SUM (sal) OVER (PARTITION BY deptno) AS sum_sal_dept,
+    AVG (sal) OVER (PARTITION BY deptno) AS avg_sal_dept,
+    PERCENT_RANK () OVER (PARTITION BY deptno ORDER BY sal) AS pct_rank,
+    CUME_DIST () OVER (PARTITION BY deptno ORDER BY sal) AS CUME_DIST,
+    -- running total with frame
+    SUM (sal) OVER (PARTITION BY deptno ORDER BY hiredate ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running_sal,
+    -- windowed listagg
+    LISTAGG (ename, ',') WITHIN
+    GROUP (ORDER BY ename) OVER (PARTITION BY deptno) AS names_in_dept
+FROM base b
+ORDER BY deptno,
+    rnk,
+    empno;"#;
 
     assert_eq!(formatted, expected);
 }
