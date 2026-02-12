@@ -1141,6 +1141,9 @@ impl IntellisensePopup {
         window.set_border(false);
         window.set_color(theme::panel_raised());
         window.make_modal(false);
+        // Keep typing focus on the SQL editor even when popup is shown.
+        // Override windows are not managed as focus-stealing toplevels.
+        window.set_override();
 
         let mut browser = HoldBrowser::default().with_size(320, 200).with_pos(0, 0);
         browser.set_color(theme::panel_alt());
