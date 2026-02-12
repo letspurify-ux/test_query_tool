@@ -756,16 +756,7 @@ impl SqlEditorWidget {
         let cursor_pos_usize = cursor_pos as usize;
         let (word, start, _) = Self::word_at_cursor(buffer, cursor_pos);
         let qualifier = Self::qualifier_before_word(buffer, start);
-        let prefix = if word.is_empty() {
-            if qualifier.is_none() {
-                *pending_intellisense.borrow_mut() = None;
-                *completion_range.borrow_mut() = None;
-                return;
-            }
-            String::new()
-        } else {
-            word
-        };
+        let prefix = word;
 
         // Use deep context analyzer for accurate depth-aware analysis
         let context_text = Self::context_before_cursor(buffer, cursor_pos);
@@ -801,6 +792,14 @@ impl SqlEditorWidget {
 
         let include_columns = qualifier.is_some()
             || matches!(context, SqlContext::ColumnName | SqlContext::ColumnOrAll);
+
+        let allow_empty_prefix =
+            qualifier.is_some() || include_columns || matches!(context, SqlContext::TableName);
+        if prefix.is_empty() && !allow_empty_prefix {
+            *pending_intellisense.borrow_mut() = None;
+            *completion_range.borrow_mut() = None;
+            return;
+        }
 
         // Register CTE and subquery alias columns (text-based, with wildcard
         // expansion from base table metadata when possible).
