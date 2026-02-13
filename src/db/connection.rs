@@ -104,6 +104,8 @@ impl DatabaseConnection {
             },
         );
 
+        Self::apply_default_session_settings(connection.as_ref());
+
         self.connection = Some(connection);
         self.info = info;
         // Clear password from memory now that the connection is established
@@ -111,6 +113,19 @@ impl DatabaseConnection {
         self.connected = true;
 
         Ok(())
+    }
+
+    fn apply_default_session_settings(conn: &Connection) {
+        let statements = [
+            "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'yyyy-mm-dd hh24:mi:ss'",
+            "ALTER SESSION SET NLS_DATE_FORMAT = 'yyyy-mm-dd hh24:mi:ss'",
+        ];
+
+        for statement in statements {
+            if let Err(err) = conn.execute(statement, &[]) {
+                eprintln!("Warning: failed to apply default session setting `{statement}`: {err}");
+            }
+        }
     }
 
     pub fn disconnect(&mut self) {
