@@ -336,7 +336,21 @@ impl SqlEditorWidget {
                             widget_for_shortcuts.format_selected_sql();
                             return true;
                         }
+
+                        if shift && (key == Key::from_char('z') || key == Key::from_char('Z')) {
+                            widget_for_shortcuts.redo();
+                            return true;
+                        }
+
                         match key {
+                            k if k == Key::from_char('z') || k == Key::from_char('Z') => {
+                                widget_for_shortcuts.undo();
+                                return true;
+                            }
+                            k if k == Key::from_char('y') || k == Key::from_char('Y') => {
+                                widget_for_shortcuts.redo();
+                                return true;
+                            }
                             k if k == Key::from_char(' ') => {
                                 // Ctrl+Space - Trigger intellisense
                                 Self::trigger_intellisense(
