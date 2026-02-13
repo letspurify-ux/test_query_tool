@@ -840,6 +840,9 @@ impl IntellisenseData {
 
         let push_suggestion =
             |value: String, suggestions: &mut Vec<String>, seen: &mut HashSet<String>| {
+                if !prefix_upper.is_empty() && value.eq_ignore_ascii_case(&prefix_upper) {
+                    return suggestions.len() >= MAX_SUGGESTIONS;
+                }
                 if suggestions.len() >= MAX_SUGGESTIONS {
                     return true;
                 }
@@ -1200,6 +1203,9 @@ impl IntellisenseData {
             if !entry.upper.starts_with(prefix_upper) {
                 break;
             }
+            if !prefix_upper.is_empty() && entry.upper == prefix_upper {
+                continue;
+            }
             if seen.insert(entry.name.clone()) {
                 suggestions.push(entry.name.clone());
                 if suggestions.len() >= MAX_SUGGESTIONS {
@@ -1548,5 +1554,17 @@ mod intellisense_tests {
         let cursor = sql.find(" FROM").unwrap_or(sql.len());
         let (word, _, _) = get_word_at_cursor(sql, cursor);
         assert_eq!(word, "한글컬럼");
+    }
+
+    #[test]
+    fn get_suggestions_excludes_exact_prefix_match() {
+        let mut data = IntellisenseData::new();
+        data.tables = vec!["AB".to_string(), "ABC_TABLE".to_string()];
+        data.rebuild_indices();
+
+        let suggestions = data.get_suggestions("ab", false, None, false, false);
+
+        assert!(!suggestions.iter().any(|s| s.eq_ignore_ascii_case("ab")));
+        assert!(suggestions.iter().any(|s| s.eq_ignore_ascii_case("abc_table")));
     }
 }
