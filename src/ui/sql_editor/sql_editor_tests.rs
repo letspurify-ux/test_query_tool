@@ -1587,9 +1587,8 @@ END;"#;
 
     let formatted = SqlEditorWidget::format_sql_basic(input);
     let expected = r#"CREATE OR REPLACE NONEDITIONABLE TRIGGER "SYSTEM"."OQT_TRG_CHILD_BIU"
-BEFORE
-    INSERT OR UPDATE ON oqt_t_child
-FOR EACH ROW
+    BEFORE INSERT OR UPDATE ON oqt_t_child
+    FOR EACH ROW
 BEGIN
     IF INSERTING THEN
         :NEW.updated_at := NULL;

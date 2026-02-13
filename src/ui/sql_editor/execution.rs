@@ -362,7 +362,9 @@ impl SqlEditorWidget {
     fn keeps_tight_spacing(current: &FormatItem, next: &FormatItem) -> bool {
         match (current, next) {
             (FormatItem::Statement(left), FormatItem::Statement(right)) => {
-                left.trim_start().starts_with("--") && right.trim_start().starts_with("--")
+                (left.trim_start().starts_with("--") && right.trim_start().starts_with("--"))
+                    || (Self::is_create_trigger_statement(left)
+                        && Self::is_alter_trigger_statement(right))
             }
             (
                 FormatItem::ToolCommand(ToolCommand::Prompt { .. }),
@@ -378,6 +380,34 @@ impl SqlEditorWidget {
             ) => true,
             _ => false,
         }
+    }
+
+    fn is_create_trigger_statement(statement: &str) -> bool {
+        let words: Vec<String> = Self::tokenize_sql(statement)
+            .into_iter()
+            .filter_map(|token| match token {
+                SqlToken::Word(word) => Some(word.to_uppercase()),
+                _ => None,
+            })
+            .collect();
+        if words.first().map(String::as_str) != Some("CREATE") {
+            return false;
+        }
+        words.iter().take(8).any(|word| word == "TRIGGER")
+    }
+
+    fn is_alter_trigger_statement(statement: &str) -> bool {
+        let words: Vec<String> = Self::tokenize_sql(statement)
+            .into_iter()
+            .filter_map(|token| match token {
+                SqlToken::Word(word) => Some(word.to_uppercase()),
+                _ => None,
+            })
+            .collect();
+        matches!(
+            (words.first().map(String::as_str), words.get(1).map(String::as_str)),
+            (Some("ALTER"), Some("TRIGGER"))
+        )
     }
 
     fn statement_has_code(statement: &str) -> bool {
@@ -915,7 +945,7 @@ impl SqlEditorWidget {
                         newline_with(
                             &mut out,
                             base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent),
-                            0,
+                            1,
                             &mut at_line_start,
                             &mut needs_space,
                             &mut line_indent,
@@ -924,14 +954,7 @@ impl SqlEditorWidget {
                         && matches!(upper.as_str(), "INSERT" | "UPDATE" | "DELETE")
                         && matches!(prev_word_upper.as_deref(), Some("BEFORE" | "AFTER" | "OF"))
                     {
-                        newline_with(
-                            &mut out,
-                            base_indent(indent_level, in_open_cursor_sql, open_cursor_sql_indent),
-                            1,
-                            &mut at_line_start,
-                            &mut needs_space,
-                            &mut line_indent,
-                        );
+                        // Keep trigger event verbs on the same line as BEFORE/AFTER/INSTEAD OF.
                     } else if clause_keywords.contains(&upper.as_str())
                         && !is_insert_into
                         && !is_merge_into
@@ -1161,7 +1184,7 @@ impl SqlEditorWidget {
                                     in_open_cursor_sql,
                                     open_cursor_sql_indent,
                                 ),
-                                0,
+                                1,
                                 &mut at_line_start,
                                 &mut needs_space,
                                 &mut line_indent,
@@ -1955,6 +1978,7 @@ impl SqlEditorWidget {
             } else {
                 0
             };
+            let is_trigger_for_each_row = trimmed_upper.starts_with("FOR EACH ROW");
             let force_block_depth = !in_dml_statement
                 && (trimmed_upper.starts_with("EXCEPTION")
                     || trimmed_upper.starts_with("WHEN ")
@@ -1965,7 +1989,7 @@ impl SqlEditorWidget {
                     || trimmed_upper.starts_with("CASE")
                     || trimmed_upper.starts_with("IF ")
                     || trimmed_upper.starts_with("LOOP")
-                    || trimmed_upper.starts_with("FOR ")
+                    || (trimmed_upper.starts_with("FOR ") && !is_trigger_for_each_row)
                     || trimmed_upper.starts_with("WHILE ")
                     || trimmed_upper.starts_with("DECLARE"));
 
@@ -8022,5 +8046,33 @@ END oqt_mega_pkg;"#;
         assert!(SqlEditorWidget::is_plsql_like_statement(
             "CREATE OR REPLACE PROCEDURE p IS BEGIN NULL; END;"
         ));
+    }
+
+    #[test]
+    fn trigger_audit_block_keeps_expected_header_and_values_alignment() {
+        let sql = r#"create or replace noneditionable trigger "SYSTEM"."OQT_TRG_MEG_CUD" after insert or update or delete on oqt_meg_master for each row begin if inserting then insert into oqt_meg_audit(event_type, table_name, pk_text, detail_text) values ('INSERT', 'OQT_MEG_MASTER', 'master_id='||:NEW.master_id, 'key='||:NEW.master_key||', status='||:NEW.status||', amount='||TO_CHAR(:NEW.amount)); elsif updating then insert into oqt_meg_audit(event_type, table_name, pk_text, detail_text) values ('UPDATE', 'OQT_MEG_MASTER', 'master_id='||:NEW.master_id, 'status:'||:OLD.status||'->'||:NEW.status||', amount:'||TO_CHAR(:OLD.amount)||'->'||TO_CHAR(:NEW.amount)); elsif deleting then insert into oqt_meg_audit(event_type, table_name, pk_text, detail_text) values ('DELETE', 'OQT_MEG_MASTER', 'master_id='||:OLD.master_id, 'key='||:OLD.master_key||', status='||:OLD.status||', amount='||TO_CHAR(:OLD.amount)); end if; end; alter trigger "SYSTEM"."OQT_TRG_MEG_CUD" enable"#;
+        let formatted = SqlEditorWidget::format_sql_basic(sql);
+        assert!(
+            formatted.contains("\n    AFTER INSERT OR UPDATE OR DELETE ON oqt_meg_master"),
+            "Trigger timing/event header should stay on one indented line, got:\n{}",
+            formatted
+        );
+        assert!(
+            formatted.contains("\n    FOR EACH ROW\nBEGIN"),
+            "FOR EACH ROW should align with trigger header indentation, got:\n{}",
+            formatted
+        );
+        assert!(
+            formatted.contains("IF INSERTING THEN")
+                && formatted.contains("ELSIF UPDATING THEN")
+                && formatted.contains("ELSIF DELETING THEN"),
+            "Conditional trigger predicates should be uppercased in IF/ELSIF blocks, got:\n{}",
+            formatted
+        );
+        assert!(
+            formatted.contains("END;\nALTER TRIGGER \"SYSTEM\".\"OQT_TRG_MEG_CUD\" ENABLE;"),
+            "CREATE/ALTER trigger pair should not be separated by a blank line, got:\n{}",
+            formatted
+        );
     }
 }
