@@ -207,6 +207,13 @@ impl ResultTabsWidget {
         self.font_profile.set(profile);
         self.font_size.set(size);
         {
+            let tabs = self.data.borrow();
+            for tab in tabs.iter() {
+                let mut table = tab.table.clone();
+                table.apply_font_settings(profile, size);
+            }
+        }
+        {
             let mut script_output = self.script_output.borrow_mut();
             script_output.display.set_text_font(profile.normal);
             script_output.display.set_text_size(size as i32);
@@ -216,6 +223,11 @@ impl ResultTabsWidget {
 
     pub fn set_max_cell_display_chars(&mut self, max_chars: usize) {
         self.max_cell_display_chars.set(max_chars);
+        let tabs = self.data.borrow();
+        for tab in tabs.iter() {
+            let mut table = tab.table.clone();
+            table.set_max_cell_display_chars(max_chars);
+        }
     }
 
     pub fn clear(&mut self) {
@@ -276,6 +288,13 @@ impl ResultTabsWidget {
             let _ = self.tabs.set_value(&group);
             *self.active_index.borrow_mut() = Some(index);
             return;
+        }
+
+        // Defensive backfill in case progress events arrive with sparse/late indexes.
+        if index > current_len {
+            for missing in current_len..index {
+                self.start_statement(missing, &format!("Result {}", missing + 1));
+            }
         }
 
         self.tabs.begin();
