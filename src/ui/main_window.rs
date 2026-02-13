@@ -1181,8 +1181,8 @@ impl MainWindow {
                             }
                         }
                         "File/Exit" => app::quit(),
-                        "Edit/Undo" => state_for_menu.borrow_mut().sql_editor.get_editor().undo(),
-                        "Edit/Redo" => state_for_menu.borrow_mut().sql_editor.get_editor().redo(),
+                        "Edit/Undo" => state_for_menu.borrow().sql_editor.undo(),
+                        "Edit/Redo" => state_for_menu.borrow().sql_editor.redo(),
                         "Edit/Cut" => state_for_menu.borrow_mut().sql_editor.get_editor().cut(),
                         "Edit/Copy" => {
                             let mut s = state_for_menu.borrow_mut();

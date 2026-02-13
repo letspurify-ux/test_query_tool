@@ -2,7 +2,7 @@ use fltk::{
     app,
     button::Button,
     draw::set_cursor,
-    enums::{Cursor, FrameType},
+    enums::{Cursor, Event, FrameType, Shortcut},
     frame::Frame,
     group::{Flex, FlexType, Pack, PackType},
     input::IntInput,
@@ -47,6 +47,31 @@ const INTELLISENSE_QUALIFIER_WINDOW: i32 = 256;
 const INTELLISENSE_STATEMENT_WINDOW: i32 = 120_000;
 const MAX_PROGRESS_MESSAGES_PER_POLL: usize = 200;
 const PROGRESS_POLL_INTERVAL_SECONDS: f64 = 0.05;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EditGranularity {
+    Word,
+    Other,
+}
+
+#[derive(Clone)]
+struct WordUndoRedoState {
+    history: Vec<String>,
+    index: usize,
+    active_group: Option<EditGranularity>,
+    applying_history: bool,
+}
+
+impl WordUndoRedoState {
+    fn new(initial_text: String) -> Self {
+        Self {
+            history: vec![initial_text],
+            index: 0,
+            active_group: None,
+            applying_history: false,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub enum QueryProgress {
@@ -142,6 +167,7 @@ pub struct SqlEditorWidget {
     pending_intellisense: Rc<RefCell<Option<PendingIntellisense>>>,
     history_cursor: Rc<RefCell<Option<usize>>>,
     history_original: Rc<RefCell<Option<String>>>,
+    undo_redo_state: Rc<RefCell<WordUndoRedoState>>,
 }
 
 impl SqlEditorWidget {
@@ -323,6 +349,7 @@ impl SqlEditorWidget {
         let pending_intellisense = Rc::new(RefCell::new(None::<PendingIntellisense>));
         let history_cursor = Rc::new(RefCell::new(None::<usize>));
         let history_original = Rc::new(RefCell::new(None::<String>));
+        let undo_redo_state = Rc::new(RefCell::new(WordUndoRedoState::new(String::new())));
 
         let mut widget = Self {
             group,
@@ -350,6 +377,7 @@ impl SqlEditorWidget {
             pending_intellisense,
             history_cursor,
             history_original,
+            undo_redo_state,
         };
 
         widget.setup_button_callbacks(
@@ -361,12 +389,76 @@ impl SqlEditorWidget {
             rollback_btn,
         );
         widget.setup_intellisense();
+        widget.setup_word_undo_redo();
         widget.setup_syntax_highlighting();
         widget.setup_progress_handler(progress_receiver, progress_callback, query_running);
         widget.setup_column_loader(column_receiver);
         widget.setup_ui_action_handler(ui_action_receiver);
 
         widget
+    }
+
+    fn setup_word_undo_redo(&self) {
+        let undo_state = self.undo_redo_state.clone();
+        let mut buffer = self.buffer.clone();
+        buffer.add_modify_callback2(move |buf, pos, ins, del, _restyled, deleted_text| {
+            let inserted = inserted_text(buf, pos, ins);
+            let mut state = undo_state.borrow_mut();
+
+            if state.applying_history {
+                return;
+            }
+
+            if state.history[state.index] == buf.text() {
+                return;
+            }
+
+            let granularity = classify_edit_granularity(ins, del, &inserted, deleted_text);
+
+            let current_index = state.index;
+            if current_index + 1 < state.history.len() {
+                state.history.truncate(current_index + 1);
+            }
+
+            let current_text = buf.text();
+            if state.active_group == Some(granularity) {
+                state.history[current_index] = current_text;
+            } else {
+                state.history.push(current_text);
+                state.index = state.history.len() - 1;
+                state.active_group = Some(granularity);
+            }
+        });
+
+        let mut editor = self.editor.clone();
+        let widget = self.clone();
+        editor.handle(move |_, ev| {
+            if ev != Event::KeyDown {
+                return false;
+            }
+
+            let state = app::event_state();
+            if !state.contains(Shortcut::Ctrl) && !state.contains(Shortcut::Command) {
+                return false;
+            }
+
+            let key = app::event_text().to_ascii_lowercase();
+            match key.as_str() {
+                "z" => {
+                    if state.contains(Shortcut::Shift) {
+                        widget.redo();
+                    } else {
+                        widget.undo();
+                    }
+                    true
+                }
+                "y" => {
+                    widget.redo();
+                    true
+                }
+                _ => false,
+            }
+        });
     }
 
     fn setup_progress_handler(
@@ -1267,6 +1359,50 @@ impl SqlEditorWidget {
         self.editor.clone()
     }
 
+    pub fn undo(&self) {
+        let next_text = {
+            let mut state = self.undo_redo_state.borrow_mut();
+            if state.index == 0 {
+                return;
+            }
+            state.index -= 1;
+            state.active_group = None;
+            state.applying_history = true;
+            state.history[state.index].clone()
+        };
+
+        let mut buffer = self.buffer.clone();
+        buffer.set_text(&next_text);
+        self.refresh_highlighting();
+        let mut editor = self.editor.clone();
+        editor.set_insert_position(next_text.len() as i32);
+        editor.show_insert_position();
+
+        self.undo_redo_state.borrow_mut().applying_history = false;
+    }
+
+    pub fn redo(&self) {
+        let next_text = {
+            let mut state = self.undo_redo_state.borrow_mut();
+            if state.index + 1 >= state.history.len() {
+                return;
+            }
+            state.index += 1;
+            state.active_group = None;
+            state.applying_history = true;
+            state.history[state.index].clone()
+        };
+
+        let mut buffer = self.buffer.clone();
+        buffer.set_text(&next_text);
+        self.refresh_highlighting();
+        let mut editor = self.editor.clone();
+        editor.set_insert_position(next_text.len() as i32);
+        editor.show_insert_position();
+
+        self.undo_redo_state.borrow_mut().applying_history = false;
+    }
+
     pub fn is_query_running(&self) -> bool {
         *self.query_running.borrow()
     }
@@ -1407,6 +1543,24 @@ fn inserted_text(buf: &TextBuffer, pos: i32, ins: i32) -> String {
 
     let insert_end = pos.saturating_add(ins).min(buf.length());
     buf.text_range(pos, insert_end).unwrap_or_default()
+}
+
+fn classify_edit_granularity(ins: i32, del: i32, inserted: &str, deleted: &str) -> EditGranularity {
+    if ins <= 0 && del <= 0 {
+        return EditGranularity::Other;
+    }
+
+    if (ins > 0 && inserted.chars().all(is_word_edit_char))
+        || (del > 0 && deleted.chars().all(is_word_edit_char))
+    {
+        return EditGranularity::Word;
+    }
+
+    EditGranularity::Other
+}
+
+fn is_word_edit_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
 }
 
 fn is_identifier_continue_byte_for_expand(byte: u8) -> bool {
