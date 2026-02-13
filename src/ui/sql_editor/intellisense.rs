@@ -26,6 +26,8 @@ use crate::ui::FindReplaceDialog;
 
 use super::*;
 
+const MAX_MERGED_SUGGESTIONS: usize = 50;
+
 impl SqlEditorWidget {
     const COLUMN_LOAD_LOCK_RETRY_ATTEMPTS: usize = 5;
     const COLUMN_LOAD_LOCK_RETRY_DELAY_MS: u64 = 60;
@@ -1081,6 +1083,7 @@ impl SqlEditorWidget {
         prefer_aliases: bool,
     ) -> Vec<String> {
         if aliases.is_empty() {
+            base.truncate(MAX_MERGED_SUGGESTIONS);
             return base;
         }
 
@@ -1093,16 +1096,19 @@ impl SqlEditorWidget {
         }
 
         if filtered_aliases.is_empty() {
+            base.truncate(MAX_MERGED_SUGGESTIONS);
             return base;
         }
 
-        if prefer_aliases {
+        let mut merged = if prefer_aliases {
             filtered_aliases.extend(base);
             filtered_aliases
         } else {
             base.extend(filtered_aliases);
             base
-        }
+        };
+        merged.truncate(MAX_MERGED_SUGGESTIONS);
+        merged
     }
 
     fn maybe_prefetch_columns_for_word(
@@ -2345,5 +2351,32 @@ mod intellisense_regression_tests {
         assert_eq!(merged[1], "recent_emp");
         assert!(merged.contains(&"EMP".to_string()));
         assert!(merged.contains(&"SELECT".to_string()));
+    }
+
+    #[test]
+    fn merge_suggestions_with_context_aliases_limits_to_max_suggestions() {
+        let base: Vec<String> = (0..MAX_MERGED_SUGGESTIONS)
+            .map(|i| format!("BASE_{:02}", i))
+            .collect();
+        let aliases = vec!["e".to_string(), "x".to_string()];
+
+        let merged =
+            SqlEditorWidget::merge_suggestions_with_context_aliases(base.clone(), aliases, true);
+
+        assert_eq!(merged.len(), MAX_MERGED_SUGGESTIONS);
+        assert_eq!(merged[0], "e");
+        assert_eq!(merged[1], "x");
+        assert!(!merged.contains(&format!("BASE_{:02}", MAX_MERGED_SUGGESTIONS - 1)));
+    }
+
+    #[test]
+    fn merge_suggestions_with_context_aliases_respects_max_without_aliases() {
+        let base: Vec<String> = (0..(MAX_MERGED_SUGGESTIONS + 5))
+            .map(|i| format!("BASE_{:02}", i))
+            .collect();
+
+        let merged = SqlEditorWidget::merge_suggestions_with_context_aliases(base, vec![], false);
+
+        assert_eq!(merged.len(), MAX_MERGED_SUGGESTIONS);
     }
 }
