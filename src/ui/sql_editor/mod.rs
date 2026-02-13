@@ -47,6 +47,7 @@ const INTELLISENSE_QUALIFIER_WINDOW: i32 = 256;
 const INTELLISENSE_STATEMENT_WINDOW: i32 = 120_000;
 const MAX_PROGRESS_MESSAGES_PER_POLL: usize = 200;
 const PROGRESS_POLL_INTERVAL_SECONDS: f64 = 0.05;
+const MAX_WORD_UNDO_HISTORY: usize = 500;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditGranularity {
@@ -70,6 +71,27 @@ impl WordUndoRedoState {
             active_group: None,
             applying_history: false,
         }
+    }
+
+    fn normalize(&mut self, current_text: &str) {
+        if self.history.is_empty() {
+            self.history.push(current_text.to_string());
+            self.index = 0;
+            self.active_group = None;
+            return;
+        }
+
+        if self.index >= self.history.len() {
+            self.index = self.history.len().saturating_sub(1);
+            self.active_group = None;
+        }
+    }
+
+    fn current_snapshot_matches(&self, current_text: &str) -> bool {
+        self.history
+            .get(self.index)
+            .map(|text| text == current_text)
+            .unwrap_or(false)
     }
 }
 
@@ -403,13 +425,15 @@ impl SqlEditorWidget {
         let mut buffer = self.buffer.clone();
         buffer.add_modify_callback2(move |buf, pos, ins, del, _restyled, deleted_text| {
             let inserted = inserted_text(buf, pos, ins);
+            let current_text = buf.text();
             let mut state = undo_state.borrow_mut();
 
             if state.applying_history {
                 return;
             }
 
-            if state.history[state.index] == buf.text() {
+            state.normalize(&current_text);
+            if state.current_snapshot_matches(&current_text) {
                 return;
             }
 
@@ -420,12 +444,22 @@ impl SqlEditorWidget {
                 state.history.truncate(current_index + 1);
             }
 
-            let current_text = buf.text();
             if state.active_group == Some(granularity) {
-                state.history[current_index] = current_text;
+                if let Some(snapshot) = state.history.get_mut(current_index) {
+                    *snapshot = current_text;
+                } else {
+                    state.history.push(current_text);
+                    state.index = state.history.len().saturating_sub(1);
+                    state.active_group = Some(granularity);
+                }
             } else {
                 state.history.push(current_text);
-                state.index = state.history.len() - 1;
+                if state.history.len() > MAX_WORD_UNDO_HISTORY {
+                    state.history.remove(0);
+                    state.index = state.history.len().saturating_sub(1);
+                } else {
+                    state.index = state.history.len().saturating_sub(1);
+                }
                 state.active_group = Some(granularity);
             }
         });
@@ -1362,13 +1396,22 @@ impl SqlEditorWidget {
     pub fn undo(&self) {
         let next_text = {
             let mut state = self.undo_redo_state.borrow_mut();
+            state.normalize(&self.buffer.text());
             if state.index == 0 {
                 return;
             }
-            state.index -= 1;
+
+            let next_index = state.index.saturating_sub(1);
+            let Some(snapshot) = state.history.get(next_index).cloned() else {
+                state.index = state.history.len().saturating_sub(1);
+                state.active_group = None;
+                return;
+            };
+
+            state.index = next_index;
             state.active_group = None;
             state.applying_history = true;
-            state.history[state.index].clone()
+            snapshot
         };
 
         let mut buffer = self.buffer.clone();
@@ -1384,13 +1427,22 @@ impl SqlEditorWidget {
     pub fn redo(&self) {
         let next_text = {
             let mut state = self.undo_redo_state.borrow_mut();
-            if state.index + 1 >= state.history.len() {
+            state.normalize(&self.buffer.text());
+            let next_index = state.index.saturating_add(1);
+            if next_index >= state.history.len() {
                 return;
             }
-            state.index += 1;
+
+            let Some(snapshot) = state.history.get(next_index).cloned() else {
+                state.index = state.history.len().saturating_sub(1);
+                state.active_group = None;
+                return;
+            };
+
+            state.index = next_index;
             state.active_group = None;
             state.applying_history = true;
-            state.history[state.index].clone()
+            snapshot
         };
 
         let mut buffer = self.buffer.clone();
