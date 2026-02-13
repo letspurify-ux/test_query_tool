@@ -26,6 +26,7 @@ pub enum SqlAction {
     Set(String),
     Insert(String),
     Append(String),
+    OpenInNewTab { text: String, title: String },
     Execute(String),
 }
 
@@ -75,7 +76,10 @@ enum ObjectActionResult {
     },
     SequenceInfo(Result<SequenceInfo, String>),
     SynonymInfo(Result<SynonymInfo, String>),
-    Ddl(Result<String, String>),
+    Ddl {
+        title: String,
+        result: Result<String, String>,
+    },
     RoutineScript {
         qualified_name: String,
         routine_type: String,
@@ -455,11 +459,11 @@ impl ObjectBrowserWidget {
                                 ));
                             }
                         },
-                        ObjectActionResult::Ddl(result) => match result {
+                        ObjectActionResult::Ddl { title, result } => match result {
                             Ok(ddl) => {
                                 let cb_opt = sql_callback.borrow_mut().take();
                                 if let Some(mut cb) = cb_opt {
-                                    cb(SqlAction::Append(ddl));
+                                    cb(SqlAction::OpenInNewTab { text: ddl, title });
                                     *sql_callback.borrow_mut() = Some(cb);
                                 }
                             }
@@ -1704,7 +1708,8 @@ impl ObjectBrowserWidget {
                                 } else {
                                     Err("Not connected to database".to_string())
                                 };
-                                let _ = sender.send(ObjectActionResult::Ddl(result));
+                                let title = format!("{}.sql", object_name.to_lowercase());
+                                let _ = sender.send(ObjectActionResult::Ddl { title, result });
                                 app::awake();
                                 // conn_guard drops here, releasing the lock
                             });
