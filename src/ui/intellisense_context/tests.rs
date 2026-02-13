@@ -1164,6 +1164,15 @@ fn subquery_alias_columns_captured() {
 }
 
 #[test]
+fn subquery_without_alias_columns_captured() {
+    let ctx = analyze("SELECT | FROM (SELECT id, name FROM users)");
+    assert_eq!(ctx.subqueries.len(), 1);
+    let subq = &ctx.subqueries[0];
+    let cols = extract_select_list_columns(&subq.body_tokens);
+    assert_eq!(cols, vec!["id", "name"]);
+}
+
+#[test]
 fn subquery_alias_with_expressions() {
     let ctx = analyze(
         "SELECT v.| FROM (SELECT dept_id, COUNT(*) AS cnt, MAX(sal) max_sal FROM emp GROUP BY dept_id) v",

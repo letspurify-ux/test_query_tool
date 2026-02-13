@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "SPACE Query: a Toad-like Oracle Query Tool built with Rust and FLTK"
 authors = ["Developer"]
+build = "build.rs"
 
 [[bin]]
 name = "space_query"
@@ -35,3 +36,6 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[build-dependencies]
+cc = "1.2"
