@@ -196,13 +196,12 @@ fn analyze_phase(tokens: &[SqlToken]) -> PhaseAnalysis {
                 next_scope_id += 1;
                 scope_stack.push(scope_id);
                 // Derived table/subquery in FROM introduces an isolated scope.
-                let inherited_visible_parent = if matches!(parent_phase, SqlPhase::FromClause)
-                    && !pending_lateral_subquery
-                {
-                    None
-                } else {
-                    Some(parent_scope_id)
-                };
+                let inherited_visible_parent =
+                    if matches!(parent_phase, SqlPhase::FromClause) && !pending_lateral_subquery {
+                        None
+                    } else {
+                        Some(parent_scope_id)
+                    };
                 visible_parent.insert(scope_id, inherited_visible_parent);
                 pending_lateral_subquery = false;
                 if matches!(cte_state, CteState::ExpectBody) {
@@ -430,6 +429,10 @@ struct TableAnalysis {
     subqueries: Vec<SubqueryDefinition>,
 }
 
+fn anonymous_subquery_name(start_idx: usize, depth: usize) -> String {
+    format!("__SUBQUERY_{}_{}", depth, start_idx)
+}
+
 /// Collect all table references from the full statement, tracking depth.
 /// Returns tables visible from the cursor's active scope chain.
 fn collect_tables_deep(tokens: &[SqlToken], cursor_scope_chain: &[usize]) -> TableAnalysis {
@@ -539,6 +542,34 @@ fn collect_tables_deep(tokens: &[SqlToken], cursor_scope_chain: &[usize]) -> Tab
                         }
                         continue;
                     }
+
+                    // Subquery without alias: still expose projected columns for unqualified
+                    // column completion (e.g. SELECT | FROM (SELECT ...)).
+                    let parent_scope_id = if scope_stack.len() >= 2 {
+                        scope_stack[scope_stack.len() - 2]
+                    } else {
+                        0
+                    };
+                    let generated_name = anonymous_subquery_name(start_idx, depth);
+                    let body_tokens: Vec<SqlToken> =
+                        tokens[start_idx..idx].iter().cloned().collect();
+                    all_subqueries.push(ParsedSubquery {
+                        subquery: SubqueryDefinition {
+                            alias: generated_name.clone(),
+                            body_tokens,
+                            depth: depth.saturating_sub(1),
+                        },
+                        scope_id: parent_scope_id,
+                    });
+                    all_tables.push(ParsedTable {
+                        table: ScopedTableRef {
+                            name: generated_name,
+                            alias: None,
+                            depth: depth.saturating_sub(1),
+                            is_cte: false,
+                        },
+                        scope_id: parent_scope_id,
+                    });
                 }
 
                 if depth > 0 {
