@@ -76,8 +76,14 @@ impl MenuBarBuilder {
 
         // File menu
         menu.add(
-            "&File/&Connect...\t",
+            "&File/&New SQL Tab\t",
             Shortcut::Ctrl | Shortcut::Command | 'n',
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&File/&Connect...\t",
+            Shortcut::Ctrl | Shortcut::Command | Shortcut::Shift | 'n',
             MenuFlag::Normal,
             forward_menu_callback,
         );

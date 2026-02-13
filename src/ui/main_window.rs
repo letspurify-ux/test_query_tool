@@ -49,6 +49,7 @@ pub struct AppState {
     pub status_bar: Frame,
     pub fetch_row_counts: HashMap<usize, usize>,
     pub current_file: Rc<RefCell<Option<PathBuf>>>,
+    pub sql_dirty: Rc<Cell<bool>>,
     pub popups: Rc<RefCell<Vec<Window>>>,
     pub window: Window,
     pub right_flex: Flex,
@@ -332,6 +333,7 @@ impl MainWindow {
             status_bar,
             fetch_row_counts: HashMap::new(),
             current_file: Rc::new(RefCell::new(None)),
+            sql_dirty: Rc::new(Cell::new(false)),
             popups: Rc::new(RefCell::new(Vec::new())),
             window,
             right_flex: right_flex.clone(),
@@ -345,6 +347,18 @@ impl MainWindow {
             let mut state_borrow = state.borrow_mut();
             Self::adjust_query_layout(&mut state_borrow);
             Self::apply_font_settings(&mut state_borrow);
+        }
+
+        {
+            let weak_state_for_dirty = Rc::downgrade(&state);
+            let mut buffer_for_dirty = state.borrow().sql_buffer.clone();
+            buffer_for_dirty.add_modify_callback2(move |_buf, _pos, ins, del, _r, _d| {
+                if ins > 0 || del > 0 {
+                    if let Some(state_for_dirty) = weak_state_for_dirty.upgrade() {
+                        state_for_dirty.borrow().sql_dirty.set(true);
+                    }
+                }
+            });
         }
 
         let weak_state_for_history_btn = Rc::downgrade(&state);
@@ -385,6 +399,7 @@ impl MainWindow {
             editor.show_insert_position();
 
             state.borrow().sql_editor.refresh_highlighting();
+            state.borrow().sql_dirty.set(true);
         }
     }
 
@@ -613,6 +628,13 @@ impl MainWindow {
                     editor.show_insert_position();
 
                     s.sql_editor.refresh_highlighting();
+                }
+                SqlAction::OpenInNewTab { text, title } => {
+                    s.sql_buffer.set_text(&text);
+                    s.sql_editor.refresh_highlighting();
+                    s.sql_dirty.set(true);
+                    *s.current_file.borrow_mut() = Some(PathBuf::from(title.clone()));
+                    s.window.set_label(&format!("SPACE Query - {}", title));
                 }
                 SqlAction::Execute(sql) => {
                     s.sql_editor.execute_sql_text(&sql);
@@ -935,6 +957,7 @@ impl MainWindow {
                                         ));
                                         s.sql_editor.refresh_highlighting();
                                         s.sql_editor.focus();
+                                        s.sql_dirty.set(false);
                                     }
                                     Err(err) => {
                                         fltk::dialog::alert_default(&format!(
@@ -950,6 +973,7 @@ impl MainWindow {
                                             path.file_name().unwrap_or_default().to_string_lossy();
                                         s.window
                                             .set_label(&format!("SPACE Query - {}", file_label));
+                                        s.sql_dirty.set(false);
                                         let conn_info = s.connection_info.borrow().clone();
                                         s.status_bar.set_label(&format_status(
                                             &format!("Saved {}", file_label),
@@ -971,6 +995,7 @@ impl MainWindow {
                                     Ok(()) => {
                                         let file_label =
                                             path.file_name().unwrap_or_default().to_string_lossy();
+                                        s.sql_dirty.set(false);
                                         let conn_info = s.connection_info.borrow().clone();
                                         s.status_bar.set_label(&format_status(
                                             &format!(
@@ -1061,6 +1086,25 @@ impl MainWindow {
                 if let Some(path) = menu_path {
                     let choice = path.split('\t').next().unwrap_or(&path).trim().replace('&', "");
                     match choice.as_str() {
+                        "File/New SQL Tab" => {
+                            let mut s = state_for_menu.borrow_mut();
+                            if s.sql_dirty.get() {
+                                let choice = fltk::dialog::choice2_default(
+                                    "현재 쿼리가 저장되지 않았습니다. 새 문서를 열까요?",
+                                    "취소",
+                                    "열기",
+                                    "",
+                                );
+                                if choice != Some(1) {
+                                    return;
+                                }
+                            }
+                            s.sql_buffer.set_text("");
+                            s.sql_editor.refresh_highlighting();
+                            *s.current_file.borrow_mut() = None;
+                            s.sql_dirty.set(false);
+                            s.window.set_label("SPACE Query - Untitled");
+                        }
                         "File/Connect..." => {
                             let (popups, connection) = {
                                 let s = state_for_menu.borrow();
@@ -1129,6 +1173,20 @@ impl MainWindow {
                             s.sql_editor.get_highlighter().borrow_mut().set_highlight_data(HighlightData::new());
                         }
                         "File/Open SQL File..." => {
+                            {
+                                let s = state_for_menu.borrow();
+                                if s.sql_dirty.get() {
+                                    let choice = fltk::dialog::choice2_default(
+                                        "현재 쿼리가 저장되지 않았습니다. 파일을 여시겠습니까?",
+                                        "취소",
+                                        "열기",
+                                        "",
+                                    );
+                                    if choice != Some(1) {
+                                        return;
+                                    }
+                                }
+                            }
                             let mut dialog = FileDialog::new(FileDialogType::BrowseFile);
                             dialog.set_filter("SQL Files\t*.sql\nAll Files\t*.*");
                             dialog.show();
@@ -1200,7 +1258,21 @@ impl MainWindow {
                                 app::awake();
                             });
                         }
-                        "File/Exit" => app::quit(),
+                        "File/Exit" => {
+                            let s = state_for_menu.borrow();
+                            if s.sql_dirty.get() {
+                                let choice = fltk::dialog::choice2_default(
+                                    "저장되지 않은 변경사항이 있습니다. 종료할까요?",
+                                    "취소",
+                                    "종료",
+                                    "",
+                                );
+                                if choice != Some(1) {
+                                    return;
+                                }
+                            }
+                            app::quit()
+                        },
                         "Edit/Undo" => state_for_menu.borrow().sql_editor.undo(),
                         "Edit/Redo" => state_for_menu.borrow().sql_editor.redo(),
                         "Edit/Cut" => state_for_menu.borrow_mut().sql_editor.get_editor().cut(),
