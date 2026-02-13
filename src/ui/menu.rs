@@ -106,6 +106,12 @@ impl MenuBarBuilder {
             forward_menu_callback,
         );
         menu.add(
+            "&File/Save SQL File &As...\t",
+            Shortcut::Ctrl | Shortcut::Command | Shortcut::Shift | 's',
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
             "&File/",
             Shortcut::None,
             MenuFlag::MenuDivider,
@@ -343,19 +349,9 @@ impl MenuBarBuilder {
         );
 
         // Help menu
-        menu.add(
-            "&Help/&About\t",
-            Shortcut::None,
-            MenuFlag::Normal,
-            |_| {
-                show_info_dialog(
-                    "About",
-                    "SPACE Query\n\nBuilt with Rust and FLTK",
-                    420,
-                    240,
-                );
-            },
-        );
+        menu.add("&Help/&About\t", Shortcut::None, MenuFlag::Normal, |_| {
+            show_info_dialog("About", "SPACE Query\n\nBuilt with Rust and FLTK", 420, 240);
+        });
         menu.add(
             "&Help/&Keyboard Shortcuts\t",
             Shortcut::None,
@@ -369,6 +365,7 @@ impl MenuBarBuilder {
                     Ctrl+D - Disconnect\n\
                     Ctrl+O - Open SQL File\n\
                     Ctrl+S - Save SQL File\n\
+                    Ctrl+Shift+S - Save SQL File As\n\
                     Ctrl+Q - Exit\n\n\
                     Edit (SQL Editor):\n\
                     Ctrl+Z - Undo\n\

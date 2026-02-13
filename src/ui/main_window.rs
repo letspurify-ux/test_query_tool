@@ -948,10 +948,8 @@ impl MainWindow {
                                         *s.current_file.borrow_mut() = Some(path.clone());
                                         let file_label =
                                             path.file_name().unwrap_or_default().to_string_lossy();
-                                        s.window.set_label(&format!(
-                                            "SPACE Query - {}",
-                                            file_label
-                                        ));
+                                        s.window
+                                            .set_label(&format!("SPACE Query - {}", file_label));
                                         let conn_info = s.connection_info.borrow().clone();
                                         s.status_bar.set_label(&format_status(
                                             &format!("Saved {}", file_label),
@@ -1179,6 +1177,28 @@ impl MainWindow {
                                     app::awake();
                                 });
                             }
+                        }
+                        "File/Save SQL File As..." => {
+                            let sql_text = state_for_menu.borrow().sql_buffer.text();
+
+                            let mut dialog = FileDialog::new(FileDialogType::BrowseSaveFile);
+                            dialog.set_filter("SQL Files\t*.sql\nAll Files\t*.*");
+                            dialog.show();
+                            let filename = dialog.filename();
+                            if filename.as_os_str().is_empty() {
+                                return;
+                            }
+
+                            let sender = file_sender.clone();
+                            thread::spawn(move || {
+                                let result =
+                                    fs::write(&filename, sql_text).map_err(|err| err.to_string());
+                                let _ = sender.send(FileActionResult::Save {
+                                    path: filename,
+                                    result,
+                                });
+                                app::awake();
+                            });
                         }
                         "File/Exit" => app::quit(),
                         "Edit/Undo" => state_for_menu.borrow().sql_editor.undo(),
