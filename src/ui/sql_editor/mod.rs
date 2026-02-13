@@ -2,7 +2,7 @@ use fltk::{
     app,
     button::Button,
     draw::set_cursor,
-    enums::{Cursor, Event, FrameType, Shortcut},
+    enums::{Cursor, FrameType},
     frame::Frame,
     group::{Flex, FlexType, Pack, PackType},
     input::IntInput,
@@ -464,35 +464,6 @@ impl SqlEditorWidget {
             }
         });
 
-        let mut editor = self.editor.clone();
-        let widget = self.clone();
-        editor.handle(move |_, ev| {
-            if ev != Event::KeyDown {
-                return false;
-            }
-
-            let state = app::event_state();
-            if !state.contains(Shortcut::Ctrl) && !state.contains(Shortcut::Command) {
-                return false;
-            }
-
-            let key = app::event_text().to_ascii_lowercase();
-            match key.as_str() {
-                "z" => {
-                    if state.contains(Shortcut::Shift) {
-                        widget.redo();
-                    } else {
-                        widget.undo();
-                    }
-                    true
-                }
-                "y" => {
-                    widget.redo();
-                    true
-                }
-                _ => false,
-            }
-        });
     }
 
     fn setup_progress_handler(
