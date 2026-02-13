@@ -917,6 +917,13 @@ impl SqlEditorWidget {
                 )
             }
         };
+        let context_alias_suggestions =
+            Self::collect_context_alias_suggestions(&prefix, &deep_ctx);
+        let suggestions = Self::merge_suggestions_with_context_aliases(
+            suggestions,
+            context_alias_suggestions,
+            matches!(context, SqlContext::TableName),
+        );
 
         let should_refresh_when_columns_ready = include_columns && columns_loading;
         if should_refresh_when_columns_ready {
@@ -1024,6 +1031,78 @@ impl SqlEditorWidget {
                 })
             })
         })
+    }
+
+    fn collect_context_alias_suggestions(
+        prefix: &str,
+        deep_ctx: &intellisense_context::CursorContext,
+    ) -> Vec<String> {
+        let prefix_upper = prefix.to_uppercase();
+        let mut suggestions = Vec::new();
+        let mut seen = HashSet::new();
+
+        let mut push_candidate = |candidate: &str| {
+            if candidate.is_empty() {
+                return;
+            }
+            if !prefix_upper.is_empty() {
+                let candidate_upper = candidate.to_uppercase();
+                if !candidate_upper.starts_with(&prefix_upper)
+                    || candidate_upper == prefix_upper
+                {
+                    return;
+                }
+            }
+            if seen.insert(candidate.to_uppercase()) {
+                suggestions.push(candidate.to_string());
+            }
+        };
+
+        for table_ref in &deep_ctx.tables_in_scope {
+            if let Some(alias) = table_ref.alias.as_deref() {
+                push_candidate(alias);
+            }
+        }
+
+        for cte in &deep_ctx.ctes {
+            push_candidate(&cte.name);
+        }
+
+        for subq in &deep_ctx.subqueries {
+            push_candidate(&subq.alias);
+        }
+
+        suggestions
+    }
+
+    fn merge_suggestions_with_context_aliases(
+        mut base: Vec<String>,
+        aliases: Vec<String>,
+        prefer_aliases: bool,
+    ) -> Vec<String> {
+        if aliases.is_empty() {
+            return base;
+        }
+
+        let mut seen: HashSet<String> = base.iter().map(|item| item.to_uppercase()).collect();
+        let mut filtered_aliases = Vec::new();
+        for alias in aliases {
+            if seen.insert(alias.to_uppercase()) {
+                filtered_aliases.push(alias);
+            }
+        }
+
+        if filtered_aliases.is_empty() {
+            return base;
+        }
+
+        if prefer_aliases {
+            filtered_aliases.extend(base);
+            filtered_aliases
+        } else {
+            base.extend(filtered_aliases);
+            base
+        }
     }
 
     fn maybe_prefetch_columns_for_word(
@@ -2235,5 +2314,36 @@ mod intellisense_regression_tests {
         let upper_tables: Vec<String> = tables.into_iter().map(|t| t.to_uppercase()).collect();
         assert_eq!(upper_tables, vec!["HELP"]);
         assert_eq!(columns, vec!["TOPIC", "TEXT"]);
+    }
+
+    #[test]
+    fn collect_context_alias_suggestions_includes_table_aliases_and_ctes() {
+        let before = SqlEditorWidget::tokenize_sql(
+            "WITH recent_emp AS (SELECT empno FROM emp) SELECT  FROM emp e",
+        );
+        let full = SqlEditorWidget::tokenize_sql(
+            "WITH recent_emp AS (SELECT empno FROM emp) SELECT  FROM emp e",
+        );
+        let ctx = intellisense_context::analyze_cursor_context(&before, &full);
+
+        let suggestions = SqlEditorWidget::collect_context_alias_suggestions("", &ctx);
+        let upper: Vec<String> = suggestions.into_iter().map(|s| s.to_uppercase()).collect();
+
+        assert!(upper.contains(&"E".to_string()));
+        assert!(upper.contains(&"RECENT_EMP".to_string()));
+    }
+
+    #[test]
+    fn merge_suggestions_with_context_aliases_prioritizes_aliases_in_table_context() {
+        let merged = SqlEditorWidget::merge_suggestions_with_context_aliases(
+            vec!["EMP".to_string(), "SELECT".to_string()],
+            vec!["e".to_string(), "recent_emp".to_string(), "EMP".to_string()],
+            true,
+        );
+
+        assert_eq!(merged[0], "e");
+        assert_eq!(merged[1], "recent_emp");
+        assert!(merged.contains(&"EMP".to_string()));
+        assert!(merged.contains(&"SELECT".to_string()));
     }
 }
