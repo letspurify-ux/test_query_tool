@@ -463,7 +463,6 @@ impl SqlEditorWidget {
                 state.active_group = Some(granularity);
             }
         });
-
     }
 
     fn setup_progress_handler(
@@ -596,6 +595,13 @@ impl SqlEditorWidget {
             flush_rows(&mut pending_rows, cancel_flag.load(Ordering::Relaxed));
 
             if disconnected {
+                // Worker thread aborted unexpectedly (panic, forced drop, etc.).
+                // Ensure the UI is not left in a "query running" state, which would
+                // make subsequent executions impossible until restart.
+                *query_running.borrow_mut() = false;
+                cancel_flag.store(false, Ordering::Relaxed);
+                set_cursor(Cursor::Default);
+                app::flush();
                 return;
             }
 
