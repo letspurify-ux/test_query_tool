@@ -1,40 +1,52 @@
 use fltk::{
-    app, draw,
-    enums::Event,
     group::{Group, Tabs, TabsOverflow},
     prelude::*,
 };
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use crate::ui::constants;
 use crate::ui::theme;
 
-type TabSelectCallback = Box<dyn FnMut(usize)>;
-type TabCloseCallback = Box<dyn FnMut(usize)>;
-
-const TAB_LABEL_SUFFIX: &str = "  x";
-const HEADER_LEFT_PADDING: i32 = 6;
-const TAB_LABEL_HORIZONTAL_PADDING: i32 = 26;
-const MIN_TAB_WIDTH: i32 = 48;
-const CLOSE_HIT_WIDTH: i32 = 16;
-const CLOSE_HIT_RIGHT_PADDING: i32 = 4;
+pub type QueryTabId = u64;
+type TabSelectCallback = Box<dyn FnMut(QueryTabId)>;
 
 #[derive(Clone)]
 pub struct QueryTabsWidget {
     tabs: Tabs,
-    groups: Rc<RefCell<Vec<Group>>>,
+    entries: Rc<RefCell<Vec<TabEntry>>>,
+    next_id: Rc<RefCell<QueryTabId>>,
     on_select: Rc<RefCell<Option<TabSelectCallback>>>,
-    on_close: Rc<RefCell<Option<TabCloseCallback>>>,
+    suppress_select_callback_depth: Rc<Cell<u32>>,
+}
+
+#[derive(Clone)]
+struct TabEntry {
+    id: QueryTabId,
+    group: Group,
+}
+
+struct CallbackSuppressGuard {
+    counter: Rc<Cell<u32>>,
+}
+
+impl CallbackSuppressGuard {
+    fn new(counter: Rc<Cell<u32>>) -> Self {
+        counter.set(counter.get().saturating_add(1));
+        Self { counter }
+    }
+}
+
+impl Drop for CallbackSuppressGuard {
+    fn drop(&mut self) {
+        self.counter
+            .set(self.counter.get().saturating_sub(1));
+    }
 }
 
 impl QueryTabsWidget {
     fn content_bounds(tabs: &Tabs) -> (i32, i32, i32, i32) {
-        let x = tabs.x();
-        let y = tabs.y() + constants::TAB_HEADER_HEIGHT;
-        let w = tabs.w().max(1);
-        let h = (tabs.h() - constants::TAB_HEADER_HEIGHT).max(1);
-        (x, y, w, h)
+        let (x, y, w, h) = tabs.client_area();
+        (x, y, w.max(1), h.max(1))
     }
 
     fn layout_children(tabs: &Tabs) {
@@ -54,52 +66,32 @@ impl QueryTabsWidget {
         tabs.set_label_color(theme::text_secondary());
         tabs.handle_overflow(TabsOverflow::Compress);
 
-        let groups = Rc::new(RefCell::new(Vec::<Group>::new()));
+        let entries = Rc::new(RefCell::new(Vec::<TabEntry>::new()));
+        let next_id = Rc::new(RefCell::new(1u64));
         let on_select = Rc::new(RefCell::new(None::<TabSelectCallback>));
-        let on_close = Rc::new(RefCell::new(None::<TabCloseCallback>));
+        let suppress_select_callback_depth = Rc::new(Cell::new(0u32));
 
-        let groups_for_cb = groups.clone();
+        let entries_for_cb = entries.clone();
         let on_select_for_cb = on_select.clone();
+        let suppress_for_cb = suppress_select_callback_depth.clone();
         tabs.set_callback(move |tabs| {
+            if suppress_for_cb.get() > 0 {
+                return;
+            }
             let Some(selected) = tabs.value() else {
                 return;
             };
             let selected_ptr = selected.as_widget_ptr();
-            let selected_idx = groups_for_cb
+            let selected_id = entries_for_cb
                 .borrow()
                 .iter()
-                .position(|group| group.as_widget_ptr() == selected_ptr);
-            if let Some(index) = selected_idx {
+                .find(|entry| entry.group.as_widget_ptr() == selected_ptr)
+                .map(|entry| entry.id);
+            if let Some(tab_id) = selected_id {
                 if let Some(callback) = on_select_for_cb.borrow_mut().as_mut() {
-                    callback(index);
+                    callback(tab_id);
                 }
             }
-        });
-
-        let groups_for_handle = groups.clone();
-        let on_close_for_handle = on_close.clone();
-        let tabs_for_handle = tabs.clone();
-        tabs.handle(move |_, ev| {
-            if !matches!(ev, Event::Push) {
-                return false;
-            }
-            let ex = app::event_x();
-            let ey = app::event_y();
-            let hit = {
-                let groups = groups_for_handle.borrow();
-                Self::tab_at_point(&tabs_for_handle, &groups, ex, ey)
-                    .map(|(index, x, w)| (index, Self::is_close_hit(ex, x, w)))
-            };
-            let Some((index, close_hit)) = hit else {
-                return false;
-            };
-            if close_hit {
-                if let Some(cb) = on_close_for_handle.borrow_mut().as_mut() {
-                    cb(index);
-                }
-                return true;
-            }
-            false
         });
         tabs.resize_callback(move |t, _, _, _, _| {
             Self::layout_children(t);
@@ -107,31 +99,31 @@ impl QueryTabsWidget {
 
         Self {
             tabs,
-            groups,
+            entries,
+            next_id,
             on_select,
-            on_close,
+            suppress_select_callback_depth,
         }
+    }
+
+    pub fn set_on_select<F>(&mut self, callback: F)
+    where
+        F: FnMut(QueryTabId) + 'static,
+    {
+        *self.on_select.borrow_mut() = Some(Box::new(callback));
     }
 
     pub fn get_widget(&self) -> Tabs {
         self.tabs.clone()
     }
 
-    pub fn set_on_select<F>(&mut self, callback: F)
-    where
-        F: FnMut(usize) + 'static,
-    {
-        *self.on_select.borrow_mut() = Some(Box::new(callback));
-    }
-
-    pub fn set_on_close<F>(&mut self, callback: F)
-    where
-        F: FnMut(usize) + 'static,
-    {
-        *self.on_close.borrow_mut() = Some(Box::new(callback));
-    }
-
-    pub fn add_tab(&mut self, label: &str) -> usize {
+    pub fn add_tab(&mut self, label: &str) -> QueryTabId {
+        let tab_id = {
+            let mut next = self.next_id.borrow_mut();
+            let id = *next;
+            *next = next.saturating_add(1);
+            id
+        };
         self.tabs.begin();
         let (x, y, w, h) = Self::content_bounds(&self.tabs);
         let mut group = Group::new(x, y, w, h, None).with_label(&Self::display_label(label));
@@ -140,48 +132,56 @@ impl QueryTabsWidget {
         group.end();
         self.tabs.end();
 
-        let mut groups = self.groups.borrow_mut();
-        groups.push(group.clone());
-        let index = groups.len().saturating_sub(1);
+        self.entries.borrow_mut().push(TabEntry {
+            id: tab_id,
+            group: group.clone(),
+        });
+        let _suppress_guard =
+            CallbackSuppressGuard::new(self.suppress_select_callback_depth.clone());
         let _ = self.tabs.set_value(&group);
         Self::layout_children(&self.tabs);
         self.tabs.redraw();
-        index
+        tab_id
     }
 
-    pub fn select(&mut self, index: usize) {
-        if let Some(group) = self.groups.borrow().get(index) {
-            let _ = self.tabs.set_value(group);
+    pub fn select(&mut self, tab_id: QueryTabId) {
+        if let Some(group) = self.tab_group(tab_id) {
+            let _suppress_guard =
+                CallbackSuppressGuard::new(self.suppress_select_callback_depth.clone());
+            let _ = self.tabs.set_value(&group);
             self.tabs.redraw();
         }
     }
 
-    pub fn selected_index(&self) -> Option<usize> {
+    pub fn selected_id(&self) -> Option<QueryTabId> {
         let selected = self.tabs.value()?;
         let selected_ptr = selected.as_widget_ptr();
-        self.groups
+        self.entries
             .borrow()
             .iter()
-            .position(|group| group.as_widget_ptr() == selected_ptr)
+            .find(|entry| entry.group.as_widget_ptr() == selected_ptr)
+            .map(|entry| entry.id)
     }
 
-    pub fn set_tab_label(&mut self, index: usize, label: &str) {
-        if let Some(group) = self.groups.borrow().get(index) {
-            let mut group = group.clone();
+    pub fn set_tab_label(&mut self, tab_id: QueryTabId, label: &str) {
+        if let Some(group) = self.tab_group(tab_id) {
+            let mut group = group;
             group.set_label(&Self::display_label(label));
             self.tabs.redraw();
         }
     }
 
-    pub fn close_tab(&mut self, index: usize) -> bool {
+    pub fn close_tab(&mut self, tab_id: QueryTabId) -> bool {
         let group = {
-            let mut groups = self.groups.borrow_mut();
-            if index >= groups.len() {
+            let mut entries = self.entries.borrow_mut();
+            let Some(index) = entries.iter().position(|entry| entry.id == tab_id) else {
                 return false;
-            }
-            groups.remove(index)
+            };
+            entries.remove(index).group
         };
 
+        let _suppress_guard =
+            CallbackSuppressGuard::new(self.suppress_select_callback_depth.clone());
         if self.tabs.find(&group) >= 0 {
             self.tabs.remove(&group);
         }
@@ -191,64 +191,20 @@ impl QueryTabsWidget {
         true
     }
 
-    fn display_label(label: &str) -> String {
-        format!("{label}{TAB_LABEL_SUFFIX}")
-    }
-
-    fn tab_at_point(tabs: &Tabs, groups: &[Group], ex: i32, ey: i32) -> Option<(usize, i32, i32)> {
-        if groups.is_empty() {
-            return None;
-        }
-        let (client_x, client_y, _, _) = tabs.client_area();
-        let header_y = tabs.y();
-        let header_h = (client_y - header_y).max(constants::TAB_HEADER_HEIGHT);
-        if ey < header_y || ey > header_y + header_h {
-            return None;
-        }
-
-        let widths = Self::tab_header_widths(tabs, groups);
-        let mut cursor_x = tabs.x() + HEADER_LEFT_PADDING;
-        for (index, width) in widths.into_iter().enumerate() {
-            let right = cursor_x + width;
-            if ex >= cursor_x && ex <= right {
-                return Some((index, cursor_x, width));
-            }
-            cursor_x = right;
-        }
-        let _ = client_x;
-        None
-    }
-
-    fn tab_header_widths(tabs: &Tabs, groups: &[Group]) -> Vec<i32> {
-        if groups.is_empty() {
-            return Vec::new();
-        }
-        draw::set_font(tabs.label_font(), tabs.label_size());
-        let mut widths: Vec<i32> = groups
+    pub fn tab_group(&self, tab_id: QueryTabId) -> Option<Group> {
+        self.entries
+            .borrow()
             .iter()
-            .map(|group| {
-                let label = group.label();
-                let measured = draw::measure(&label, false).0;
-                (measured + TAB_LABEL_HORIZONTAL_PADDING).max(MIN_TAB_WIDTH)
-            })
-            .collect();
-
-        let total: i32 = widths.iter().sum();
-        let available = (tabs.w() - HEADER_LEFT_PADDING * 2).max(MIN_TAB_WIDTH);
-        if total <= available {
-            return widths;
-        }
-
-        let count = widths.len() as i32;
-        let equal = (available / count.max(1)).max(MIN_TAB_WIDTH);
-        widths.fill(equal);
-        widths
+            .find(|entry| entry.id == tab_id)
+            .map(|entry| entry.group.clone())
     }
 
-    fn is_close_hit(ex: i32, tab_x: i32, tab_w: i32) -> bool {
-        let right = tab_x + tab_w - CLOSE_HIT_RIGHT_PADDING;
-        let left = right - CLOSE_HIT_WIDTH;
-        ex >= left && ex <= right
+    pub fn tab_ids(&self) -> Vec<QueryTabId> {
+        self.entries.borrow().iter().map(|entry| entry.id).collect()
+    }
+
+    fn display_label(label: &str) -> String {
+        label.to_string()
     }
 }
 

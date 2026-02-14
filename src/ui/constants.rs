@@ -102,9 +102,6 @@ pub const SCRIPT_OUTPUT_TRIM_TARGET_CHARS: usize = 1_500_000;
 /// Width of the main horizontal splitter between object browser and editor.
 pub const MAIN_SPLITTER_WIDTH: i32 = 6;
 
-/// Height of the vertical splitter between query editor and results.
-pub const QUERY_SPLITTER_HEIGHT: i32 = 6;
-
 /// Height of the result toolbar row.
 pub const RESULT_TOOLBAR_HEIGHT: i32 = 34;
 

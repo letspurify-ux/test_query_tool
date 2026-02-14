@@ -1,6 +1,6 @@
 Connect system/password@localhost:1521/FREE
 
-prompt 프로시저 테스트 2
+prompt 프로시저 테스트 4
 SET SERVEROUTPUT ON SIZE UNLIMITED;
 
 PROMPT === [0] DROP OLD OBJECTS (IGNORE ERRORS) ===

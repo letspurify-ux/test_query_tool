@@ -2,6 +2,7 @@ use fltk::{
     app,
     draw::set_cursor,
     enums::{Cursor, FrameType},
+    frame::Frame,
     group::{Flex, FlexType},
     input::IntInput,
     prelude::*,
@@ -46,6 +47,7 @@ const INTELLISENSE_STATEMENT_WINDOW: i32 = 120_000;
 const MAX_PROGRESS_MESSAGES_PER_POLL: usize = 200;
 const PROGRESS_POLL_INTERVAL_SECONDS: f64 = 0.05;
 const MAX_WORD_UNDO_HISTORY: usize = 500;
+const EDITOR_TOP_PADDING: i32 = 4;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EditGranularity {
@@ -253,6 +255,10 @@ impl SqlEditorWidget {
         group.set_frame(FrameType::FlatBox);
         group.set_color(theme::panel_bg()); // Windows 11-inspired panel background
 
+        let mut top_padding = Frame::default().with_size(0, EDITOR_TOP_PADDING);
+        top_padding.set_frame(FrameType::NoBox);
+        group.fixed(&top_padding, EDITOR_TOP_PADDING);
+
         // SQL Editor with modern styling
         let buffer = TextBuffer::default();
         let style_buffer = TextBuffer::default();
@@ -393,7 +399,6 @@ impl SqlEditorWidget {
                 state.active_group = Some(granularity);
             }
         });
-
     }
 
     fn setup_progress_handler(
@@ -1195,6 +1200,7 @@ impl SqlEditorWidget {
         self.buffer.set_text(text);
     }
 
+    #[allow(dead_code)]
     pub fn get_group(&self) -> &Flex {
         &self.group
     }
@@ -1252,6 +1258,20 @@ impl SqlEditorWidget {
 
     pub fn get_editor(&self) -> TextEditor {
         self.editor.clone()
+    }
+
+    pub fn reset_undo_redo_history(&self) {
+        let current_text = self.buffer.text();
+        {
+            let mut state = self.undo_redo_state.borrow_mut();
+            state.history.clear();
+            state.history.push(current_text);
+            state.index = 0;
+            state.active_group = None;
+            state.applying_history = false;
+        }
+        *self.history_cursor.borrow_mut() = None;
+        *self.history_original.borrow_mut() = None;
     }
 
     pub fn undo(&self) {

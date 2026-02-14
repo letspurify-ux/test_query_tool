@@ -242,6 +242,24 @@ impl MenuBarBuilder {
 
         // Query menu
         menu.add(
+            "&Query/&New Tab\t",
+            Shortcut::Command | 't',
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&Query/&Close Tab\t",
+            Shortcut::Command | 'w',
+            MenuFlag::Normal,
+            forward_menu_callback,
+        );
+        menu.add(
+            "&Query/",
+            Shortcut::None,
+            MenuFlag::MenuDivider,
+            forward_menu_callback,
+        );
+        menu.add(
             "&Query/&Execute\t",
             Shortcut::from_key(fltk::enums::Key::F5),
             MenuFlag::Normal,
@@ -323,7 +341,7 @@ impl MenuBarBuilder {
         );
         menu.add(
             "&Tools/&Query History...\t",
-            Shortcut::Ctrl | Shortcut::Command | 'h',
+            Shortcut::None,
             MenuFlag::Normal,
             forward_menu_callback,
         );
@@ -360,6 +378,7 @@ impl MenuBarBuilder {
                 show_info_dialog(
                     "Keyboard Shortcuts",
                     "Keyboard Shortcuts:\n\n\
+                    macOS note: use Cmd where Ctrl is shown.\n\n\
                     File:\n\
                     Ctrl+N - Connect\n\
                     Ctrl+D - Disconnect\n\
@@ -384,6 +403,8 @@ impl MenuBarBuilder {
                     Ctrl+L - Lowercase Selection\n\
                     Ctrl+Space - Intellisense\n\n\
                     Query:\n\
+                    Cmd/Ctrl+T - New Query Tab\n\
+                    Cmd/Ctrl+W - Close Query Tab\n\
                     Ctrl+Enter - Execute Statement\n\
                     F5 - Execute Script\n\
                     F9 - Execute Statement\n\
@@ -393,7 +414,7 @@ impl MenuBarBuilder {
                     F4 - Quick Describe (Editor)\n\n\
                     Tools:\n\
                     Ctrl+E - Export Results\n\
-                    Ctrl+H - Query History\n\n\
+                    Query History - no shortcut\n\n\
                     Results Table:\n\
                     Ctrl+C - Copy Selected Cells\n\
                     Ctrl+Shift+C - Copy with Headers\n\

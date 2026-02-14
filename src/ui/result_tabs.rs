@@ -38,6 +38,20 @@ struct ScriptOutputTab {
 }
 
 impl ResultTabsWidget {
+    fn content_bounds(tabs: &Tabs) -> (i32, i32, i32, i32) {
+        let (x, y, w, h) = tabs.client_area();
+        (x, y, w.max(1), h.max(1))
+    }
+
+    fn layout_children(tabs: &Tabs) {
+        let (x, y, w, h) = Self::content_bounds(tabs);
+        for child in tabs.clone().into_iter() {
+            if let Some(mut group) = child.as_group() {
+                group.resize(x, y, w, h);
+            }
+        }
+    }
+
     fn maybe_shrink_tab_storage(data: &mut Vec<ResultTab>) {
         // Avoid frequent shrinking; only compact when capacity is materially over-provisioned.
         let len = data.len();
@@ -96,10 +110,7 @@ impl ResultTabsWidget {
         ));
 
         tabs.begin();
-        let x = tabs.x();
-        let y = tabs.y() + constants::TAB_HEADER_HEIGHT;
-        let w = tabs.w().max(100);
-        let h = (tabs.h() - constants::TAB_HEADER_HEIGHT).max(100);
+        let (x, y, w, h) = Self::content_bounds(&tabs);
         let mut script_group = Group::new(x, y, w, h, None).with_label("Script Output");
         script_group.set_color(theme::panel_bg());
         script_group.set_label_color(theme::text_secondary());
@@ -177,15 +188,8 @@ impl ResultTabsWidget {
             }
         });
 
-        let tab_header_height = constants::TAB_HEADER_HEIGHT;
-        tabs.resize_callback(move |t, x, y, w, h| {
-            let content_y = y + tab_header_height;
-            let content_h = (h - tab_header_height).max(100);
-            for child in t.clone().into_iter() {
-                if let Some(mut group) = child.as_group() {
-                    group.resize(x, content_y, w, content_h);
-                }
-            }
+        tabs.resize_callback(move |t, _, _, _, _| {
+            Self::layout_children(t);
         });
 
         Self {
@@ -279,13 +283,8 @@ impl ResultTabsWidget {
         }
 
         self.tabs.begin();
-        // Use explicit size from tabs instead of default_fill() to avoid
-        // "center of requires the size of the widget to be known" panic
-        // Use minimum dimensions (100x100) if tabs size is not yet known
-        let x = self.tabs.x();
-        let y = self.tabs.y() + constants::TAB_HEADER_HEIGHT;
-        let w = self.tabs.w().max(100);
-        let h = (self.tabs.h() - constants::TAB_HEADER_HEIGHT).max(100);
+        // Use explicit tab content bounds to avoid relying on hard-coded header height.
+        let (x, y, w, h) = Self::content_bounds(&self.tabs);
         let mut group = Group::new(x, y, w, h, None).with_label(label);
         group.set_color(theme::panel_bg());
         group.set_label_color(theme::text_secondary());
