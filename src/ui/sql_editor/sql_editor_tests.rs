@@ -43,7 +43,7 @@ fn format_sql_preserves_script_commands_and_slashes() {
         (
             "test2.txt",
             vec![
-                "PROMPT 프로시저 테스트 2",
+                "PROMPT 프로시저 테스트 4",
                 "SET SERVEROUTPUT ON SIZE UNLIMITED",
                 "SHOW ERRORS PACKAGE oqt_pkg",
                 "SHOW ERRORS PACKAGE BODY oqt_pkg",

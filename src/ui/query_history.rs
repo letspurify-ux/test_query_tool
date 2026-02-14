@@ -19,18 +19,6 @@ use crate::ui::theme;
 use crate::ui::{configured_editor_profile, configured_ui_font_size};
 use crate::utils::config::{QueryHistory, QueryHistoryEntry};
 
-/// Find the largest valid UTF-8 boundary at or before `index`.
-fn floor_char_boundary(s: &str, index: usize) -> usize {
-    if index >= s.len() {
-        return s.len();
-    }
-    let mut i = index;
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}
-
 enum HistoryCommand {
     Add(QueryHistoryEntry),
     Clear,
@@ -433,19 +421,48 @@ impl QueryHistoryDialog {
 /// Truncate SQL for display in list
 fn truncate_sql(sql: &str, max_len: usize) -> String {
     let mut normalized = String::with_capacity(sql.len());
-    for byte in sql.as_bytes() {
-        if byte.is_ascii_whitespace() {
+    for ch in sql.chars() {
+        if ch.is_whitespace() {
             normalized.push(' ');
         } else {
-            normalized.push(*byte as char);
+            normalized.push(ch);
         }
     }
-    let trimmed = normalized.trim_matches(|c: char| c.is_ascii_whitespace());
+    let trimmed = normalized.trim();
 
-    if trimmed.len() > max_len {
-        let end = floor_char_boundary(trimmed, max_len);
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if max_len == 0 {
+        return "...".to_string();
+    }
+
+    if trimmed.chars().count() > max_len {
+        let end = trimmed
+            .char_indices()
+            .nth(max_len)
+            .map(|(idx, _)| idx)
+            .unwrap_or(trimmed.len());
         format!("{}...", &trimmed[..end])
     } else {
         trimmed.to_string()
+    }
+}
+
+#[cfg(test)]
+mod query_history_tests {
+    use super::truncate_sql;
+
+    #[test]
+    fn truncate_sql_preserves_multibyte_text_while_normalizing_whitespace() {
+        let sql = "  SELECT\t'프로시저 테스트'\nFROM dual  ";
+        assert_eq!(truncate_sql(sql, 100), "SELECT '프로시저 테스트' FROM dual");
+    }
+
+    #[test]
+    fn truncate_sql_truncates_on_char_boundary_for_multibyte_text() {
+        let sql = "가나다라마바사";
+        assert_eq!(truncate_sql(sql, 5), "가나다라마...");
     }
 }
