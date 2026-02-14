@@ -6,6 +6,7 @@ use fltk::{
     enums::{Cursor, FrameType},
     frame::Frame,
     group::{Flex, FlexType},
+    input::IntInput,
     menu::MenuBar,
     prelude::*,
     text::TextBuffer,
@@ -116,6 +117,77 @@ impl MainWindow {
         let menu_bar = MenuBarBuilder::build();
         main_flex.fixed(&menu_bar, MENU_BAR_HEIGHT);
 
+        let mut query_toolbar = Flex::default();
+        query_toolbar.set_type(FlexType::Row);
+        query_toolbar.set_margin(TOOLBAR_SPACING);
+        query_toolbar.set_spacing(TOOLBAR_SPACING);
+
+        let mut execute_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("@> Execute");
+        execute_btn.set_color(theme::button_primary());
+        execute_btn.set_label_color(theme::text_primary());
+        execute_btn.set_frame(FrameType::RFlatBox);
+        query_toolbar.fixed(&execute_btn, BUTTON_WIDTH);
+
+        let mut cancel_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Cancel");
+        cancel_btn.set_color(theme::button_warning());
+        cancel_btn.set_label_color(theme::text_primary());
+        cancel_btn.set_frame(FrameType::RFlatBox);
+        query_toolbar.fixed(&cancel_btn, BUTTON_WIDTH);
+
+        let mut explain_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Explain");
+        explain_btn.set_color(theme::button_secondary());
+        explain_btn.set_label_color(theme::text_primary());
+        explain_btn.set_frame(FrameType::RFlatBox);
+        query_toolbar.fixed(&explain_btn, BUTTON_WIDTH);
+
+        let mut clear_btn = Button::default()
+            .with_size(BUTTON_WIDTH_SMALL, BUTTON_HEIGHT)
+            .with_label("Clear");
+        clear_btn.set_color(theme::button_subtle());
+        clear_btn.set_label_color(theme::text_secondary());
+        clear_btn.set_frame(FrameType::RFlatBox);
+        query_toolbar.fixed(&clear_btn, BUTTON_WIDTH_SMALL);
+
+        let mut commit_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Commit");
+        commit_btn.set_color(theme::button_success());
+        commit_btn.set_label_color(theme::text_primary());
+        commit_btn.set_frame(FrameType::RFlatBox);
+        query_toolbar.fixed(&commit_btn, BUTTON_WIDTH);
+
+        let mut rollback_btn = Button::default()
+            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
+            .with_label("Rollback");
+        rollback_btn.set_color(theme::button_danger());
+        rollback_btn.set_label_color(theme::text_primary());
+        rollback_btn.set_frame(FrameType::RFlatBox);
+        query_toolbar.fixed(&rollback_btn, BUTTON_WIDTH);
+
+        let toolbar_spacer = Frame::default();
+        query_toolbar.resizable(&toolbar_spacer);
+
+        let mut timeout_label = Frame::default().with_size(85, BUTTON_HEIGHT);
+        timeout_label.set_label("Timeout(s)");
+        timeout_label.set_label_color(theme::text_muted());
+        query_toolbar.fixed(&timeout_label, 85);
+
+        let mut timeout_input = IntInput::default().with_size(NUMERIC_INPUT_WIDTH, BUTTON_HEIGHT);
+        timeout_input.set_color(theme::input_bg());
+        timeout_input.set_text_color(theme::text_primary());
+        timeout_input.set_tooltip("Call timeout in seconds (empty = no timeout)");
+        timeout_input.set_value("60");
+        query_toolbar.fixed(&timeout_input, NUMERIC_INPUT_WIDTH);
+
+        query_toolbar.end();
+        main_flex.fixed(&query_toolbar, RESULT_TOOLBAR_HEIGHT);
+
         let mut content_flex = Flex::default();
         content_flex.set_type(FlexType::Row);
         content_flex.set_spacing(0);
@@ -179,9 +251,39 @@ impl MainWindow {
         let mut right_flex = Flex::default();
         right_flex.set_type(FlexType::Column);
 
-        let sql_editor = SqlEditorWidget::new(connection.clone());
+        let sql_editor = SqlEditorWidget::new(connection.clone(), timeout_input.clone());
         let sql_group = sql_editor.get_group().clone();
         right_flex.fixed(&sql_group, 250);
+
+        let sql_editor_for_execute = sql_editor.clone();
+        execute_btn.set_callback(move |_| {
+            sql_editor_for_execute.execute_current();
+        });
+
+        let sql_editor_for_cancel = sql_editor.clone();
+        cancel_btn.set_callback(move |_| {
+            sql_editor_for_cancel.cancel_current();
+        });
+
+        let sql_editor_for_explain = sql_editor.clone();
+        explain_btn.set_callback(move |_| {
+            sql_editor_for_explain.explain_current();
+        });
+
+        let sql_editor_for_clear = sql_editor.clone();
+        clear_btn.set_callback(move |_| {
+            sql_editor_for_clear.clear();
+        });
+
+        let sql_editor_for_commit = sql_editor.clone();
+        commit_btn.set_callback(move |_| {
+            sql_editor_for_commit.commit();
+        });
+
+        let sql_editor_for_rollback = sql_editor.clone();
+        rollback_btn.set_callback(move |_| {
+            sql_editor_for_rollback.rollback();
+        });
 
         let query_split_adjusted = Rc::new(Cell::new(false));
         let mut query_split_bar = Frame::default().with_size(0, QUERY_SPLITTER_HEIGHT);

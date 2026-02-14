@@ -1,10 +1,8 @@
 use fltk::{
     app,
-    button::Button,
     draw::set_cursor,
     enums::{Cursor, FrameType},
-    frame::Frame,
-    group::{Flex, FlexType, Pack, PackType},
+    group::{Flex, FlexType},
     input::IntInput,
     prelude::*,
     text::{TextBuffer, TextEditor, WrapMode},
@@ -247,73 +245,13 @@ impl SqlEditorWidget {
         }
     }
 
-    pub fn new(connection: SharedConnection) -> Self {
+    pub fn new(connection: SharedConnection, timeout_input: IntInput) -> Self {
         let mut group = Flex::default();
         group.set_type(FlexType::Column);
         group.set_margin(0);
-        group.set_spacing(5);
+        group.set_spacing(0);
         group.set_frame(FrameType::FlatBox);
         group.set_color(theme::panel_bg()); // Windows 11-inspired panel background
-
-        // Button toolbar with modern styling
-        let mut button_pack = Pack::default();
-        button_pack.set_type(PackType::Horizontal);
-        button_pack.set_spacing(TOOLBAR_SPACING);
-
-        let mut execute_btn = Button::default()
-            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
-            .with_label("@> Execute");
-        execute_btn.set_color(theme::button_primary());
-        execute_btn.set_label_color(theme::text_primary());
-        execute_btn.set_frame(FrameType::RFlatBox);
-
-        let mut cancel_btn = Button::default()
-            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
-            .with_label("Cancel");
-        cancel_btn.set_color(theme::button_warning());
-        cancel_btn.set_label_color(theme::text_primary());
-        cancel_btn.set_frame(FrameType::RFlatBox);
-
-        let mut explain_btn = Button::default()
-            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
-            .with_label("Explain");
-        explain_btn.set_color(theme::button_secondary());
-        explain_btn.set_label_color(theme::text_primary());
-        explain_btn.set_frame(FrameType::RFlatBox);
-
-        let mut clear_btn = Button::default()
-            .with_size(BUTTON_WIDTH_SMALL, BUTTON_HEIGHT)
-            .with_label("Clear");
-        clear_btn.set_color(theme::button_subtle());
-        clear_btn.set_label_color(theme::text_secondary());
-        clear_btn.set_frame(FrameType::RFlatBox);
-
-        let mut commit_btn = Button::default()
-            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
-            .with_label("Commit");
-        commit_btn.set_color(theme::button_success());
-        commit_btn.set_label_color(theme::text_primary());
-        commit_btn.set_frame(FrameType::RFlatBox);
-
-        let mut rollback_btn = Button::default()
-            .with_size(BUTTON_WIDTH, BUTTON_HEIGHT)
-            .with_label("Rollback");
-        rollback_btn.set_color(theme::button_danger());
-        rollback_btn.set_label_color(theme::text_primary());
-        rollback_btn.set_frame(FrameType::RFlatBox);
-
-        let mut timeout_label = Frame::default().with_size(85, BUTTON_HEIGHT);
-        timeout_label.set_label("Timeout(s)");
-        timeout_label.set_label_color(theme::text_muted());
-
-        let mut timeout_input = IntInput::default().with_size(NUMERIC_INPUT_WIDTH, BUTTON_HEIGHT);
-        timeout_input.set_color(theme::input_bg());
-        timeout_input.set_text_color(theme::text_primary());
-        timeout_input.set_tooltip("Call timeout in seconds (empty = no timeout)");
-        timeout_input.set_value("60");
-
-        button_pack.end();
-        group.fixed(&button_pack, BUTTON_ROW_HEIGHT);
 
         // SQL Editor with modern styling
         let buffer = TextBuffer::default();
@@ -390,7 +328,7 @@ impl SqlEditorWidget {
             intellisense_data,
             intellisense_popup,
             highlighter,
-            timeout_input: timeout_input.clone(),
+            timeout_input,
             status_callback,
             find_callback,
             replace_callback,
@@ -402,14 +340,6 @@ impl SqlEditorWidget {
             undo_redo_state,
         };
 
-        widget.setup_button_callbacks(
-            execute_btn,
-            cancel_btn,
-            explain_btn,
-            clear_btn,
-            commit_btn,
-            rollback_btn,
-        );
         widget.setup_intellisense();
         widget.setup_word_undo_redo();
         widget.setup_syntax_highlighting();
@@ -991,46 +921,6 @@ impl SqlEditorWidget {
             );
         });
         self.refresh_highlighting();
-    }
-
-    fn setup_button_callbacks(
-        &mut self,
-        mut execute_btn: Button,
-        mut cancel_btn: Button,
-        mut explain_btn: Button,
-        mut clear_btn: Button,
-        mut commit_btn: Button,
-        mut rollback_btn: Button,
-    ) {
-        let widget = self.clone();
-        execute_btn.set_callback(move |_| {
-            widget.execute_current();
-        });
-
-        let widget = self.clone();
-        cancel_btn.set_callback(move |_| {
-            widget.cancel_current();
-        });
-
-        let widget = self.clone();
-        explain_btn.set_callback(move |_| {
-            widget.explain_current();
-        });
-
-        let widget = self.clone();
-        clear_btn.set_callback(move |_| {
-            widget.clear();
-        });
-
-        let widget = self.clone();
-        commit_btn.set_callback(move |_| {
-            widget.commit();
-        });
-
-        let widget = self.clone();
-        rollback_btn.set_callback(move |_| {
-            widget.rollback();
-        });
     }
 
     pub fn explain_current(&self) {
