@@ -2023,6 +2023,12 @@ impl MainWindow {
                         }
                         _ => {}
                     }
+
+                    // FLTK keeps the last activated menu item selected. When the selection
+                    // doesn't change, repeated keyboard shortcuts for the same item may not
+                    // trigger again. Clear the current value so Ctrl+N/Ctrl+S can fire
+                    // repeatedly without requiring a different shortcut in between.
+                    m.set_value(-1);
                 }
             });
         }
