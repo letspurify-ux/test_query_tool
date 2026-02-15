@@ -5,6 +5,7 @@ use fltk::{
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use crate::ui::constants::TAB_HEADER_HEIGHT;
 use crate::ui::theme;
 
 pub type QueryTabId = u64;
@@ -38,14 +39,18 @@ impl CallbackSuppressGuard {
 
 impl Drop for CallbackSuppressGuard {
     fn drop(&mut self) {
-        self.counter
-            .set(self.counter.get().saturating_sub(1));
+        self.counter.set(self.counter.get().saturating_sub(1));
     }
 }
 
 impl QueryTabsWidget {
     fn content_bounds(tabs: &Tabs) -> (i32, i32, i32, i32) {
-        let (x, y, w, h) = tabs.client_area();
+        // Keep a stable tab-header height regardless of surrounding splitter drags.
+        // This avoids top/bottom header bar height jitter while panes are resized.
+        let x = tabs.x();
+        let y = tabs.y() + TAB_HEADER_HEIGHT;
+        let w = tabs.w();
+        let h = tabs.h() - TAB_HEADER_HEIGHT;
         (x, y, w.max(1), h.max(1))
     }
 
@@ -64,7 +69,11 @@ impl QueryTabsWidget {
         tabs.set_color(theme::panel_bg());
         tabs.set_selection_color(theme::selection_strong());
         tabs.set_label_color(theme::text_secondary());
-        tabs.handle_overflow(TabsOverflow::Compress);
+        tabs.set_label_size((TAB_HEADER_HEIGHT - 8).max(8));
+        // Keep tab header widths stable while surrounding panes are resized.
+        // `Compress` dynamically shrinks/expands tab buttons as width changes,
+        // which causes distracting header size jumps during splitter drags.
+        tabs.handle_overflow(TabsOverflow::Pulldown);
 
         let entries = Rc::new(RefCell::new(Vec::<TabEntry>::new()));
         let next_id = Rc::new(RefCell::new(1u64));
