@@ -39,7 +39,12 @@ struct ScriptOutputTab {
 
 impl ResultTabsWidget {
     fn content_bounds(tabs: &Tabs) -> (i32, i32, i32, i32) {
-        let (x, y, w, h) = tabs.client_area();
+        // Keep a stable tab-header height regardless of surrounding splitter drags.
+        // This avoids top/bottom header bar height jitter while panes are resized.
+        let x = tabs.x();
+        let y = tabs.y() + constants::TAB_HEADER_HEIGHT;
+        let w = tabs.w();
+        let h = tabs.h() - constants::TAB_HEADER_HEIGHT;
         (x, y, w.max(1), h.max(1))
     }
 
@@ -99,7 +104,11 @@ impl ResultTabsWidget {
         tabs.set_color(theme::panel_bg());
         tabs.set_selection_color(theme::selection_strong());
         tabs.set_label_color(theme::text_secondary());
-        tabs.handle_overflow(TabsOverflow::Compress);
+        tabs.set_label_size((constants::TAB_HEADER_HEIGHT - 8).max(8));
+        // Keep tab header widths stable while surrounding panes are resized.
+        // `Compress` dynamically shrinks/expands tab buttons as width changes,
+        // which causes distracting header size jumps during splitter drags.
+        tabs.handle_overflow(TabsOverflow::Pulldown);
 
         let data = Rc::new(RefCell::new(Vec::<ResultTab>::new()));
         let active_index = Rc::new(RefCell::new(None));
